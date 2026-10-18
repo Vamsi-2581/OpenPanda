@@ -609,7 +609,7 @@ func figlet(word string) []string {
 }
 
 // printBanner draws the startup screen: the OpenPanda wordmark in figlet
-// lettering, then node/model/workdir info lines and orientation hints.
+// lettering, then version/workdir info lines and orientation hints.
 // Implementation lives behind the lite split: banner_full.go renders the
 // themed banner in a full build, tui_lite.go a one-line greeting.
 
@@ -1589,7 +1589,8 @@ func (r *repl) cmdTask(arg string) {
 	r.outf("  created: %s\n", ts(t.CreatedAt))
 	r.outf("  updated: %s\n", ts(t.UpdatedAt))
 	r.printEvents(t.TaskID)
-	if hint := taskNextStepHint(r.loc, r.cfg, t); hint != "" {
+	ref := refOr(taskRefsFor(r.commandContext(), r.store, []core.Task{t}), t.TaskID)
+	if hint := taskNextStepHint(r.loc, r.cfg, t, ref); hint != "" {
 		r.outln(pal().Muted(hint))
 	}
 }
