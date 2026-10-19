@@ -69,6 +69,26 @@ ALLOWED_TOOLS = "Read,Write,Edit,Bash,Grep,Glob"
 # work a delegation is legitimately for without consent.
 RESTRICTED_TOOLS = "Read,Grep,Glob"
 
+# Provider statuses a round should abandon instead of riding out. Auth and
+# server errors are unambiguous: retrying the same request cannot fix them,
+# and the orchestrator's failover chain (or its own model injection) can
+# still run the task somewhere else.
+FAST_FAIL_STATUS = (401, 403, 500, 502, 503, 504)
+
+# Rate limits (429) and Anthropic's overload signal (529) belong to the same
+# class for a different reason. The CLI answers them with up to ten
+# exponential-backoff retries (0.5 s doubling to ~35 s), and while it backs
+# off it emits nothing but the retry note — a sustained limit therefore looks
+# exactly like a wedged run, which is what the panel's silence watchdog kills
+# after its limit. By then the round is dead anyway and the work is lost, so
+# handing the task back early is strictly better than waiting to be killed.
+RATE_LIMIT_STATUS = (429, 529)
+
+# One attempt more than a hard error gets: a burst limit often clears inside
+# the first couple of backoffs (0.5 s, 1 s, 2 s), and bailing on the first
+# 429 would throw away rounds that would have passed a second later.
+RATE_LIMIT_FAST_FAIL_ATTEMPT = 3
+
 
 class Unsupported(Exception):
     """The CLI rejected a streaming flag — degrade to an older flag set."""
@@ -99,6 +119,22 @@ def _retry_status(ev):
         except (TypeError, ValueError):
             code = None
     return status, code
+
+
+def _fast_fail(attempt, code):
+    """The ProviderFailure a retry event should abort the round with, or None.
+
+    Shared by the one-shot stream and the session loop so the two cannot
+    drift into failing on different status classes.
+    """
+    if code is None:
+        return None
+    if code in FAST_FAIL_STATUS and attempt >= 2:
+        return ProviderFailure(f"api_retry error {code}: server_error")
+    if code in RATE_LIMIT_STATUS and attempt >= RATE_LIMIT_FAST_FAIL_ATTEMPT:
+        kind = "rate_limited" if code == 429 else "overloaded"
+        return ProviderFailure(f"api_retry error {code}: {kind}")
+    return None
 
 
 def main():
@@ -320,10 +356,12 @@ def _run_stream(base, req, model, cwd, timeout, disable_settings=False, v2=True)
                 status, code = _retry_status(ev)
                 detail = f" ({status})" if status else ""
                 harness.progress(f"Claude: API retry {attempt}{detail}…")
-                # Fast failover: if provider returns 5xx or auth error on retries,
-                # abort quickly so PANDA dynamic injection or fallback chain can rescue the task.
-                if attempt >= 2 and code in (401, 403, 500, 502, 503, 504):
-                    exc = ProviderFailure(f"api_retry error {code}: server_error")
+                # Fast failover: abort on statuses retrying cannot fix (see
+                # FAST_FAIL_STATUS / RATE_LIMIT_STATUS) so PANDA's dynamic
+                # injection or fallback chain can rescue the task instead of
+                # the round dying to the panel's silence watchdog.
+                exc = _fast_fail(attempt, code)
+                if exc is not None:
                     # The session minted so far is still resumable: report it
                     # so the orchestrator's retry continues the conversation
                     # rather than re-burning the exploration.
@@ -599,8 +637,9 @@ def _main_session(req, model, max_turns):
                         status, code = _retry_status(ev)
                         detail = f" ({status})" if status else ""
                         harness.progress(f"Claude: API retry {attempt}{detail}…")
-                        if attempt >= 2 and code in (401, 403, 500, 502, 503, 504):
-                            raise ProviderFailure(f"api_retry error {code}: server_error")
+                        exc = _fast_fail(attempt, code)
+                        if exc is not None:
+                            raise exc
         finally:
             deadline.cancel()
         if final is None:
