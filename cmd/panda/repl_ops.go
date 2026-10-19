@@ -1286,6 +1286,10 @@ func (r *repl) cmdTaskAdd(fields []string) {
 			pathList = append(pathList, p)
 		}
 	}
+	if strings.TrimSpace(scopePaths) != "" && len(pathList) == 0 {
+		r.outln(i18n.T(r.loc, "cli.task.add.pathsEmpty"))
+		return
+	}
 	if (len(pathList) > 0 || isolate) && project == "" {
 		r.outln(i18n.T(r.loc, "cli.task.add.scopeNoProject"))
 		return

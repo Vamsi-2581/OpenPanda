@@ -910,6 +910,12 @@ func runTaskAdd(args []string) {
 			pathList = append(pathList, p)
 		}
 	}
+	// An explicit --paths that parses to nothing ("", ",,") must not fall
+	// through as a silent whole-project claim — the user asked for lanes.
+	if strings.TrimSpace(*scopePaths) != "" && len(pathList) == 0 {
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.pathsEmpty"))
+		os.Exit(2)
+	}
 	if (len(pathList) > 0 || *isolate) && projName == "" {
 		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.scopeNoProject"))
 		os.Exit(2)

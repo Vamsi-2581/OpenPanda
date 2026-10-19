@@ -179,8 +179,11 @@ func (c *Core) attachFatBundle(ctx context.Context, p *bus.TaskDelegatePayload) 
 		if err != nil {
 			return // not held: nothing to inline or push
 		}
-		defer f.Close()
 		data, err := io.ReadAll(io.LimitReader(f, int64(fatBundleCap-total)+1))
+		// Close now, not by defer: add runs once per input inside the calling
+		// frame, so a deferred close would keep every artifact's fd open for
+		// the whole bundle walk.
+		_ = f.Close()
 		if err != nil || len(data) == 0 {
 			return
 		}
