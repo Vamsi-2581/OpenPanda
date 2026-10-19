@@ -734,7 +734,15 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		_ = h.store.SetSessionID(context.WithoutCancel(r.Context()), out.TaskID, sess.ID)
 	}
 
-	turn := sessions.Turn{Role: "assistant", Kind: out.Kind, DurationMS: askDuration}
+	turn := sessions.Turn{
+		Role:       "assistant",
+		Kind:       out.Kind,
+		DurationMS: askDuration,
+		// The model that answered, filed with the turn: the console prints it
+		// beside the reply's copy button, and `out` only exists for the live
+		// stream — a reloaded thread reads this instead.
+		Model: out.EntryModel,
+	}
 	switch out.Kind {
 	case "task":
 		// Queue mode: the turn records the dispatch (the finalizer folds the

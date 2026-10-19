@@ -169,6 +169,42 @@ func (s *TaskStore) TaskActivityByDay(ctx context.Context) (map[string]int, erro
 	return out, nil
 }
 
+// TaskDayHour is one (local day, local hour) bucket of task creations.
+type TaskDayHour struct {
+	Day   string // YYYY-MM-DD, local time
+	Hour  int    // 0–23, local time
+	Count int
+}
+
+// TaskActivityByDayHour buckets task creations by local day AND local hour in
+// one pass. The panel's usage endpoint needs both shapes from the same rows —
+// a day series for the calendar and an hour histogram for "peak hour" — and
+// two separate scans of the same table would be two chances to disagree.
+func (s *TaskStore) TaskActivityByDayHour(ctx context.Context) ([]TaskDayHour, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT date(created_at, 'unixepoch', 'localtime') AS day,
+		        CAST(strftime('%H', created_at, 'unixepoch', 'localtime') AS INTEGER) AS hour,
+		        COUNT(*)
+		 FROM tasks WHERE created_at > 0 GROUP BY day, hour`)
+	if err != nil {
+		return nil, fmt.Errorf("query task activity by day/hour: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TaskDayHour
+	for rows.Next() {
+		var b TaskDayHour
+		if err := rows.Scan(&b.Day, &b.Hour, &b.Count); err != nil {
+			return nil, fmt.Errorf("scan task activity: %w", err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("task activity rows: %w", err)
+	}
+	return out, nil
+}
+
 // LastDelegateTime returns the timestamp (Unix seconds) of the most recent
 // EvDelegate event for a task. It is used to compute delegation latency.
 func (s *TaskStore) LastDelegateTime(ctx context.Context, taskID string) (int64, error) {

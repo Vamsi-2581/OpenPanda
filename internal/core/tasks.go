@@ -1953,6 +1953,47 @@ func (s *TaskStore) ClaimLocal(ctx context.Context, taskID, node string) error {
 	})
 }
 
+// leaseExpiredReason composes the failure reason for a lease that ran out.
+//
+// A bare "lease expired" hides the one fact worth having afterwards: what the
+// run was doing when it ran out. A wedged adapter and a slow-but-alive one
+// leave the same row behind, and the only place that difference was ever
+// written down is the task's own progress notes — the silence heartbeat names
+// how long it had been quiet, a tool note names the step it reached. Folding
+// the newest one into the reason makes the failure readable in the result
+// digest, the CLI and the board without opening the event timeline.
+func (s *TaskStore) leaseExpiredReason(ctx context.Context, taskID string) string {
+	const base = "lease expired"
+	note := s.lastProgressNote(ctx, taskID)
+	if note == "" {
+		return base
+	}
+	return base + " (last activity: " + note + ")"
+}
+
+// lastProgressNote returns the newest progress note recorded for a task, or ""
+// when it never emitted one (a task that died before its adapter started).
+func (s *TaskStore) lastProgressNote(ctx context.Context, taskID string) string {
+	var data string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT data_json FROM task_events
+		 WHERE task_id = ? AND type = 'progress' AND data_json IS NOT NULL
+		 ORDER BY ts DESC, id DESC LIMIT 1`, taskID).Scan(&data)
+	if err != nil {
+		return ""
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(data), &payload) != nil {
+		return ""
+	}
+	note, _ := payload["note"].(string)
+	return clipRunes(strings.TrimSpace(note), leaseNoteLimit)
+}
+
+// leaseNoteLimit caps the folded note: the reason rides into every digest that
+// shows a failure, and an adapter note is a status line, not a report.
+const leaseNoteLimit = 120
+
 // ExpireTasks fails any active task whose lease has expired. It returns the
 // task IDs actually failed, so the caller can clean up per-task state. Called
 // periodically by the monitor.
@@ -1986,7 +2027,7 @@ func (s *TaskStore) ExpireTasks(ctx context.Context) ([]string, error) {
 	for _, id := range ids {
 		// The monitor acts on behalf of the lease holder regardless of the
 		// stored owner (a crashed process may no longer hold it).
-		if err := s.ForceFail(ctx, id, "lease expired"); err != nil {
+		if err := s.ForceFail(ctx, id, s.leaseExpiredReason(ctx, id)); err != nil {
 			s.logger.Warn("expire task", "task", id, "err", err)
 			continue
 		}
@@ -2698,6 +2739,27 @@ func (s *TaskStore) ListRecentByState(ctx context.Context, state string, limit i
 // SQL keeps a project listing from reading every other project's rows.
 func (s *TaskStore) ListByProject(ctx context.Context, project string) ([]Task, error) {
 	return s.listTasks(ctx, "", project, "created_at DESC", 0)
+}
+
+// ListBySession returns the tasks one conversation spawned, newest first. The
+// chat's orchestration card reads this: the question is "what did THIS thread
+// start, and what is still moving", which neither the state nor the project
+// filter can answer — a thread can span states, and a project spans threads.
+// Uncapped on purpose: filtering a capped board read would silently drop the
+// oldest rows of the very list the card claims is complete, and a single
+// thread's task count stays small by construction.
+func (s *TaskStore) ListBySession(ctx context.Context, sessionID string) ([]Task, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE session_id = ? ORDER BY created_at DESC`,
+		sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanTasks(rows)
 }
 
 // ProjectStateCounts counts tasks grouped by project and state — one GROUP BY
