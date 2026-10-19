@@ -459,15 +459,23 @@
   min-width: 0;
   min-height: 0;
   position: relative;
-  /* The lane the node card takes on the right when it is open: 0 closed, 300px
-     of card + 20px of header padding when open. The log, the composer and the
-     jump arrow all read this one number, so opening the card slides the whole
-     reading block left together instead of letting the card cover the ends of
-     the last reply's lines. */
+  /* The lane a header card takes on the right when one is open: 0 closed, 380px
+     of card + header padding when open (see `.panel-open` below). The log, the
+     composer and the jump arrow all read this one number, so opening a card
+     slides the whole reading block left together instead of letting the card
+     cover the ends of the last reply's lines. */
   --panel-lane: 0px;
 }
-.chat-pane.node-open {
-  --panel-lane: 320px;
+/* One lane for both header cards. They are the same kind of popover hanging off
+   the same corner, so switching between them has to leave the reading column
+   exactly where it is: two lane values (320 for the node card, 380 for the
+   orchestration card) meant every switch slid the transcript, the composer and
+   the jump arrow 60px sideways — a flinch you could see, for no reason.
+   The lane is the wider card's footprint and both cards are sized to fill it:
+   20 (bar padding) + 360 (orchestration card) = 380, and the node card is
+   20 + 38 (the orchestration tool sits to its right) + 322 = 380. */
+.chat-pane.panel-open {
+  --panel-lane: 380px;
 }
 .chat-head {
   display: flex;
@@ -581,8 +589,10 @@
      reserved whether or not the rail is drawn so the column never shifts when
      a thread grows its second question. The composer carries the same number:
      the two must agree or the column and the box under it stop lining up.
-     `--panel-lane` adds the node card's lane on top of it while the card is
-     open — the transition is what makes the column slide rather than jump. */
+     `--panel-lane` adds a header card's lane on top of it while one is open —
+     the transition is what makes the column slide rather than jump, and it
+     only ever runs when a card opens or closes, never when the open card is
+     swapped for the other one (both share the same lane). */
   padding: var(--sp-6) calc(52px + var(--panel-lane)) var(--sp-4) var(--sp-6);
   transition: padding-right var(--dur-med) var(--ease-standard);
   scroll-behavior: smooth;
@@ -688,9 +698,9 @@
   z-index: 4;
   transition: opacity var(--dur-fast) var(--ease);
 }
-/* The node card owns this corner while it is open: the ticks would sit under
+/* The header card owns this corner while it is open: the ticks would sit under
    its shadow, half-lit and unclickable. They come back with the card. */
-.chat-pane.node-open .chat-rail-wrap {
+.chat-pane.panel-open .chat-rail-wrap {
   opacity: 0;
   pointer-events: none;
 }
@@ -726,9 +736,12 @@
   margin: auto 0;
   display: flex;
   flex-direction: column;
-  width: 420px;
+  /* Narrow and quiet: this is an index you scan, not a page you read. At 420px
+     with transcript-sized text it read as a second transcript and covered the
+     reply behind it. */
+  width: 300px;
   max-height: 100%;
-  padding: 12px 16px;
+  padding: 8px 10px;
   overflow-y: auto;
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
@@ -749,17 +762,17 @@
 .chat-rail-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  padding: 9px 6px;
+  padding: 5px 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  /* The size the questions are read at in the transcript: this is the same
-     text, one question per row, not chrome about it. */
-  font-size: var(--text-lg);
-  line-height: 1.4;
+  /* One step below the transcript on purpose: the rows name the questions,
+     they do not reproduce them. */
+  font-size: var(--text-sm);
+  line-height: 1.35;
   /* Right-aligned like the rail it mirrors: the text runs into its tick, not
      away from it. */
   text-align: right;
@@ -796,7 +809,7 @@
   font-weight: 600;
 }
 .chat-rail-item.on .chat-rail-item-tick {
-  width: 30px;
+  width: 24px;
   background: var(--text);
 }
 .chat-rail-item:focus-visible {
@@ -911,9 +924,6 @@
   min-width: 0;
   width: 100%;
 }
-.bubble-slot-row.slot-title {
-  justify-content: space-between;
-}
 .bubble-slot-row.slot-chat {
   flex: 1;
   margin: var(--sp-1) 0;
@@ -1017,7 +1027,35 @@
    of height instead of 30 — the icon still sits clear of the last line. */
 .bubble-slot-row.slot-actions {
   justify-content: flex-start;
+  /* Centred, not baseline: the row now holds a 22px icon and a line of text,
+     and a baseline-aligned button (an inline-flex box has its baseline at its
+     own bottom edge) left the model name hanging above the glyph. */
+  align-items: center;
   margin-top: calc(-1 * var(--sp-2));
+}
+/* The model that wrote the reply, beside the copy icon. Both are footnotes to
+   the answer rather than part of it, so they arrive and leave on the same
+   beat: the name fades in with the icon, on the message's own hover. It keeps
+   its box while hidden (opacity, not display), so revealing it never shifts
+   the name or the prose under the pointer. */
+.slot-model {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  /* 6px, tighter than the row's 8: the name belongs to the icon beside it
+     rather than floating on the row's grid. */
+  margin-left: -2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+.msg:hover .slot-model {
+  opacity: 1;
+}
+/* No hover to reveal it with on a touch screen, so it is simply shown — the
+   same fallback the copy icon takes. */
+@media (hover: none) {
+  .slot-model {
+    opacity: 1;
+  }
 }
 .msg-copy {
   display: inline-flex;
@@ -1133,11 +1171,154 @@
 .composer {
   flex: none;
   /* Same 52px lane on the right as `.chat-log`, plus the node card's lane when
-     it is open: the box's edges land on the column's, closed and open alike. */
-  padding: var(--sp-4) calc(52px + var(--panel-lane)) var(--sp-5) var(--sp-6);
+     it is open: the box's edges land on the column's, closed and open alike.
+     The top edge is 26, not the 16 of the grid: the pet stands on the box's
+     top border and is 38px tall above it, so the composer has to give back 22
+     of those to keep the pet out of the transcript's last line (the log's own
+     bottom padding is the other 16). The box itself does not move — the
+     composer is bottom-docked, so this padding is taken from the log above. */
+  padding: 26px calc(52px + var(--panel-lane)) var(--sp-5) var(--sp-6);
   transition: padding-right var(--dur-med) var(--ease-standard);
   border-top: none;
   background: transparent;
+}
+/* The pet stands on the box's top-left corner, feet on the border.
+   It used to be a row above the box (56px sprite + status dot + "待命"), then a
+   badge hanging off the box's right edge. Perched on the top edge it reads as
+   the console's mascot sitting on the console — and it costs the layout
+   nothing: it hangs in the composer's own top padding, so the box keeps its
+   900px column and its distance from the bottom.
+   `.composer-box` is the containing block (it is already `position: relative`),
+   so `bottom: 100%` means "the box's top edge" — the pet rides up with the box
+   when a header card slides the column left, and it stays put when the input
+   grows downward. The −6px is the sprite's own empty margin: the standing
+   frames end at y=110 of 128, i.e. 6px above the element's bottom at 44px, and
+   that is the 6px the element has to hang below the border for the feet to
+   land on it.
+   `left: 18px` puts the panda's ink (which starts 7px into the frame) level
+   with the placeholder's first glyph — 24px inside the border.
+   It is a `<button>` now, not a div: lying down is something you ask the pet
+   for (a press puts it down, a second press picks it up), and the global
+   button reset in base.css already gives the reset every raw button needs. */
+.composer-panda {
+  position: absolute;
+  left: 18px;
+  bottom: calc(100% - 6px);
+  display: flex;
+  align-items: flex-end;
+  /* 44px of sprite on a 44px square leaves no hover padding; the +6 below
+     gives the pointer a little slack around the ink so a missed press lands
+     on the pet rather than on the box behind it.
+     No hover styling on purpose: the pet is decoration standing on the
+     composer, and dimming it every time the pointer crossed the corner made
+     the panda look like a disabled control. The press still works; it just
+     does not advertise itself in colour. */
+  padding: 6px;
+  margin-bottom: -6px;
+  margin-left: -6px;
+}
+.composer-panda-stage {
+  display: block;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  /* Deliberately NOT `overflow: hidden` (nor a radius, which would clip
+     nothing without it): the squish scales the sprite up and lifts it, and a
+     clip on this 44px box cut the ears off exactly when the pet was at its
+     tallest. The frame is cropped by `background-size` (264px = six 44px
+     frames on a 44px box), not by overflow, so nothing else depended on it.
+     No plate behind the sprite either: the PNG carries an alpha channel (its
+     white background is keyed out), so the pet sits on the page in either
+     theme instead of on a white tile that turned into a glaring sticker on
+     dark. */
+}
+.composer-panda-sprite {
+  display: block;
+  width: 44px;
+  height: 44px;
+  /* The `?v=` is a cache key, not decoration: this file is not content-hashed
+     like everything under /assets/, and the service worker serves static
+     assets cache-first, so a browser that fetched an older sprite keeps that
+     copy forever — the pre-keying PNG carried an opaque grey plate around the
+     frame, which read as a bubble behind the pet. Bump the number whenever the
+     image changes; it is the only way to retire the cached copy. */
+  background-image: url('/panda-pet-sprites.png?v=2');
+  /* Six 128px frames across 768px, drawn at 44: 6 × 44 = 264. */
+  background-size: 264px 44px;
+  background-position: 0 0;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  animation: panda-bob 3.8s ease-in-out infinite;
+}
+/* The press: a jelly toy answering a poke. The sprite flattens against the
+   border, snaps up tall, then rings down through two smaller bounces — and the
+   feet never leave the line.
+   `transform-origin: 50% 86%` is the whole trick, twice over. 86% of the 44px
+   box is 37.8px, which is where the standing frame's ink ends (y=110 of 128);
+   the element itself hangs 6px below the composer's top edge, so that 37.8px
+   point IS the border. Scaling around it keeps the feet planted: the pet grows
+   up and squashes down instead of being resized about its middle or hopping
+   off the line. No `translateY` anywhere in the keyframes for the same
+   reason — a lift reads as a jump, and a pet that leaves its perch is a
+   different animation.
+   The shorthand replaces `panda-bob` rather than out-declaring it, for the
+   same reason the working frame does: a running animation owns its
+   properties. */
+.composer-panda.is-bouncing .composer-panda-sprite {
+  transform-origin: 50% 86%;
+  animation: panda-squish 0.72s cubic-bezier(0.33, 0, 0.25, 1);
+}
+.composer-panda.is-working .composer-panda-sprite {
+  /* Frame 5 of 6, i.e. four frame widths in. */
+  background-position: -176px 0;
+  /* A single-animation shorthand is what makes the working frame win: while
+     `panda-bob` still runs it owns the element's animated properties, so the
+     frame has to replace the animation, not out-declare it. */
+  animation: panda-working 1.05s ease-in-out infinite;
+}
+/* The status word is gone from the page, not from the live region: the pet's
+   own pose carries "ready / working" for the eye, and a screen reader still
+   needs the sentence. */
+.composer-panda-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+@keyframes panda-bob {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(-1px) scaleY(1.025); }
+}
+@keyframes panda-working {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+/* Squash and stretch, decaying: 1.16×0.8 flat, 0.88×1.14 tall, then two
+   smaller rings. Scaling y and x in opposite directions is what makes it read
+   as rubber instead of as a zoom — volume looks conserved, so the pet appears
+   to be made of something, not to be resized. Every stop is a pure scale: the
+   origin sits on the border, so the feet stay put through all of it. */
+@keyframes panda-squish {
+  0%   { transform: scale(1, 1); }
+  12%  { transform: scale(1.16, 0.8); }
+  28%  { transform: scale(0.88, 1.14); }
+  44%  { transform: scale(1.1, 0.9); }
+  60%  { transform: scale(0.94, 1.06); }
+  76%  { transform: scale(1.04, 0.97); }
+  88%  { transform: scale(0.99, 1.01); }
+  100% { transform: scale(1, 1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-panda-sprite,
+  .composer-panda.is-bouncing .composer-panda-sprite,
+  .composer-panda.is-working .composer-panda-sprite {
+    animation: none;
+  }
 }
 /* Same width and centring as the transcript above it (see `.chat-log > *`): the
    input box is the last line of the reading column, and a box of a different
@@ -1149,23 +1330,28 @@
 }
 /* ---- Header tools + node card --------------------------------------------- */
 
-/* The head's right edge: download, then the node pick. Both are ghost icon
-   buttons one size up from the console's 28px `.icon-btn`, because both are
-   the only things in this bar you press (the rest of the header is a title and
-   a badge). 36px square with a 19px glyph is the weight Codex and WorkBuddy
-   both use for their header popovers — measured off their screenshots, where
-   the toolbar square is 40px around a 20px mark inside a 56px bar; this
-   header is 56 tall once these buttons are in it. */
+/* The head's right edge: download, the node pick, then orchestration. All three
+   are ghost icon buttons one size up from the console's 28px `.icon-btn`,
+   because they are the only things in this bar you press (the rest of the
+   header is a title and a badge). 36px square with a 19px glyph is the weight
+   Codex and WorkBuddy both use for their header popovers — measured off their
+   screenshots, where the toolbar square is 40px around a 20px mark inside a
+   56px bar; this header is 56 tall once these buttons are in it. */
 .chat-head-tools {
+  /* One size for every tool in the bar, named here because the node card has
+     to step left by exactly one button when a tool is added to its right
+     (see `.node-panel`). */
+  --head-tool: 36px;
+  --head-tool-gap: 2px;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--head-tool-gap);
   flex: none;
   margin-left: auto;
 }
 .chat-head-tools .icon-btn {
-  width: 36px;
-  height: 36px;
+  width: var(--head-tool);
+  height: var(--head-tool);
   border-radius: 10px;
   color: var(--text-secondary);
 }
@@ -1194,13 +1380,19 @@
 .node-panel {
   position: absolute;
   top: calc(100% + 8px);
-  right: var(--sp-5);
+  /* The card hangs off the node button's right edge, not the bar's: with the
+     orchestration tool now sitting to its right, `--sp-5` alone would leave
+     the card hanging under that button instead. */
+  right: calc(var(--sp-5) + var(--head-tool) + var(--head-tool-gap));
   z-index: 20;
-  /* 300px is the card's natural width (Codex's is 455 at a larger type scale;
-     this one holds a name and a tag per row, not file paths). The `min()` is
-     for a phone: below ~340px of pane the card gives up its width rather than
-     hanging off the left edge. */
-  width: min(300px, calc(100% - 40px));
+  /* 322px, not 300: the card has to reach the lane the pane reserves for it
+     (20 + 38 + 322 = 380, the orchestration card's own footprint), otherwise
+     switching cards would leave the reading column 60px away from one card and
+     14px from the other. At 322 the gap between the text and either card is the
+     same 52px the prompt rail already reserves. The `min()` is for a phone:
+     below ~340px of pane the card gives up its width rather than hanging off
+     the left edge. */
+  width: min(322px, calc(100% - 40px));
   padding: 6px;
   background: var(--bg-raised);
   border: 1px solid var(--border-soft);
@@ -1317,6 +1509,402 @@
   margin-left: auto;
   color: var(--text-tertiary);
 }
+/* ---- Orchestration card --------------------------------------------------- */
+
+/* Same corner, same shell as the node card: the two share one slot on the bar
+   (see `panel` in sessions.tsx), so the structure — button, card hanging under
+   the header, panel-in animation, the button as the only click that closes it —
+   is deliberately identical and only the contents differ. It is 60px wider than
+   the node card because its rows hold tiles rather than a list of names: two
+   tiles have to fit side by side, and a tile whose title is cut in half says
+   nothing. */
+.orch-picker {
+  display: flex;
+}
+.orch-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  /* Under its own button — the last one in the bar, so no offset maths. */
+  right: var(--sp-5);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100% - 40px));
+  /* Three strips (labels + one tile row each) plus a trace rail and a detail
+     pane need the height, and the card is read at a glance: the floor is what
+     keeps 进行中 / 待审核 / 已完成 all on screen at once instead of a scrolling
+     popover. The ceiling is a laptop viewport — past it the card itself
+     scrolls (see `overflow-y` below); nothing inside it is allowed to shrink
+     to a sliver. */
+  min-height: 340px;
+  max-height: min(80vh, 700px);
+  /* The card scrolls as a whole. It used to hand the leftover height to
+     whichever pane was open, which meant the trace plus a detail pane squeezed
+     the strips down to half a tile row. Every section now keeps its full
+     height and the card scrolls when trace + strips + detail do not fit.
+     `contain` keeps that scroll off the transcript behind the card. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: node-panel-in var(--dur-fast) var(--ease-enter);
+}
+/* The strips: natural height, no box of their own to scroll — the card does
+   that. A section is one label plus one row of tiles, and rows scroll sideways
+   rather than wrapping, so this block has a ceiling anyway. */
+.orch-body {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.orch-panel-label {
+  margin: 0;
+  padding: 6px 10px 2px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+/* ---- The trace, above the strips ----------------------------------------- */
+/* The DecisionOrbit that used to ride above every task reply in the transcript
+   lives here now: the strips say which tasks this thread produced, this says
+   how the focused one was classified, routed and run. It is the card's first
+   block — the one whose height the reader controls — so expanding its steps
+   pushes the strips down instead of squeezing them, and a long step list
+   scrolls inside its own box rather than pushing the list off the card. */
+.orch-trace {
+  flex: 0 0 auto;
+  min-height: 0;
+  /* 220, not the transcript's 380: the steps are the one block that can be
+     read in slices (they arrive one at a time anyway), and the card still has
+     three strips and a detail pane to show below. */
+  max-height: min(30vh, 220px);
+  overflow-y: auto;
+  /* No `overscroll-behavior: contain` here: at the end of the steps the wheel
+     should carry on into the card, not stop dead inside a rail. The card
+     itself contains the scroll, so the transcript never moves. */
+  margin: 0 0 2px;
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+/* Names the task the trace belongs to. The selection is a chip highlight two
+   blocks down, and a trace that only said 大总管 left the reader guessing which
+   task's steps those were. */
+.orch-trace-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  padding: 0 6px 6px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.orch-trace-task {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+/* A card inside a card reads as two windows: the panel is already one raised
+   plate, so the orbit drops its own background, border and shadow and keeps
+   only its header row and steps. */
+.orch-trace .orbit {
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.orch-trace .orbit:hover {
+  box-shadow: none;
+}
+/* Tighter than the transcript's strip: 360px minus the panel's padding is the
+   whole width, and the summary pills have to share the row with the brand. */
+.orch-trace .orbit-head-btn {
+  gap: 6px;
+  padding: 5px 8px;
+}
+.orch-trace .orbit-brand-title {
+  font-size: var(--text-md);
+}
+.orch-trace .orbit-body {
+  padding: 2px 4px 0;
+}
+/* The bottom gap lives on the section, not on the row/slot: a `<p>`'s
+   margin-bottom would collapse out of the section and make an empty strip 8px
+   shorter than a filled one — the one jump this whole arrangement exists to
+   avoid. */
+.orch-sec {
+  padding: 2px 0 8px;
+}
+.orch-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px 6px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.orch-sec-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: var(--text-xs);
+  line-height: 16px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+/* A strip with nothing in it still reserves one tile row: 87px is the height
+   of a chip (two-line title + meta + the acts strip — measured, not guessed),
+   and with the section's 8px bottom padding the empty strip ends up exactly as
+   tall as a filled one (126px either way). Drawn as a dashed slot rather than
+   a bare line so the reserved space reads as "nothing here yet" instead of as
+   a gap the card forgot to collapse. */
+.orch-sec-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 87px;
+  margin: 0 6px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  /* No fill: the chips beside it are `--bg-inset`, and a filled slot turned
+     two empty strips into the heaviest blocks on the card. */
+  background: none;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+/* The plain line, for the card's own states (load failed / no session yet):
+   those are not an empty strip, and a dashed slot would dress them up as one. */
+.orch-sec-empty {
+  margin: 0;
+  padding: 0 10px 8px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+/* The horizontal strip: the second row has to stay above the fold, so tasks
+   run left to right and the strip scrolls instead of wrapping. */
+.orch-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+.orch-chip {
+  flex: 0 0 156px;
+  display: flex;
+  flex-direction: column;
+  scroll-snap-align: start;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.orch-chip:hover {
+  border-color: var(--border);
+}
+/* The chip that owns the detail pane stays marked while the pane is up: with
+   the strips still visible, "which task am I reading" has to be answerable
+   without looking down. */
+.orch-chip[data-picked] {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+/* The tile's open target is a button of its own, not the whole tile: the
+   action beside it is a real button too, and a button inside a button is not
+   something a keyboard can reach. */
+.orch-chip-open {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 9px 5px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.orch-chip-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--text-md);
+  line-height: 1.35;
+  /* Two lines is the tile's budget: titles are sentences, and the strip is
+     scanned, not read. */
+  min-height: calc(2 * 1.35em);
+}
+.orch-chip-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.orch-chip-age {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.orch-chip-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 0 6px 6px;
+  margin-top: auto;
+}
+.orch-act {
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.orch-act:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* Run is the one action the card wants you to take on a parked task, so it
+   carries the ink border the console gives a secondary button. Written with
+   the hover state spelled out: `.orch-act:hover` and `.orch-act.run` have the
+   same specificity, so a bare `.orch-act.run` below would cancel the hover
+   colour for this one button only. */
+.orch-act.run {
+  border-color: var(--border);
+  color: var(--text);
+}
+.orch-act.run:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.orch-act:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* The detail pane sits *under* the strips, in the same card — a hairline is
+   the whole separation. It is capped so a long result scrolls in place rather
+   than turning the card into a page; the card scrolls around it. */
+.orch-detail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 2px;
+  padding: 8px 6px 4px;
+  border-top: 1px solid var(--border-soft);
+  /* 300 keeps the pane a reading pane: a task's result can be a wall of JSON,
+     and the strips above it have to stay one wheel-tick away. */
+  max-height: min(42vh, 300px);
+  overflow-y: auto;
+}
+.orch-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 4px;
+}
+.orch-detail-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -2px;
+}
+.orch-detail-close svg {
+  width: 14px;
+  height: 14px;
+}
+.orch-detail-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text);
+}
+.orch-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+.orch-detail-tag,
+.orch-detail-age {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.orch-detail-age {
+  margin-left: auto;
+}
+.orch-detail-note {
+  margin: 0 4px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.orch-detail-note.blocked {
+  color: var(--warn);
+}
+.orch-detail-sec {
+  padding: 0 4px;
+}
+.orch-detail-label {
+  margin: 0 0 3px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.orch-detail-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.orch-detail-pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.orch-detail-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 4px 2px;
+}
 .composer-box {
   position: relative;
   border: 1px solid var(--border);
@@ -1402,14 +1990,16 @@
   border-color: var(--accent);
   box-shadow: none;
 }
-/* The trailing action owns the right edge — Send, or Stop while a reply
-   streams. The two are the same slot, so they must not drift apart: Stop
-   without this sat directly after the authorize toggle, where it read as one
-   more setting rather than as the way out of the running turn. The shortcut
-   hint below the box is what frees the row for this. */
+/* The trailing pair owns the right edge — the model switch and Send (or Stop
+   while a reply streams). The auto margin sits on the pair's first element,
+   `.model-select`, not on the button: Send must follow the model switch
+   rather than jump past it, or the row reads "…authorize, model" on the left
+   and a lone Send stranded on the right. Send and Stop are the same slot and
+   so must not drift apart either. The shortcut hint below the box is what
+   frees the row for this. */
 .composer-actions .btn.primary,
 .composer-actions .btn.stop-btn {
-  margin-left: auto;
+  margin-left: 0;
 }
 /* A standing reference under the box. It used to share the action row, which
    now carries the context picks and the authorize toggle instead. */
@@ -1418,6 +2008,435 @@
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   user-select: none;
+}
+/* The new-chat footer: where the thread will run, then the legend. One row of
+   small print, both items sharing its baseline and its grey — the pick is not
+   a control row above the composer, it is a footnote under it. */
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  min-width: 0;
+  /* Set in from the box's border by the box's own horizontal padding (14px,
+     see `.composer-box`), so the chip starts on the same column as the
+     placeholder and the "+" instead of hanging off the border — flush left it
+     read as something stuck to the outside of the composer rather than its
+     footer. */
+  padding-left: 14px;
+}
+/* The legend lost its auto margins with the move: the row places it now. */
+.composer-foot .composer-shortcut-hint {
+  margin: 0;
+  /* Last on the line and free to give way first — a long folder name may not
+     push the legend out of the column. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+/* A directory pick that is always a bubble. It used to be small print that
+   only dressed up under the pointer, which made the one control in the footer
+   look like a caption — a chip that is only a chip on hover is a control
+   nobody finds. So the pill is permanent: fill, hairline and the folder's
+   name are its resting face, and hovering adds the absolute path (see the
+   `[data-tip]` rule below) plus one step of ink. `--bg-hover` is the only
+   surface token that sits a step off the page in *both* themes — grey on
+   white, one shade up from the near-black — which is what a chip needs.
+
+   The chip is a box, not a button: a chosen directory carries two targets
+   (open the picker, drop the pick) and a button may not hold a button. */
+.workdir-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  /* A folder name long enough to crowd the legend is cut, not wrapped: the
+     footer is one line by design, and a label that wrapped would move the
+     composer up off the pane's bottom edge. */
+  max-width: min(280px, 100%);
+  padding: 2px 10px 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+/* The chip's one real target: the glyph and the name, in a button stripped of
+   every bit of chrome — the pill around it already is the affordance. */
+.workdir-btn .workdir-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workdir-btn .workdir-open:disabled {
+  cursor: default;
+}
+/* Hover cannot lean on the fill here (the resting fill already is the hover
+   grey), so the edge and the ink carry it: a firmer hairline and full-strength
+   text say "pressable" without the pill changing size. */
+.workdir-btn:hover:not(.is-disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.workdir-btn.is-disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* A chosen directory is a fact, not a placeholder: the pill's label is the
+   answer, so it sits at full ink while the empty pick's "choose a folder"
+   stays grey — the same contrast step the legend already uses. */
+.workdir-btn.has-value {
+  color: var(--text);
+}
+.workdir-btn svg {
+  flex: none;
+}
+.workdir-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The cross takes the glyph's slot rather than standing beside the name: the
+   chip is one line of small print and a second control on its right would
+   push a long folder name into the clamp. It is a sibling of the open button
+   pinned over the glyph — same 8px inset as the chip's padding-left, so the
+   two never move and the swap is a dissolve, not a jump. */
+.workdir-btn .workdir-clear {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  /* Hidden, not removed: a target that appears under the pointer must not
+     change the chip's box, or the pointer would fall off the control it is
+     aiming at. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.workdir-btn.has-value:hover .workdir-glyph,
+.workdir-btn.has-value:focus-within .workdir-glyph {
+  opacity: 0;
+}
+.workdir-btn.has-value:hover .workdir-clear,
+.workdir-btn.has-value:focus-within .workdir-clear {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* No hover to borrow the swap from: a finger never gets the preview, so the
+   cross has to be on the chip from the start. The glyph keeps its space (only
+   its ink goes) — the name must not slide under the cross it is next to. */
+@media (hover: none) {
+  .workdir-btn.has-value .workdir-glyph {
+    opacity: 0;
+  }
+  .workdir-btn.has-value .workdir-clear {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+/* The bubble carries the path the label no longer does, and it opens to the
+   RIGHT of the button rather than above it. Up is where the composer still
+   lives — the attach menu and the authorize toggle sit exactly where a tip
+   would land, and a bubble that covers a live control on hover is worse than
+   no bubble at all. Sideways keeps it on the footer's own line: nothing in
+   the box is ever touched, and the tip grows along the empty half of a row
+   that only holds a keyboard legend. Left-anchored (not centred) because the
+   pick is the leftmost thing in the column, so the bubble can only run
+   rightwards without leaving the pane.
+
+   A path on its own is a readout; the second line says the chip can be
+   undone, because the cross is the one control in the footer that is
+   invisible until the pointer is already on it. */
+.workdir-btn[data-tip]:hover::after,
+.workdir-btn[data-tip]:focus-visible::after {
+  content: attr(data-tip) '\A' attr(data-tip-hint);
+  white-space: pre-line;
+  left: calc(100% + 10px);
+  /* Bottom-anchored at the button's midline, then pulled down by half its own
+     height: the tip rides level with the folder name instead of sitting on
+     the footer's baseline. */
+  bottom: 50%;
+  transform: translateY(50%);
+  /* `max-content` before the clamp: an absolutely positioned box shrinks to
+     its containing block, and the containing block here is the button — a
+     50px-wide folder name, which wrapped the path into a sliver. */
+  width: max-content;
+  max-width: min(360px, 45vw);
+  overflow-wrap: anywhere;
+  text-align: left;
+  line-height: 1.45;
+}
+/* The tip lands on the legend's first words, so the legend steps out of the
+   way while the tip is up: two runs of small print fighting over the same
+   ninety pixels reads as a collision, not a tooltip. `:has` is the
+   enhancement here — where it is unsupported the tip simply paints over the
+   text, which is what every tooltip already does. */
+.composer-foot:has(.workdir-btn[data-tip]:hover) .composer-shortcut-hint,
+.composer-foot:has(.workdir-btn[data-tip]:focus-visible) .composer-shortcut-hint {
+  opacity: 0;
+}
+
+/* ---- Composer model switch ------------------------------------------------- */
+
+/* The pick sits in the action row's right edge, immediately left of Send.
+   The shape is Codex's own `_ViewToggle_` / `_Menu_` pair (the `openai.chatgpt`
+   webview bundle, CSS modules `_tovi5_` / `_cg5xy_`), re-skinned in our
+   tokens:
+
+   - the trigger is ghost chrome, not a control — 32px tall, 8px radius, 4px
+     padding, and only the *inner* content pill (2px 4px, 6px radius, 2px gap)
+     takes the hover tint. A bordered button here would read as a second Send;
+   - the card is the "descriptive" menu variant — 20px radius, 6px gutter,
+     44px rows whose pill is `radius - gutter` = 14px, list capped at 316px
+     with its own scroll, footer split off by a hairline.
+
+   One step brighter than the directory's small print because it names the
+   choice the turn will actually be answered by. */
+.model-select {
+  /* The card anchors to this, not to the header: `position: static` would put
+     an absolutely positioned child up in the pane's flow instead. */
+  position: relative;
+  display: flex;
+  /* The auto margin lives here, not on Send: the switch and Send travel as
+     one pair on the row's right edge. */
+  margin-left: auto;
+}
+.model-select-btn {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 32px;
+  margin: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.model-select-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The pill the pointer actually touches. Codex hangs the hover state here so
+   the 32px hit area keeps a 4px quiet margin around the tint. */
+.model-select-content {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-select-btn:hover:not(:disabled) .model-select-content,
+.model-select-btn.open .model-select-content {
+  background: var(--bg-hover);
+}
+.model-select-name {
+  /* A long alias is cut, never wrapped: this row is one line tall and the
+     Send button beside it must not move. */
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-select-arrow {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.model-select-btn:hover:not(:disabled) .model-select-arrow,
+.model-select-btn.open .model-select-arrow {
+  color: var(--text-secondary);
+}
+/* The card opens *upward* from the button: the composer is docked to the
+   bottom of the pane, so a downward card would hang off the viewport. Right
+   edge, not centre — the button is the last control before Send. */
+.model-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  /* 300px is the menu's own floor in Codex (`--menu-min-width`); the node card
+     in the header holds the same, so the two popovers cannot disagree. */
+  width: min(300px, calc(100vw - 32px));
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
+  box-shadow: var(--shadow-lg);
+  /* Grows out of the corner it is anchored to — Radix hands Codex the same
+     origin as a variable. */
+  transform-origin: bottom right;
+  /* Codex's menu enters on a 150ms fade + scale from .95; the node card's
+     slide is for a card that hangs off a header, this one grows out of the
+     button it belongs to. */
+  animation: model-panel-in 150ms var(--ease-enter);
+}
+@keyframes model-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.model-panel-label {
+  margin: 0;
+  padding: 6px 8px 4px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.model-panel-list {
+  display: flex;
+  flex-direction: column;
+  /* Codex caps the list at 316px; past that the card scrolls rather than
+     growing taller than the transcript it sits over. */
+  max-height: 316px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  /* 44px: the descriptive variant's min-height — a label, its sub-line, and
+     the pill's own breathing room. */
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 0;
+  /* radius 20 minus the 6px gutter — Codex derives the row pill from the card
+     so the two radii stay concentric. */
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-row:hover:not(:disabled),
+.model-row:focus-visible {
+  background: var(--bg-hover);
+}
+/* The tint is the focus indicator here, the way it is in Codex — the global
+   ring would draw a second box inside a card that is already a box. */
+.model-row:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-radius: 14px;
+}
+/* One highlight at a time: opening the card focuses the live model, and
+   without this the pointer would light a second row while the keyboard's row
+   stayed lit — two answers to "which one am I on". Codex gets the same
+   behaviour from Radix's single `data-highlighted` flag. */
+.model-panel-list:hover .model-row:focus:not(:hover) {
+  background: transparent;
+}
+.model-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.model-row-alias {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The live model is ticked, not tinted: a filled row here would read as the
+   one thing you may press, and the point of the card is the opposite. */
+.model-row.on .model-row-alias {
+  font-weight: 500;
+}
+.model-row-sub {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-row-check {
+  flex: none;
+  color: var(--text);
+}
+.model-row.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.model-panel-empty {
+  margin: 0;
+  padding: 6px 8px 8px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.model-panel-foot {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+.model-foot-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.model-foot-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.model-foot-arrow {
+  margin-left: auto;
+  color: var(--text-tertiary);
 }
 
 /* ---- Composer attachments (inline pills) --------------------------------- */

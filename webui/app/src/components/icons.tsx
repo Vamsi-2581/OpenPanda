@@ -20,6 +20,7 @@ export type IconName =
   | 'activity'
   | 'alert'
   | 'arrow-down'
+  | 'arrow-left'
   | 'arrow-up'
   | 'bell'
   | 'bell-off'
@@ -31,11 +32,13 @@ export type IconName =
   | 'coins'
   | 'copy'
   | 'cpu'
+  | 'devices'
   | 'download'
   | 'folder'
   | 'folder-closed'
   | 'folder-open'
   | 'gear'
+  | 'git-fork'
   | 'image'
   | 'lightbulb'
   | 'menu'
@@ -43,11 +46,13 @@ export type IconName =
   | 'more-horizontal'
   | 'network'
   | 'orbit'
+  | 'panel-right'
   | 'paperclip'
   | 'pencil'
   | 'pin'
   | 'pin-off'
   | 'plug'
+  | 'route'
   | 'search'
   | 'shield'
   | 'sparkles'
@@ -68,6 +73,14 @@ const paths: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 5v14" />
       <path d="m19 12-7 7-7-7" />
+    </>
+  ),
+  // Back out of a drill-down without leaving the surface — the orchestration
+  // card's detail view returns to its two rows with this, not with a chevron.
+  'arrow-left': (
+    <>
+      <path d="m12 19-7-7 7-7" />
+      <path d="M19 12H5" />
     </>
   ),
   'arrow-up': (
@@ -135,6 +148,17 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M9 20v2" />
     </>
   ),
+  // 工作空间's mark. The `network` tree it replaces is four boxes joined by
+  // three connectors — at 16px in the rail that fuses into a blob, and the
+  // tree already means "topology" on the node picker and the delegation
+  // chips. One screen on a stand reads as "the machines" at any size.
+  devices: (
+    <>
+      <rect x="2.5" y="4" width="19" height="12.6" rx="2.2" />
+      <path d="M9 20.6h6" />
+      <path d="M12 16.6v4" />
+    </>
+  ),
   // The header's export mark. It used to be the "⤓" character, which draws at
   // a different weight and baseline in every platform font and sat a pixel
   // high in its button; the tray-and-arrow reads the same at 18px and takes
@@ -168,6 +192,19 @@ const paths: Record<IconName, JSX.Element> = {
     <>
       <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
       <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  // The header's node button. One machine above, two below: the glyph says
+  // "this run goes to one of several machines" without drawing the three-box
+  // tree the `network` icon draws — that tree is now only the fleet/manage
+  // affordance, where the point really is the topology.
+  'git-fork': (
+    <>
+      <circle cx="12" cy="18" r="3" />
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="6" r="3" />
+      <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9" />
+      <path d="M12 12v3" />
     </>
   ),
   // The Lucide frame kept, but its diagonal mountain stroke is now a solid
@@ -222,6 +259,15 @@ const paths: Record<IconName, JSX.Element> = {
       <ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(-30 12 12)" />
     </>
   ),
+  // The workspace rail's toggle: a pane folded against the right edge — the
+  // same shape every editor uses for "show/hide the side panel", so the
+  // button needs no label at 16px.
+  'panel-right': (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2.4" />
+      <path d="M15 4v16" />
+    </>
+  ),
   paperclip: (
     <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
   ),
@@ -252,6 +298,18 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M9 8V2" />
       <path d="M15 8V2" />
       <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+    </>
+  ),
+  // The header's orchestration button. Two endpoints joined by one path that
+  // snakes between them: the glyph reads as a run — start, hand-off, arrive —
+  // rather than as a shape (the old `workflow` was two boxes and an elbow, which
+  // at 19px collapsed into "some boxes") and rather than as machines, which is
+  // what the `git-fork` node button beside it means.
+  route: (
+    <>
+      <circle cx="6" cy="19" r="3" />
+      <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" />
+      <circle cx="18" cy="5" r="3" />
     </>
   ),
   // The sidebar head's magnifier: the ⌘K palette used to be a bordered field

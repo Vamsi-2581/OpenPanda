@@ -20,13 +20,17 @@ export function PageHeader({ title, sub }: { title: string; sub: string }) {
 
 /** Friendly full-page error: keeps the page header so the user knows where
  *  they are, explains that loading failed (not the raw fetch error), and
- *  offers a retry. The technical detail stays for diagnosis. */
+ *  offers a retry. The technical detail stays for diagnosis. `head={false}`
+ *  drops the header for boards hosted inside a merged page (总控), which
+ *  paints the heading itself. */
 export function ErrorState({
+  head = true,
   title,
   sub,
   error,
   onRetry,
 }: {
+  head?: boolean
   title: string
   sub: string
   error: string
@@ -34,7 +38,7 @@ export function ErrorState({
 }) {
   return (
     <section>
-      <PageHeader title={title} sub={sub} />
+      {head && <PageHeader title={title} sub={sub} />}
       <div class="card error-state">
         <span class="error-state-title">{t('common.loadFail')}</span>
         <span class="dim error-state-detail">{error}</span>
@@ -48,11 +52,21 @@ export function ErrorState({
   )
 }
 
-/** Full-page loading under the page header. */
-export function LoadingState({ title, sub }: { title: string; sub: string }) {
+/** Full-page loading under the page header. `head={false}` drops the header
+ *  for pages that paint no header once loaded — otherwise the title flashes
+ *  in and then vanishes. */
+export function LoadingState({
+  head = true,
+  title,
+  sub,
+}: {
+  head?: boolean
+  title: string
+  sub: string
+}) {
   return (
     <section>
-      <PageHeader title={title} sub={sub} />
+      {head && <PageHeader title={title} sub={sub} />}
       <p class="dim">
         <span class="spinner spinner-inline" aria-hidden="true" />
         {t('common.loading')}

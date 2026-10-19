@@ -76,7 +76,6 @@
   /* The default 1.4 line box would make the head 37px tall and push 新对话
      down with it; 1.2 keeps the pair at the 41px the reference spacing wants. */
   line-height: 1.2;
-  transition: color var(--dur-fast) var(--ease);
 }
 .sidebar-workspace-name {
   overflow: hidden;
@@ -87,9 +86,10 @@
   color: var(--accent);
   font-weight: 600;
 }
-.sidebar-workspace:hover {
-  color: var(--text);
-}
+/* No hover colour and no pointer: the wordmark is the column's label, not a
+   destination (it used to open 总控 → 项目, so brushing it lit up and clicking
+   it navigated). Leaving it inert also keeps the head from competing with the
+   two real buttons beside it. */
 .sidebar-head-actions {
   display: flex;
   align-items: center;
@@ -178,9 +178,13 @@
    6px padding, same hover wash — and is told apart by its glyph, not by a
    border. A tinted, outlined block here was the loudest thing in a column of
    quiet rows, and it fought the head above it for the eye. */
-.nav-new-chat {
-  /* The head and this row are one block; the nav below starts a section, so it
-     gets the extra 4px. */
+/* The quick block: 新对话 and 工作空间, the two rows that sit above the rail's
+   destinations and read as one unit. The head and these rows are one block;
+   the nav below starts a section, so the gap lives here. */
+.nav-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-bottom: var(--sp-1);
 }
 
@@ -324,8 +328,11 @@ a.sidebar-node:hover {
     width: auto;
     white-space: nowrap;
   }
-  /* The top bar is a row of destinations; 新对话 rides along as one more
-     pill rather than a full-width block. */
+  /* The top bar is a row of destinations; the quick block dissolves so 新对话
+     and 工作空间 ride along as two more pills rather than a stacked block. */
+  .nav-quick {
+    display: contents;
+  }
   .nav-new-chat {
     width: auto;
     margin-bottom: 0;

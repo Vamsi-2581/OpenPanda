@@ -1,0 +1,650 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* 工作空间 — the device topology, laid out like a chat thread rather than a
+   report: one quiet header line, the drawing filling the pane, a hairline
+   footer for the key. No card frames, no page lede — the map is the page.
+   Monochrome by design: the glyph carries the machine class, the label carries
+   the system, and hue is reserved for status and selection. */
+
+.ws-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  /* The lane a header card takes on the right while it is up: 0 closed, the
+     card's 360px + the bar's padding when open (see `.panel-open` below). Both
+     cards — 编排 and 设备列表 — reserve the same lane, which is what keeps the
+     composer still while the reader trades one for the other. */
+  --panel-lane: 0px;
+}
+/* 20 (bar padding) + 360 (either card) — the same lane the chat reserves. */
+.ws-page.panel-open {
+  --panel-lane: 380px;
+}
+/* The pane owns its edges (like the chat): the map bleeds to the window. */
+.main:has(> .ws-page) {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.main:has(> .ws-page) > .banner,
+.main:has(> .ws-page) > .onboard-banner {
+  margin: var(--sp-3) var(--sp-4) 0;
+}
+
+/* Header: the page's mark, its name, the key for the drawing beside it, and
+   the rail's toggle pushed right. Same height and type as the thread header,
+   so switching views does not resize the top edge of the pane. */
+.ws-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--sp-5);
+  background: var(--bg-raised);
+  flex: none;
+  /* The orchestration card hangs out of this bar and over the map, the same
+     way the chat's cards hang over the transcript. Owning a stacking context
+     here is what lets it paint above the drawing. */
+  position: relative;
+  z-index: 8;
+}
+.ws-head-icon {
+  flex: none;
+  color: var(--text);
+}
+.ws-title {
+  flex: none;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* The key sits beside the title instead of under the drawing: six
+   glyph + name pairs on one quiet line, no group labels. The two line styles
+   need no entry — an edge names itself in its own tooltip — so the map has no
+   footer at all and the pane belongs to the drawing. */
+.ws-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 13px;
+  margin-left: 8px;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.ws-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ws-legend-item svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--text-tertiary);
+  fill: none;
+  stroke: currentColor;
+  /* Heavier than the 1.7 it carried as a footer: at 15px that weight
+     dissolved the dashed VM and unknown plates into grey smudge. */
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@media (max-width: 860px) {
+  /* Six names do not fit beside a title on a narrow pane; the plates carry
+     their own label anyway, so the key is the first thing to go. */
+  .ws-legend {
+    display: none;
+  }
+}
+
+/* The header's right edge: the rail toggle, then orchestration. Same 36px
+   ghost square the chat bar uses for its header tools — these are the only
+   things in the bar you press, and the taller square is what makes the bar
+   the same 56px height as a thread's. */
+.ws-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
+}
+.ws-head-tools .icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+.ws-head-tools .icon-btn svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* The page's only other control: fold the device rail in or out. */
+.ws-rail-picker {
+  display: flex;
+}
+.ws-rail-toggle {
+  flex: none;
+}
+.ws-rail-toggle.on {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* Map. One column, always: the rail floats over it rather than taking a lane
+   out of it — a lane narrowed the canvas, and the ring layout re-centred every
+   plate the moment a list opened. */
+.ws-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ws-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ws-map {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.ws-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  touch-action: none;
+}
+.ws-bg {
+  fill: transparent;
+  cursor: grab;
+}
+.ws-map.panning .ws-bg {
+  cursor: grabbing;
+}
+.ws-empty {
+  margin: 0;
+  padding: 40px 16px;
+  text-align: center;
+}
+
+/* — Edges. A mesh link is the routing graph's own edge: solid. A one-sided
+   measurement is dashed — live, but only this console can see it. */
+.ws-edge {
+  fill: none;
+  stroke: var(--text-tertiary);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  opacity: 0.75;
+  transition:
+    stroke var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+.ws-edge-measured {
+  stroke-dasharray: 4 4;
+  opacity: 0.55;
+}
+.ws-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+}
+.ws-edge-g.dim {
+  opacity: 0.2;
+}
+.ws-edge-g.lit .ws-edge {
+  stroke: var(--accent);
+  opacity: 1;
+  filter: url(#ws-edge-glow);
+}
+
+/* — Nodes: a plate per device, the glyph inside, the name under it. */
+.ws-node {
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.ws-node.dim {
+  opacity: 0.3;
+}
+.ws-plate {
+  fill: var(--bg-raised);
+  stroke: var(--border);
+  stroke-width: 1.1;
+  transition:
+    stroke var(--dur-fast) var(--ease),
+    fill var(--dur-fast) var(--ease);
+}
+.ws-node:hover .ws-plate {
+  stroke: var(--border-strong);
+}
+.ws-node.self .ws-plate {
+  fill: var(--accent-soft);
+  stroke: var(--accent-border);
+}
+.ws-node.sel .ws-plate {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.ws-node.off .ws-plate {
+  fill: var(--bg-inset);
+  stroke-dasharray: 3.5 3;
+  color: var(--text-disabled);
+}
+.ws-halo {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: 0.4;
+}
+.ws-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ws-node.self .ws-glyph,
+.ws-node:hover .ws-glyph {
+  color: var(--text);
+}
+.ws-status {
+  fill: var(--good);
+  stroke: var(--bg-raised);
+  stroke-width: 1.5;
+}
+.ws-node.off .ws-status {
+  fill: var(--text-disabled);
+}
+.ws-name {
+  font-size: 11px;
+  font-weight: 500;
+  fill: var(--text);
+}
+.ws-node.off .ws-name {
+  fill: var(--text-tertiary);
+}
+.ws-os {
+  font-size: 9.5px;
+  fill: var(--text-tertiary);
+}
+.ws-tag {
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  fill: var(--text-tertiary);
+}
+
+/* — Rail: the selected device's facts, then the fleet list. A card hanging off
+   the header's right corner, the same shell as the orchestration card beside
+   it — same corner, same width, same lane — so the two can trade places
+   without the composer moving a pixel. */
+.ws-rail {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: var(--sp-5);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100% - 40px));
+  max-height: min(72vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: node-panel-in var(--dur-fast) var(--ease-enter);
+}
+
+.ws-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 8px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.ws-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ws-detail-glyph {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--text);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ws-detail-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-detail-id {
+  margin: 0;
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 2px 0;
+}
+.ws-detail-badges .badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+}
+.ws-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.ws-detail-row > span:last-child {
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ws-detail-val {
+  font-size: var(--text-xs);
+}
+.ws-detail-links {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 2px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.ws-detail-none {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.ws-detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ws-chip {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.ws-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.ws-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ws-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 7px 46px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.ws-row:hover {
+  background: var(--bg-hover);
+}
+.ws-row.sel {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+.ws-row-glyph {
+  width: 22px;
+  height: 22px;
+  color: var(--text-secondary);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ws-row.off .ws-row-glyph {
+  color: var(--text-disabled);
+}
+.ws-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ws-row-name {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-row-meta {
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-row-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--good);
+}
+.ws-row-dot.off {
+  background: var(--text-disabled);
+}
+.ws-row-rtt {
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+/* The composer keeps the chat's dock, minus the transcript's 52px prompt-rail
+   lane: nothing hangs off this page's right edge but the orchestration card,
+   so the box centres under the map instead of inside a lane that is not
+   there — until that card opens, when the lane it reserves is added back. */
+.ws-page .composer {
+  flex: none;
+  padding-right: calc(var(--sp-6) + var(--panel-lane));
+  /* The lane is the same for both header cards, so swapping one for the other
+     moves nothing; this transition only ever runs when a card opens or closes,
+     and it is what makes the box slide rather than jump. */
+  transition: padding-right var(--dur-med) var(--ease-standard);
+}
+
+/* ---- The thread pick (composer footer) ----------------------------------- */
+/* 工作空间 never paints a transcript, so "continue an existing conversation" is
+   a pick in the footer rather than a navigation: the pill names the thread the
+   next task is appended to, the card above it lists the directory's threads.
+   The pill shares the directory pill's shell — same height, radius and type —
+   so the footer reads as one row of chips instead of two unrelated controls. */
+.sp-picker {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+/* A picked thread is not the default and must not look like one: sending into
+   the wrong conversation is the one mistake this surface can make, so the pill
+   carries the accent the moment it is armed. */
+.sp-btn.has-value {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.sp-caret {
+  flex: none;
+  opacity: 0.55;
+}
+/* "续接" — the word that says the send lands in an existing thread, not a new
+   one. Grey against the pill's full-ink title, so it reads as a label rather
+   than as part of the name. */
+.sp-lead {
+  margin-right: 5px;
+  color: var(--text-tertiary);
+}
+.sp-btn.has-value .sp-lead {
+  color: var(--text-secondary);
+}
+.sp-panel {
+  position: absolute;
+  /* Anchored to the pill, opening upward: the footer is the last line of the
+     pane, so a card below it would hang off screen. It covers the composer box
+     while it is up, which is what a dropdown is for. */
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 48px));
+  max-height: min(46vh, 380px);
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  animation: sp-panel-in var(--dur-fast) var(--ease-enter);
+}
+@keyframes sp-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.sp-search {
+  flex: none;
+  height: 30px;
+  margin: 2px 2px 6px;
+  font-size: var(--text-sm);
+}
+.sp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.sp-row:hover {
+  background: var(--bg-hover);
+}
+.sp-row.sel {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+.sp-row-new {
+  color: var(--text-secondary);
+}
+.sp-row-new.sel {
+  color: var(--text);
+}
+.sp-row-icon {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.sp-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.sp-row-title {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The thread's own liveness: a dot, not a word — a running thread is the one
+   case where appending a task is a second instruction, not a new subject. */
+.sp-run {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  vertical-align: 1px;
+}
+.sp-row-preview {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-row-age {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.sp-empty {
+  margin: 0;
+  padding: 10px 10px 12px;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
