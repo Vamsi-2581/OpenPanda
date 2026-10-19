@@ -2473,6 +2473,42 @@
   white-space: nowrap;
 }
 
+/* ---- Sub-agent tree (detail view) ---- */
+
+.children-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.child-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.child-row:hover {
+  border-color: var(--accent);
+}
+
+.child-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
 /* ---- Capability card editor + add-device form (stage 6) ---- */
 
 .card-editor {

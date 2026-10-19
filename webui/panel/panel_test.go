@@ -149,6 +149,68 @@ func TestGetTaskNotFound(t *testing.T) {
 	}
 }
 
+// TestGetTaskChildren locks the sub-agent tree the detail view renders: the
+// parent's payload carries each child with its live state and parallel mode,
+// so "the parent fanned out to N sub-agents" is visible from one fetch.
+func TestGetTaskChildren(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	parent, err := store.Create(ctx, "", "proj", "orchestrate", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	scoped, err := store.Create(ctx, parent.TaskID, "proj", "api lane", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := store.SetScopePaths(ctx, scoped.TaskID, []string{"pkg/api"}); err != nil {
+		t.Fatalf("scope paths: %v", err)
+	}
+	iso, err := store.Create(ctx, parent.TaskID, "proj", "renderer copy", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create iso child: %v", err)
+	}
+	if err := store.SetIsolate(ctx, iso.TaskID, true); err != nil {
+		t.Fatalf("isolate: %v", err)
+	}
+
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/"+parent.TaskID, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var out taskJSON
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Children) != 2 {
+		t.Fatalf("children = %+v, want 2", out.Children)
+	}
+	byID := map[string]taskChildJSON{}
+	for _, c := range out.Children {
+		byID[c.ID] = c
+	}
+	if c := byID[scoped.TaskID]; len(c.ScopePaths) != 1 || c.ScopePaths[0] != "pkg/api" {
+		t.Fatalf("scoped child = %+v", c)
+	}
+	if c := byID[iso.TaskID]; !c.Isolate {
+		t.Fatalf("isolated child lost its flag: %+v", c)
+	}
+	// The board list must NOT pay the N+1: children stay detail-only.
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, authedReq(http.MethodGet, "/api/tasks", nil))
+	var listed []taskJSON
+	if err := json.Unmarshal(rr2.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	for _, lt := range listed {
+		if len(lt.Children) > 0 {
+			t.Fatalf("listTasks leaked children for %s", lt.ID)
+		}
+	}
+}
+
 func TestApproveReview(t *testing.T) {
 	store := newTestStore(t)
 	task := reviewTask(t, store)

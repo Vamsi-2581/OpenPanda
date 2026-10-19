@@ -1119,8 +1119,9 @@ func (r *repl) cmdTaskAdd(fields []string) {
 		r.outln(i18n.T(r.loc, "repl.approval.noEngine"))
 		return
 	}
-	var title, prompt, priority, project, requires, agents, mode, preferred, actionSpec string
+	var title, prompt, priority, project, requires, agents, mode, preferred, actionSpec, scopePaths string
 	authorize := false
+	isolate := false
 	wait := false
 	waitTimeout := 30 * time.Minute
 	var pos []string
@@ -1152,6 +1153,10 @@ func (r *repl) cmdTaskAdd(fields []string) {
 			preferred = val()
 		case "action-spec", "actionSpec":
 			actionSpec = val()
+		case "paths":
+			scopePaths = val()
+		case "isolate":
+			isolate = true
 		case "wait":
 			wait = true
 		case "wait-timeout":
@@ -1205,6 +1210,10 @@ func (r *repl) cmdTaskAdd(fields []string) {
 	if len(agentList) > 1 {
 		if strings.TrimSpace(actionSpec) != "" {
 			r.outln(i18n.T(r.loc, "cli.task.add.actionSpecAgents"))
+			return
+		}
+		if strings.TrimSpace(scopePaths) != "" || isolate {
+			r.outln(i18n.T(r.loc, "cli.task.add.scopePlanConflict"))
 			return
 		}
 		if mode == "" {
@@ -1264,6 +1273,27 @@ func (r *repl) cmdTaskAdd(fields []string) {
 		contextType = "hardware"
 		requiresList = ledger.RequiresForActionSpec(requiresList, &as)
 	}
+	// The same-node parallelism levers, same contract as the CLI flags:
+	// they need a project to scope (the ambient resolution the CLI applies
+	// counts here too), and the two modes are mutually exclusive.
+	project = strings.TrimSpace(project)
+	if project == "" {
+		project, _ = ambientProject(r.cfg)
+	}
+	var pathList []string
+	for _, p := range strings.Split(scopePaths, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			pathList = append(pathList, p)
+		}
+	}
+	if (len(pathList) > 0 || isolate) && project == "" {
+		r.outln(i18n.T(r.loc, "cli.task.add.scopeNoProject"))
+		return
+	}
+	if len(pathList) > 0 && isolate {
+		r.outln(i18n.T(r.loc, "cli.task.add.scopeIsolateConflict"))
+		return
+	}
 	in := core.TaskInput{
 		Title:         title,
 		Project:       project,
@@ -1271,6 +1301,8 @@ func (r *repl) cmdTaskAdd(fields []string) {
 		Intent:        prompt,
 		SpecJSON:      specJSON,
 		Requires:      requiresList,
+		Paths:         pathList,
+		Isolate:       isolate,
 		PreferredNode: strings.TrimSpace(preferred),
 		Authorized:    authorize,
 	}

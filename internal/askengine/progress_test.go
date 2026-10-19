@@ -53,6 +53,12 @@ func TestProgressForEvent(t *testing.T) {
 		{"delegate request falls back to requires", "delegate_request", map[string]any{"child": "t-9", "requires": []string{"gpu:train", "agent:claude"}}, Progress{Kind: ProgressSpawn, Name: "gpu:train, agent:claude"}, true},
 		{"delegate request survives the JSON form", "delegate_request", []byte(`{"child":"t-9","requires":["gpu:train"]}`), Progress{Kind: ProgressSpawn, Name: "gpu:train"}, true},
 		{"delegate request bare child id last", "delegate_request", map[string]any{"child": "t-9"}, Progress{Kind: ProgressSpawn, Name: "t-9"}, true},
+		// The mode descriptor rides the spawn milestone: how the child
+		// relates to the shared tree decides whether the fan-out reads as
+		// parallel lanes or a private copy.
+		{"delegate request carries isolated mode", "delegate_request", map[string]any{"child": "t-9", "title": "renderer", "isolate": true}, Progress{Kind: ProgressSpawn, Name: "renderer", Detail: "isolated"}, true},
+		{"delegate request carries scope lanes", "delegate_request", map[string]any{"child": "t-9", "title": "api", "paths": []string{"pkg/api", "pkg/util"}}, Progress{Kind: ProgressSpawn, Name: "api", Detail: "pkg/api, pkg/util"}, true},
+		{"delegate request mode survives the JSON form", "delegate_request", []byte(`{"child":"t-9","title":"api","paths":["pkg/api"],"isolate":false}`), Progress{Kind: ProgressSpawn, Name: "api", Detail: "pkg/api"}, true},
 		{"unrelated event is silent", core.EvSubmit, map[string]any{}, Progress{}, false},
 	}
 	for _, tc := range cases {

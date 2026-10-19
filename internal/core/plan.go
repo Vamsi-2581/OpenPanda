@@ -1621,6 +1621,12 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		"requires": dr.Requires,
 		"node":     dr.Node,
 		"chain":    child.Chain,
+		// The parallel-mode declaration rides the event so every renderer
+		// (CLI progress line, TUI transcript, web orbit) can say HOW the
+		// child relates to the shared tree — a private copy, named lanes,
+		// or the default whole-project claim.
+		"paths":   dr.Paths,
+		"isolate": dr.Isolate,
 	})
 	r, delivered, state, err := c.awaitChild(ctx, parent, child, waiter)
 	if delivered || err != nil {

@@ -288,6 +288,15 @@ export function isTaskStalled(task: Task, now = Date.now()): boolean {
   }
 }
 
+/** One sub-agent reference inside a parent task's detail payload. */
+export interface TaskChild {
+  id: string
+  state: string
+  title?: string
+  isolate?: boolean
+  scope_paths?: string[]
+}
+
 export interface Task {
   id: string
   parent_id: string
@@ -320,6 +329,9 @@ export interface Task {
    *  is set — a private copy whose changes merge back on completion. */
   scope_paths?: string[]
   isolate?: boolean
+  /** Spawned sub-agents (getTask only): the tree a parent is orchestrating,
+   *  with each child's live state and its own parallel mode. */
+  children?: TaskChild[]
   created_at: string
   updated_at: string
   events?: TaskEvent[]
@@ -1933,6 +1945,11 @@ export interface AskStatusEvent {
   delay_ms?: number
   http_status?: number
   reason?: string
+  /** kind === 'spawn': the child's label and its parallel-mode descriptor
+   *  ("isolated", or the claimed lane paths) so the console phrases the
+   *  fan-out milestone in the browser's own language. */
+  name?: string
+  detail?: string
 }
 
 /** Structured fields on an `error` SSE event beyond the message. `kind` is

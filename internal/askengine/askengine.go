@@ -1309,6 +1309,11 @@ type Progress struct {
 	Model  string
 	Round  int
 	Budget int
+	// Detail qualifies the milestone without a locale: for a spawn it is
+	// the parallel-mode descriptor — "isolated" for a private-copy child,
+	// the comma-joined lane paths for a scoped one, "" for the default
+	// whole-project claim. Renderers phrase it in their own language.
+	Detail string
 	// Retry fields, valid when Kind == ProgressRetry: Attempt/MaxAttempt are
 	// the retry's position inside the call's budget, Delay the backoff about
 	// to be slept, Status the provider's HTTP answer (0 on transport failure),
@@ -1364,6 +1369,11 @@ func StatusText(p Progress) string {
 		}
 		return fmt.Sprintf("running %s%s%s…", p.Name, extra, roundNote(p))
 	case ProgressSpawn:
+		if p.Detail != "" {
+			// The mode descriptor says how the child relates to the shared
+			// tree — a private copy, or the lanes it claims.
+			return fmt.Sprintf("spawning sub-agent %s (%s)…", p.Name, p.Detail)
+		}
 		return fmt.Sprintf("spawning sub-agent %s…", p.Name)
 	case ProgressJudge:
 		// A judge_start marker arrives with no verdict yet; phrase it without
@@ -2509,7 +2519,14 @@ func progressForEvent(typ string, data any) (Progress, bool) {
 		if name == "" {
 			name = eventField(data, "child")
 		}
-		return Progress{Kind: ProgressSpawn, Name: name}, true
+		// The mode descriptor: how the child relates to the shared tree.
+		detail := ""
+		if boolField(data, "isolate") {
+			detail = "isolated"
+		} else if paths := eventFieldList(data, "paths"); len(paths) > 0 {
+			detail = strings.Join(paths, ", ")
+		}
+		return Progress{Kind: ProgressSpawn, Name: name, Detail: detail}, true
 	case core.EvProgress, core.EvSubagentEvent:
 		note := eventField(data, "note")
 		if note != "" {
@@ -2563,6 +2580,29 @@ func stringField(v any) string {
 		return rv.String()
 	}
 	return ""
+}
+
+// boolField reads a map field that holds a boolean — the isolate flag of a
+// delegate_request survives both the pre-marshal bool and the post-JSON-round-
+// trip forms (bool, or a "true"/"false" string).
+func boolField(data any, key string) bool {
+	var raw any
+	switch v := data.(type) {
+	case map[string]any:
+		raw = v[key]
+	case []byte:
+		var m map[string]any
+		if json.Unmarshal(v, &m) == nil {
+			raw = m[key]
+		}
+	}
+	switch v := raw.(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1"
+	}
+	return false
 }
 
 // eventFieldList reads a map field that holds a list of strings — the

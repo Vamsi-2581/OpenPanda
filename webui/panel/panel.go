@@ -488,6 +488,18 @@ type handler struct {
 	pair pairTracker
 }
 
+// taskChildJSON is the compact sub-agent reference embedded in a parent's
+// taskJSON — id/state/title plus the parallel mode is all the detail view
+// needs to render the tree and follow each child.
+type taskChildJSON struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+	Title string `json:"title,omitempty"`
+	// Isolate/ScopePaths mirror the child's parallel-mode declaration.
+	Isolate    bool     `json:"isolate,omitempty"`
+	ScopePaths []string `json:"scope_paths,omitempty"`
+}
+
 // taskJSON is the wire form of a task row, with stable snake_case names so the
 // PWA does not depend on Go field casing. All visibility-extension fields are
 // optional (omitempty): old clients never see them, new clients paint richer
@@ -528,11 +540,16 @@ type taskJSON struct {
 	// scope_paths names the project-relative lanes this task claims inside
 	// the shared tree, isolate means it runs in a private copy whose changes
 	// merge back on completion. Both empty = the default whole-tree claim.
-	ScopePaths []string    `json:"scope_paths,omitempty"`
-	Isolate    bool        `json:"isolate,omitempty"`
-	CreatedAt  string      `json:"created_at"`
-	UpdatedAt  string      `json:"updated_at"`
-	Events     []eventJSON `json:"events,omitempty"`
+	ScopePaths []string `json:"scope_paths,omitempty"`
+	Isolate    bool     `json:"isolate,omitempty"`
+	// Children lists the spawned sub-agents (PANDA_DELEGATE children,
+	// `task add --parent-id` rows) so the detail view can render the tree
+	// the parent is orchestrating. Filled by getTask only — listTasks
+	// skips it to avoid an N+1 on the board.
+	Children  []taskChildJSON `json:"children,omitempty"`
+	CreatedAt string          `json:"created_at"`
+	UpdatedAt string          `json:"updated_at"`
+	Events    []eventJSON     `json:"events,omitempty"`
 
 	// — Decision-orbit visibility (§5.2). traces are the subset of Events
 	// that belong to the 8-track set, decoded so the client avoids a second
@@ -833,6 +850,16 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 	out := toTaskJSON(t)
 	h.enrichPlanMeta(r.Context(), &out, t)
+	// Sub-agent tree: the detail view shows the children a parent is
+	// orchestrating (states live) instead of leaving them to the board.
+	if kids, err := h.store.Children(r.Context(), id); err == nil {
+		for _, k := range kids {
+			out.Children = append(out.Children, taskChildJSON{
+				ID: k.TaskID, State: k.State, Title: k.Title,
+				Isolate: k.Isolate, ScopePaths: k.ScopePaths,
+			})
+		}
+	}
 	if events, err := h.store.Events(r.Context(), id); err == nil {
 		var hops []delegationHopJSON
 		hopsSeen := make(map[string]bool) // key = from_node + "|" + to_node

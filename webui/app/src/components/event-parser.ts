@@ -376,6 +376,56 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
         rawJson,
       }
     }
+    case 'delegate_request': {
+      // The fan-out milestone: one row per sub-agent the parent dispatched,
+      // with its parallel mode — the "parent orchestrating N children" the
+      // board otherwise has to reconstruct from separate cards.
+      const title = String(data?.title ?? '') || String(data?.child ?? '')
+      if (title) tags.push({ key: t('events.tag.child'), value: title })
+      if (data?.isolate === true) {
+        tags.push({ key: t('events.tag.mode'), value: t('events.mode.isolated') })
+      } else {
+        const paths = Array.isArray(data?.paths) ? (data.paths as unknown[]).map(String) : []
+        if (paths.length > 0) tags.push({ key: t('events.tag.mode'), value: paths.join(', ') })
+      }
+      return {
+        type,
+        label: t('events.delegate_request'),
+        badgeClass: 'accent',
+        tags,
+        rawJson,
+      }
+    }
+    case 'isolated_workspace': {
+      // The isolated child's private copy was created — the merge that
+      // follows lands here when it finishes.
+      const workspace = String(data?.workspace ?? '')
+      if (workspace) tags.push({ key: t('events.tag.path'), value: workspace })
+      return {
+        type,
+        label: t('events.isolated_workspace'),
+        badgeClass: 'info',
+        tags,
+        rawJson,
+      }
+    }
+    case 'isolated_merge': {
+      // The three-way merge outcome: applied count, and the paths that both
+      // sides changed (kept with the project's bytes, workspace retained).
+      const merged = typeof data?.merged === 'number' ? String(data.merged) : ''
+      const conflicts = Array.isArray(data?.conflicts) ? (data.conflicts as unknown[]).map(String) : []
+      if (merged) tags.push({ key: t('events.tag.merged'), value: merged })
+      if (conflicts.length > 0) {
+        tags.push({ key: t('events.tag.conflicts'), value: conflicts.slice(0, 3).join(', ') })
+      }
+      return {
+        type,
+        label: t('events.isolated_merge'),
+        badgeClass: conflicts.length > 0 ? 'danger' : 'accent',
+        tags,
+        rawJson,
+      }
+    }
     case 'project_sync': {
       const path = String(data?.path ?? '')
       if (path) tags.push({ key: t('events.tag.path'), value: path })

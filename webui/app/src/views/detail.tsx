@@ -18,10 +18,12 @@ export function DetailView({
   id,
   onBack,
   onOpenSession,
+  onOpenTask,
 }: {
   id: string
   onBack(): void
   onOpenSession?(id: string): void
+  onOpenTask?(id: string): void
 }) {
   useLocaleRerender()
   const change = useChangeSignal()
@@ -356,6 +358,36 @@ export function DetailView({
                   {hop.to_node}
                 </span>
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Sub-agent tree: the children this task is orchestrating, with live
+          states and each child's parallel mode. This is the "parent fanned
+          out to N sub-agents" view — without it the children only existed
+          as separate board cards. */}
+      {task.children && task.children.length > 0 && (
+        <div class="detail-block">
+          <h2>{t('detail.children', { n: String(task.children.length) })}</h2>
+          <div class="children-list">
+            {task.children.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                class="child-row"
+                onClick={() => onOpenTask?.(c.id)}
+                title={c.id}
+              >
+                <StateBadge state={c.state} />
+                {c.isolate && (
+                  <span class="badge blue" title={t('detail.isolateHint')}>⧉</span>
+                )}
+                {!c.isolate && c.scope_paths && c.scope_paths.length > 0 && (
+                  <span class="badge dim" title={t('detail.scopeHint')}>◫ {c.scope_paths.join(', ')}</span>
+                )}
+                <span class="child-title">{c.title || c.id}</span>
+              </button>
             ))}
           </div>
         </div>

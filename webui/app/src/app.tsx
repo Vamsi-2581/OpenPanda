@@ -208,6 +208,7 @@ export function App() {
             id={route.id}
             onBack={() => navigate({ view: 'queue' })}
             onOpenSession={(sid) => navigate({ view: 'sessions', id: sid })}
+            onOpenTask={(tid) => navigate({ view: 'detail', id: tid })}
           />
         )}
         {route.view === 'plans' && <PlansView />}
