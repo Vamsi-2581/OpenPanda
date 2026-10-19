@@ -10,17 +10,18 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the newest tag on main — currently v0.0.11 — so ad-hoc builds
-// identify themselves with the branch's latest published lineage.
-var Version = "0.0.11"
+// It tracks the newest tag on main — currently the v0.0.12-preview preview —
+// so ad-hoc builds identify themselves with the branch's latest published
+// lineage.
+var Version = "0.0.12-preview"
 
-// Codename is the release line's thematic name — v0.0.11 is "Rendezvous", the
-// orbital meeting: sibling tasks exchange notes mid-flight on the message
-// board, delegated hops relay contexts and artifacts up the chain, and agent
-// work meets an undo point instead of drifting past one. (The alpha/beta line
-// ran as "Periapsis", but that name already belongs to v0.0.9.) Surfaced by
-// `panda version` and /api/version; not part of the semver itself.
-var Codename = "Rendezvous"
+// Codename is the release line's thematic name — v0.0.12 is "Constellation":
+// the fleet drawn as one sky. The workspace page renders every device as a
+// plate on a live topology map keyed by hop count, same-project tasks fly in
+// parallel through path-scoped lanes and isolated worktrees, and the console
+// consolidates into the single place that constellation is commanded from.
+// Surfaced by `panda version` and /api/version; not part of the semver itself.
+var Codename = "Constellation"
 
 // ReleaseDate is the day this release line shipped, "2006-01-02". It is the
 // one field of the release identity the build cannot derive — a binary knows
@@ -28,7 +29,7 @@ var Codename = "Rendezvous"
 // Version and Codename when a release is cut, and left empty for ad-hoc
 // builds that never had a release day. The console's profile page prints it
 // as "发布于 …" and falls back to omitting the line when it is empty.
-var ReleaseDate = "2026-10-15"
+var ReleaseDate = "2026-10-19"
 
 // ReleasePubKey is the Ed25519 public key (hex or base64) the self-update
 // path trusts to sign checksums.txt. The compiled-in default below is the
@@ -47,7 +48,8 @@ var ReleaseDate = "2026-10-15"
 // with no opt-out refuses downloads outright.
 var ReleasePubKey = "a84a556bd45ee7743437d7b9b0c4f6e0df34c496f639b5a045d5de484f128560"
 
-// Display returns the human-facing release identity — "v0.0.10 Apoapsis" —
+// Display returns the human-facing release identity — "v0.0.12-preview
+// Constellation" —
 // for anywhere the build introduces itself to a user. Version alone stays
 // the semver used for comparisons, archive names, and wire fields.
 func Display() string {
