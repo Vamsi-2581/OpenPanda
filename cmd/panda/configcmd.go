@@ -23,7 +23,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/mcp"
 )
 
-var configSections = []string{"model", "mcp", "limits", "routing", "injection", "approval"}
+var configSections = []string{"model", "mcp", "limits", "routing", "injection", "approval", "delegation"}
 
 func isConfigAction(s string) bool {
 	switch s {
@@ -95,6 +95,7 @@ func configUsage() {
 	fmt.Fprintln(os.Stderr, "  mcp get|test | set \"<stdio command>\"   (empty command disables MCP)")
 	fmt.Fprintln(os.Stderr, "  limits get | set <user|memory|project> <int>")
 	fmt.Fprintln(os.Stderr, "  routing get | set preferred_agents <a,b,c>   (empty clears)")
+	fmt.Fprintln(os.Stderr, "  delegation get | set <max_children|fanout|max_depth> <int> | set enabled <true|false>")
 	fmt.Fprintln(os.Stderr, "  injection get | set <auto|always|never>")
 	fmt.Fprintln(os.Stderr, "  approval get | set <always|on-request|never>")
 	fmt.Fprintln(os.Stderr, "writes preserve YAML comments; changes apply after the daemon/panel restarts")
@@ -151,6 +152,16 @@ func runConfigGet(section string, args []string) {
 			return
 		}
 		fmt.Printf("user:    %d\nmemory:  %d\nproject: %d\n", cfg.Memory.Limits.User, cfg.Memory.Limits.Memory, cfg.Memory.Limits.Project)
+	case "delegation":
+		enabled := true
+		if cfg.Delegation.Enabled != nil {
+			enabled = *cfg.Delegation.Enabled
+		}
+		if jsonOutput {
+			emitJSON(map[string]any{"max_children": cfg.Delegation.MaxChildren, "fanout": cfg.Delegation.FanOut, "max_depth": cfg.Delegation.MaxDepth, "enabled": enabled})
+			return
+		}
+		fmt.Printf("enabled:      %v\nmax_children: %d\nfanout:       %d\nmax_depth:    %d\n", enabled, cfg.Delegation.MaxChildren, cfg.Delegation.FanOut, cfg.Delegation.MaxDepth)
 	case "routing":
 		if jsonOutput {
 			emitJSON(map[string]any{"preferred_agents": cfg.Routing.PreferredAgents})
@@ -267,6 +278,42 @@ func runConfigSet(section string, args []string) {
 			fatal("config limits set", err)
 		}
 		configSetDone(loc, "limits")
+	case "delegation":
+		fs := flag.NewFlagSet("config delegation set", flag.ExitOnError)
+		configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+		fs.Parse(reorderFlags(fs, args))
+		if fs.NArg() != 2 {
+			fmt.Fprintln(os.Stderr, "usage: panda config delegation set <max_children|fanout|max_depth> <int> | enabled <true|false>")
+			os.Exit(2)
+		}
+		key, raw := fs.Arg(0), fs.Arg(1)
+		if key == "enabled" {
+			value, err := strconv.ParseBool(raw)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "panda: delegation enabled must be true or false, got %q\n", raw)
+				os.Exit(2)
+			}
+			if err := config.UpdateSectionFieldBool(configWritePath(*configPath), []string{"delegation"}, key, value); err != nil {
+				fatal("config delegation set", err)
+			}
+			configSetDone(loc, "delegation")
+			return
+		}
+		switch key {
+		case "max_children", "fanout", "max_depth":
+		default:
+			fmt.Fprintln(os.Stderr, "panda: "+i18n.Tf(i18n.Detect(), "cli.unknownNamedOpts", "kind", "delegation key", "name", key, "opts", "max_children|fanout|max_depth|enabled"))
+			os.Exit(2)
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			fmt.Fprintf(os.Stderr, "panda: delegation value must be a positive integer, got %q\n", raw)
+			os.Exit(2)
+		}
+		if err := config.UpdateSectionFieldInt(configWritePath(*configPath), []string{"delegation"}, key, value); err != nil {
+			fatal("config delegation set", err)
+		}
+		configSetDone(loc, "delegation")
 	case "routing":
 		fs := flag.NewFlagSet("config routing set", flag.ExitOnError)
 		configPath := fs.String("config", cliConfigPath, "path to config.yaml")

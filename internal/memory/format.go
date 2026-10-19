@@ -83,6 +83,10 @@ var ErrOverLimit = errors.New("memory: character limit exceeded")
 // that consolidate a stream of candidates treat it as "skip", not "abort".
 var ErrDuplicate = errors.New("memory: duplicate entry")
 
+// ErrSeparator rejects entry text containing "§" — the on-disk delimiter.
+// Writing it would silently split one entry into two on the next load.
+var ErrSeparator = errors.New("memory: entry must not contain the § separator")
+
 // MemFile is an in-memory MEMORY.md: an ordered list of entries separated on
 // disk by "§". The zero value is an empty file. Limit is the character cap; a
 // non-positive value means unlimited.
@@ -128,6 +132,9 @@ func (m *MemFile) Add(entry string) error {
 	if entry == "" {
 		return fmt.Errorf("memory: entry must not be empty")
 	}
+	if strings.ContainsRune(entry, '§') {
+		return ErrSeparator
+	}
 	for _, e := range m.Entries {
 		if e == entry {
 			return ErrDuplicate
@@ -151,8 +158,12 @@ func (m *MemFile) Replace(old, new string) error {
 	if !ok {
 		return fmt.Errorf("memory: %q matches no unique entry", old)
 	}
+	repl := strings.TrimSpace(new)
+	if strings.ContainsRune(repl, '§') {
+		return ErrSeparator
+	}
 	prev := m.Entries[idx]
-	m.Entries[idx] = strings.TrimSpace(new)
+	m.Entries[idx] = repl
 	if m.Limit > 0 && m.Chars() > m.Limit {
 		m.Entries[idx] = prev // roll back
 		return fmt.Errorf("%w: at %d/%d chars", ErrOverLimit, m.Chars(), m.Limit)

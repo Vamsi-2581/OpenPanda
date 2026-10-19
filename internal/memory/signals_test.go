@@ -73,6 +73,27 @@ func TestNoveltySignal(t *testing.T) {
 	}
 }
 
+// TestNoveltySignalCJKBigrams pins the Han-bigram comparison: two Chinese
+// phrases sharing half their characters but no shared word fragment are
+// different facts. With single-ideograph tokens the shared 链/路/巡/检 would
+// have deflated novelty to ~0.5 and under-promoted the candidate.
+func TestNoveltySignalCJKBigrams(t *testing.T) {
+	memory := []string{"链路巡检报告模板已建好"}
+	// Shares 链/路/巡/检 as characters but only the bigram 链路 as content.
+	got := noveltySignal("巡护链路复检完成", memory)
+	if got <= 0.8 {
+		t.Errorf("CJK novelty = %v, want > 0.8 (unigram overlap must not deflate it)", got)
+	}
+	// A verbatim restatement still scores zero.
+	if got := noveltySignal("链路巡检报告模板已建好", memory); got != 0 {
+		t.Errorf("identical CJK text novelty = %v, want 0", got)
+	}
+	// Mixed text keeps both unit types working.
+	if got := noveltySignal("用 Go 写脚本", []string{"用 Go 写脚本"}); got != 0 {
+		t.Errorf("identical mixed text novelty = %v, want 0", got)
+	}
+}
+
 func TestConceptualSignal(t *testing.T) {
 	if got := conceptualSignal("use Go and TypeScript for the UI"); got <= 0 {
 		t.Errorf("conceptual density = %v, want > 0", got)

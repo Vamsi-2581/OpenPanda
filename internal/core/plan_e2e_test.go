@@ -575,14 +575,14 @@ func TestChildRowResultCarriesFailureReason(t *testing.T) {
 // instead of delegating for a permission it cannot grant. Both variants must
 // stay valid JSON — the CLI parses them as --json-schema.
 func TestAgentResultSchemaFor(t *testing.T) {
-	plain := agentResultSchemaFor([]string{"git", "net:curl"}, false)
+	plain := agentResultSchemaFor([]string{"git", "net:curl"}, false, 0)
 	if !strings.Contains(plain, "git, net:curl") {
 		t.Fatalf("schema does not list the declared abilities:\n%s", plain)
 	}
 	if strings.Contains(plain, "READ-ONLY") {
 		t.Fatal("unrestricted schema carries the read-only instruction")
 	}
-	restricted := agentResultSchemaFor([]string{"git"}, true)
+	restricted := agentResultSchemaFor([]string{"git"}, true, 0)
 	if !strings.Contains(restricted, "READ-ONLY") || !strings.Contains(restricted, "do NOT delegate") {
 		t.Fatalf("restricted schema lacks the ask-instead-of-delegate instruction:\n%s", restricted)
 	}

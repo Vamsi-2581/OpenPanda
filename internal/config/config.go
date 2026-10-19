@@ -40,12 +40,16 @@ type Config struct {
 	Injection InjectionConfig `yaml:"injection"`
 	Routing   RoutingConfig   `yaml:"routing"`
 	Memory    MemoryConfig    `yaml:"memory"`
-	Approval  ApprovalConfig  `yaml:"approval"`
-	Timeouts  TimeoutsConfig  `yaml:"timeouts"`
-	Messages  MessagesConfig  `yaml:"messages"`
-	UI        UIConfig        `yaml:"ui"`
-	Skills    SkillsConfig    `yaml:"skills"`
-	Sandbox   SandboxConfig   `yaml:"sandbox"`
+	// Delegation bounds the sub-agent orchestration a running task may build:
+	// how many PANDA_DELEGATE children it may spawn, how many of them run at
+	// once, and how deep the causal tree may grow.
+	Delegation DelegationConfig `yaml:"delegation"`
+	Approval   ApprovalConfig   `yaml:"approval"`
+	Timeouts   TimeoutsConfig   `yaml:"timeouts"`
+	Messages   MessagesConfig   `yaml:"messages"`
+	UI         UIConfig         `yaml:"ui"`
+	Skills     SkillsConfig     `yaml:"skills"`
+	Sandbox    SandboxConfig    `yaml:"sandbox"`
 }
 
 // SkillsConfig controls procedural memory and skills hub settings.
@@ -177,6 +181,60 @@ func (r RoutingConfig) NormalizedToolsPolicy() string {
 // the extended tools policy — the flag is an opt-out, not an opt-in.
 func (r RoutingConfig) NormalizedPandaTools() bool {
 	return r.PandaTools == nil || *r.PandaTools
+}
+
+// Default delegation bounds (whitepaper §4.2 sub-agent orchestration). They
+// are the runtime's compile-time fallback as well as the load-time fill for
+// a config that leaves the section empty.
+const (
+	// DefaultDelegationMaxChildren caps the total PANDA_DELEGATE children
+	// one task may spawn across all its rounds — the same bound the
+	// structured result schema advertises as maxItems.
+	DefaultDelegationMaxChildren = 8
+	// DefaultDelegationFanOut caps how many of a parent's children execute
+	// concurrently: extra requests wait for a sibling slot rather than all
+	// launching at once. Node-wide concurrency stays bounded separately by
+	// the card's MaxConcurrent.
+	DefaultDelegationFanOut = 4
+	// DefaultDelegationMaxDepth bounds spawn generations: the user's task
+	// is depth 0, its children 1, and a task at the limit may not spawn.
+	// Mesh hops are bounded separately by scheduler.MaxChainDepth.
+	DefaultDelegationMaxDepth = 3
+)
+
+// DelegationConfig tunes the sub-agent orchestration limits. Zero or
+// negative values fall back to the defaults at load time, so a config
+// without a delegation section keeps working.
+type DelegationConfig struct {
+	// MaxChildren caps the total delegate children one task may spawn
+	// across all its rounds (default 8).
+	MaxChildren int `yaml:"max_children"`
+	// FanOut caps how many children one parent executes concurrently
+	// (default 4).
+	FanOut int `yaml:"fanout"`
+	// MaxDepth bounds spawn generations — a task at this depth is refused
+	// further delegation (default 3).
+	MaxDepth int `yaml:"max_depth"`
+	// Enabled is a pointer so "absent" (delegation allowed — the pre-toggle
+	// behavior) is distinguishable from an explicit `enabled: false` that
+	// forbids all agent-driven sub-agent spawning on this node.
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// NormalizedDelegation returns the bounds with defaults applied for
+// zero/negative fields — the accessor cores read so a config-free process
+// gets the same policy as an explicitly configured one.
+func (d DelegationConfig) NormalizedDelegation() DelegationConfig {
+	if d.MaxChildren <= 0 {
+		d.MaxChildren = DefaultDelegationMaxChildren
+	}
+	if d.FanOut <= 0 {
+		d.FanOut = DefaultDelegationFanOut
+	}
+	if d.MaxDepth <= 0 {
+		d.MaxDepth = DefaultDelegationMaxDepth
+	}
+	return d
 }
 
 // Default memory size limits (characters). They override the compile-time
@@ -1147,6 +1205,9 @@ func (c *Config) Validate() error {
 		{"memory.limits.user", c.Memory.Limits.User},
 		{"memory.limits.memory", c.Memory.Limits.Memory},
 		{"memory.limits.project", c.Memory.Limits.Project},
+		{"delegation.max_children", c.Delegation.MaxChildren},
+		{"delegation.fanout", c.Delegation.FanOut},
+		{"delegation.max_depth", c.Delegation.MaxDepth},
 	} {
 		if limit.value < 0 {
 			return fmt.Errorf("config: %s %d must not be negative", limit.name, limit.value)
@@ -1246,6 +1307,7 @@ func (c *Config) normalize() {
 	if c.Memory.Limits.Project <= 0 {
 		c.Memory.Limits.Project = DefaultMemoryLimitProject
 	}
+	c.Delegation = c.Delegation.NormalizedDelegation()
 	// Artifacts are task *outputs* that travel between nodes: a build tree, a
 	// trained model. They get a root of their own because they belong neither
 	// in ctxstore (whose LRU keeps as few as 5 entries on a Micro node and
@@ -1418,6 +1480,11 @@ func Default() *Config {
 		},
 		Approval: ApprovalConfig{
 			Mode: ApprovalModeOnRequest,
+		},
+		Delegation: DelegationConfig{
+			MaxChildren: DefaultDelegationMaxChildren,
+			FanOut:      DefaultDelegationFanOut,
+			MaxDepth:    DefaultDelegationMaxDepth,
 		},
 		Timeouts: TimeoutsConfig{
 			TaskLeaseS:      DefaultTaskLeaseS,

@@ -96,6 +96,8 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 			agentLabel = fmt.Sprintf("%s (%s)", p.Name, p.Model)
 		}
 		note = i18n.Tf(loc, "cli.progress.exec", "agent", agentLabel)
+	case askengine.ProgressSpawn:
+		note = i18n.Tf(loc, "cli.progress.sub", "title", p.Name)
 	case askengine.ProgressJudge:
 		note = i18n.T(loc, "cli.progress.judge")
 	case askengine.ProgressWait:

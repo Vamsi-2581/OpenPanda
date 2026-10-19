@@ -289,13 +289,13 @@ func (c *Core) StartPlan(ctx context.Context, p plan.Plan, q QueueSpec) (string,
 		// plan's when the caller named any, so two plans that touch the same
 		// resource still serialize; otherwise each stage gets a key of its own.
 		//
-		// That default matters: with none, every stage falls back to the shared
-		// agent lock (queue.DefaultResourceKey), which exists because two
-		// anonymous tasks would trample one working tree. Stages cannot — each
-		// derives its own directory (stageWorkDir) — so the lock would only make
-		// independent stages queue behind each other, which is the opposite of
-		// what a plan's fan-out means. Concurrency stays bounded by
-		// MaxConcurrent, and ordering by the dependency graph.
+		// That default matters: without a per-stage key, DefaultKeys would fall
+		// through to the stage's own task id — which would work too, since each
+		// stage derives its own directory (stageWorkDir) — but the explicit
+		// plan:<id>:<stage> key keeps the exclusion readable and lets two
+		// submissions of the same stage id collide rather than duplicate.
+		// Concurrency stays bounded by MaxConcurrent, and ordering by the
+		// dependency graph.
 		keys := q.ResourceKeys
 		if len(keys) == 0 {
 			keys = []string{"plan:" + planID + ":" + st.ID}
@@ -924,6 +924,24 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 	if err != nil {
 		return Task{}, fmt.Errorf("load parent task %s: %w", parentID, err)
 	}
+	// An operator-disabled node refuses minting outright — the run loop's
+	// canSpawn gate normally keeps this unreachable, but SpawnChildTask is
+	// also the protocol's last line of defense for markers a hinted agent
+	// never should have emitted (and a depth-clamped ancestor's children
+	// arrive with that same no-spawn policy baked in).
+	if !c.delegationEnabled() {
+		return Task{}, fmt.Errorf("delegation disabled on this node (delegation.enabled=false)")
+	}
+	// Spawn-generation bound: the row carries both the generation and the
+	// tightest cap the delegation path already inherited, so the limit that
+	// applies is min(local delegation.max_depth, inherited spawn_cap) — a
+	// child minted on a stricter node cannot out-spawn that node's policy
+	// no matter where its grandchildren later run.
+	childDepth := parent.SpawnDepth + 1
+	cap := c.effectiveSpawnCap(parent)
+	if childDepth > cap {
+		return Task{}, fmt.Errorf("spawn depth %d exceeds delegation.max_depth %d", childDepth, cap)
+	}
 	newChain := append([]string(nil), parent.Chain...)
 	if len(newChain) == 0 {
 		newChain = []string{c.nodeID}
@@ -932,6 +950,17 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 	if err != nil {
 		return Task{}, fmt.Errorf("create child task: %w", err)
 	}
+	if err := c.store.SetSpawnDepth(ctx, t.TaskID, childDepth); err != nil {
+		c.logger.Warn("persist child spawn depth", "task", t.TaskID, "err", err)
+	}
+	t.SpawnDepth = childDepth
+	// The child inherits the effective cap its spawn was judged against —
+	// stamping it here (not at dispatch) keeps the bound honest across
+	// restarts and onward forwards, where only the row survives.
+	if err := c.store.SetSpawnCap(ctx, t.TaskID, cap); err != nil {
+		c.logger.Warn("persist child spawn cap", "task", t.TaskID, "err", err)
+	}
+	t.SpawnCap = cap
 	if in.WorkDir != "" {
 		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
 			c.logger.Warn("persist child work dir", "task", t.TaskID, "err", err)
@@ -1016,7 +1045,8 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 			Authorized:       in.Authorized,
 			Transport:        in.Transport,
 			DeadlineUnix:     in.DeadlineUnix,
-			Depth:            len(child.Chain),
+			Depth:            child.SpawnDepth,
+			MaxDepth:         child.SpawnCap,
 			DelegationBudget: &child.DelegationBudget,
 			TokenBudget:      child.TokenBudget,
 		}
@@ -1200,8 +1230,8 @@ const agentResultSchema = `{
     },
     "delegate_requests": {
       "type": "array",
-      "maxItems": 4,
-      "description": "When status=delegate: sub-tasks that need a resource this node lacks (GPU, a tool, a hardware peripheral). The runtime spawns each as a causal child task and folds results back.",
+      "maxItems": 8,
+      "description": "When status=delegate: independent sub-tasks to run in parallel — the work decomposes that way, or a sub-task needs a resource this node lacks (GPU, a tool, a hardware peripheral). Each becomes a causal child task; results fold into your next round.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -1245,8 +1275,17 @@ const agentResultSchema = `{
 //     model must report status=question when the task needs writes it does
 //     not have — a child task cannot grant a permission this session lacks,
 //     so delegating for it burns rounds and deadlocks on resource keys.
-func agentResultSchemaFor(abilities []string, restricted bool) string {
+func agentResultSchemaFor(abilities []string, restricted bool, maxChildren int) string {
 	s := agentResultSchema
+	// The advertised ceiling is the task's actual per-task child budget:
+	// telling the model it may emit 8 when the operator allowed 3 invites
+	// requests that can only be truncated, and capping at 8 when it allowed
+	// 20 hides room the budget actually grants. A non-positive bound falls
+	// back to the schema's baked-in 8.
+	if maxChildren > 0 && maxChildren != 8 {
+		s = strings.Replace(s, `"maxItems": 8,`,
+			fmt.Sprintf(`"maxItems": %d,`, maxChildren), 1)
+	}
 	if len(abilities) > 0 {
 		s = strings.Replace(s,
 			`"description": "Capability ids the sub-task needs"`,
@@ -1353,7 +1392,7 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	// The cross-process exec lease (execlock.go) mirrors the same dance: a
 	// child that must take the parent's project key in exec_locks would
 	// otherwise wait on the parent that waits on it.
-	keys := queue.DefaultKeys(parent.ResourceKeys, parent.Project)
+	keys := queue.DefaultKeys(parent.ResourceKeys, parent.Project, parent.WorkDir, parent.TaskID)
 	held := c.queueReleaseFor(parent.TaskID)
 	dbKeys, dbHeld := c.execReleaseFor(parent.TaskID)
 	defer func() {
@@ -1368,12 +1407,33 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 	}()
 
 	notes := make([]string, len(drs))
+	// Fan-out width (delegation.fanout): only this many children may be
+	// spawned-and-awaited at once. Extra requests hold on the semaphore —
+	// their task rows don't even exist until a sibling slot frees, so a
+	// burst cannot oversubscribe the node the way an ungated launch could.
+	// Children whose await window expires are released (they keep running
+	// under the queue's own MaxConcurrent budget) — the slot bounds ACTIVE
+	// orchestration, not lifetime.
+	fanout := c.delegateLimits().FanOut
+	if fanout < 1 {
+		fanout = 1
+	}
+	sem := make(chan struct{}, fanout)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for i, dr := range drs {
 		wg.Add(1)
 		c.goGuarded("plan delegate child "+dr.Title, func() {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				notes[i] = "delegation failed: " + ctx.Err().Error()
+				return
+			}
+			c.delegateActive.Add(1)
+			defer c.delegateActive.Add(-1)
 			note, pendingID, derr := c.delegateChild(ctx, parent, dr)
 			if derr != nil {
 				note = "delegation failed: " + derr.Error()
@@ -1467,6 +1527,7 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 	}
 	c.EvTrace(ctx, parent.TaskID, "delegate_request", map[string]any{
 		"child":    child.TaskID,
+		"title":    dr.Title,
 		"requires": dr.Requires,
 		"node":     dr.Node,
 		"chain":    child.Chain,
@@ -1622,6 +1683,44 @@ func (c *Core) foldLateChildren(ctx context.Context, pending *[]pendingChild) []
 	return notes
 }
 
+// reportLateChildResult leaves a terminal delegate child's outcome where a
+// finished parent can still be found: the children board (task:<parent>)
+// carries a report post, and the parent's trace records the event. The fold
+// that would have merged the result into the parent's report no longer
+// exists once the parent is terminal — without this the child's product
+// landed only on its own row, invisible from the parent's record. Best-
+// effort: a failed post costs a board note, never the child's own verdict.
+func (c *Core) reportLateChildResult(ctx context.Context, taskID string) {
+	t, err := c.store.Get(ctx, taskID)
+	if err != nil || t.ParentID == "" || !Terminal(t.State) {
+		return
+	}
+	parent, err := c.store.Get(ctx, t.ParentID)
+	if err != nil || !Terminal(parent.State) {
+		return
+	}
+	var summary string
+	if r, ok := childRowResult(t); ok {
+		summary = strings.TrimSpace(r.Stdout)
+		if s := strings.TrimSpace(r.Stderr); s != "" {
+			if summary != "" {
+				summary += "\n"
+			}
+			summary += "stderr: " + s
+		}
+	}
+	if summary == "" {
+		summary = "(no output recorded)"
+	}
+	body := fmt.Sprintf("late result from child %s [%s]: %s", t.TaskID, t.State, summary)
+	if err := c.deliverTaskMessage(ctx, t, msgRequest{To: "parent", Grade: MsgGradeReport, Body: body}); err != nil {
+		c.logger.Debug("late child result board post failed", "task", t.TaskID, "err", err)
+	}
+	c.EvTrace(ctx, t.ParentID, "child_late_result", map[string]any{
+		"child": t.TaskID, "state": t.State, "title": t.Title,
+	})
+}
+
 // awaitPendingChildren is the run's final hold against reporting done while
 // delegated children are still outstanding — the "做完了但是说没做完" class
 // in reverse. It blocks while any child keeps a live lease (bounded by the
@@ -1641,6 +1740,18 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 		deadline = time.Unix(parent.DeadlineUnix, 0)
 	}
 	var notes []string
+	// silentSince bounds the wait by demonstrated life, not by queue
+	// optimism: only a fresh child lease resets it. A pending set that shows
+	// nothing but queued rows for a full lease period is starved — the
+	// classic case is a node whose MaxConcurrent slots are ALL held by
+	// parents waiting in this very fold (the wait releases resource keys,
+	// never the capacity slot), so the child can never claim. Unbounded
+	// waiting here deadlocked the fold: the parent's own lease keeps
+	// renewing, the monitor sees a healthy executor, and nothing ever
+	// unsticks it. After one lease of silence the children are annotated
+	// outstanding — their results still land on the board when they do run.
+	silentCap := c.lease()
+	silentSince := time.Now()
 	for len(pending) > 0 {
 		notes = append(notes, c.foldLateChildren(ctx, &pending)...)
 		if len(pending) == 0 {
@@ -1651,8 +1762,9 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 			break
 		}
 		// Keep holding only while some child is demonstrably alive: a fresh
-		// lease or a not-yet-claimed queue row. All-leaseless means parked
-		// for a link, parked for a human, or orphaned — annotate, don't wait.
+		// lease or a not-yet-claimed queue row inside the silence grace.
+		// All-leaseless means parked for a link, parked for a human, or
+		// orphaned — annotate, don't wait.
 		//
 		// One queued case is NOT alive: a child whose resource keys collide
 		// with the parent's own. The parent holds those keys for the whole
@@ -1661,6 +1773,7 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 		// child; child needs project:x and queues behind the parent). It is
 		// annotated as outstanding instead, exactly like a parked child.
 		alive := false
+		sawLease := false
 		for _, pc := range pending {
 			row, err := c.store.Get(ctx, pc.id)
 			if err != nil {
@@ -1671,14 +1784,23 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 					continue
 				}
 				alive = true
-				break
+				continue
 			}
 			if row.LeaseExpires > now.Unix() {
 				alive = true
+				sawLease = true
 				break
 			}
 		}
+		if sawLease {
+			silentSince = now
+		}
 		if !alive {
+			break
+		}
+		if now.Sub(silentSince) > silentCap {
+			c.logger.Warn("delegate fold wait exceeded silence bound; annotating children outstanding",
+				"task", parent.TaskID, "pending", len(pending))
 			break
 		}
 		select {

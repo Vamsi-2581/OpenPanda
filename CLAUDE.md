@@ -77,7 +77,8 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
   REPL; subcommands cover `daemon`/`serve`, `ask`, `repl`/`chat`, `web`,
   `voice`, `install`/`uninstall`, `update`/`upgrade` (self-updater:
   `update check|apply`), `doctor`, `status`, `nodes`, `pair`, `queue`,
-  `task` (incl. `priority`/`move`/`artifact`/`board`), `plan`
+  `task` (incl. `priority`/`move`/`artifact`/`board`/`send`
+  — queue vs `--inject` live notes to a task), `plan`
   (`run`/`show`/`example`), `cancel`, `approve`/`reject`, `logs`,
   `skill` (`list`/`find`/`hub`/`add`/`reset`), `reminder`, `detect`,
   `card` (`show`/`rescan`/`edit`/`set` plus structured
@@ -85,8 +86,8 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
   (`verify`/`entries`), `session`/`sessions` (`list`/`show`/`rm` plus
   `fork`/`tree` for thread branching), `memory`, `model`/`models`
   (multi-model registry + active-model switcher), `config` (sections
-  `model`/`mcp`/`limits`/`routing`/`injection`/`approval`, comments
-  preserved), `agents`, `project`, `mcp` (exposes the node's self-tools
+  `model`/`mcp`/`limits`/`routing`/`injection`/`approval`/`delegation`,
+  comments preserved), `agents`, `project`, `mcp` (exposes the node's self-tools
   as an MCP stdio server), `rpc` (NDJSON-over-stdio embedding surface,
   experimental), `auth` (subscription OAuth, experimental), `read`
   (markdown viewer; aliases `view`/`cat`/`md`/`markdown`), `version`,

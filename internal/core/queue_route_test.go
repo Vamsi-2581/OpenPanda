@@ -122,10 +122,9 @@ func TestScheduledTaskWithWorkDirStaysLocal(t *testing.T) {
 
 // A plan's whole point is that stages with no dependency between them run at
 // once. They could not: with no resource keys of their own every stage fell back
-// to queue.DefaultResourceKey ("agent:*"), the single conservative lock, so a
-// fan-out plan executed one stage at a time on a node with slots to spare. That
-// lock exists because two anonymous tasks would trample one working tree, which
-// stages cannot — each derives its own (stageWorkDir).
+// to one shared anonymous lock, so a fan-out plan executed one stage at a time
+// on a node with slots to spare. The per-stage plan key exists so independent
+// stages queue behind nothing — each derives its own work dir (stageWorkDir).
 func TestIndependentPlanStagesDoNotShareOneLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -159,7 +158,7 @@ func TestIndependentPlanStagesDoNotShareOneLock(t *testing.T) {
 	// second stage cannot take its keys while the first holds them, it waits.
 	reg := queue.NewResourceRegistry()
 	for _, r := range ready {
-		keys := queue.DefaultKeys(r.ResourceKeys, r.Project)
+		keys := queue.DefaultKeys(r.ResourceKeys, r.Project, r.WorkDir, r.TaskID)
 		if !reg.TryAcquire(keys, r.TaskID) {
 			t.Fatalf("stage %s could not run alongside its sibling (keys %v)", r.TaskID, keys)
 		}

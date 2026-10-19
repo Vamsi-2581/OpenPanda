@@ -156,6 +156,56 @@ func TestSendTaskMessageGuards(t *testing.T) {
 	}
 }
 
+// TestListTaskMessagesEndpoint pins the board read-back: the send endpoint's
+// GET sibling must return exactly what lands on the task's scope — a posted
+// note renders (the "queued" state the detail view shows), an empty board is
+// a list not an error, and unknown ids are a 404.
+func TestListTaskMessagesEndpoint(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	h := New(Deps{Store: store, StaticDir: t.TempDir(), Token: testToken})
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/nope/messages", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("unknown task: status = %d, want 404", rr.Code)
+	}
+
+	task, err := store.Create(ctx, "", "proj", "board target", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.Queue(ctx, task.TaskID, "node"); err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+
+	get := func() []core.TaskMessage {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/tasks/"+task.TaskID+"/messages", nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("board get: status = %d, body %s", rr.Code, rr.Body.String())
+		}
+		var out struct {
+			Messages []core.TaskMessage `json:"messages"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return out.Messages
+	}
+
+	if msgs := get(); len(msgs) != 0 {
+		t.Fatalf("empty board should return [], got %+v", msgs)
+	}
+	if err := store.PostUserMessage(ctx, task.TaskID, "while you run, also check tests", core.MsgGradeStatus, ""); err != nil {
+		t.Fatalf("post note: %v", err)
+	}
+	msgs := get()
+	if len(msgs) != 1 || msgs[0].Body != "while you run, also check tests" || msgs[0].Grade != core.MsgGradeStatus {
+		t.Fatalf("board after post: %+v", msgs)
+	}
+}
+
 // parkFollowupTask drives a fresh task through the real transitions into the
 // exact row a supervised follow-up park leaves: running -> review under
 // accept_work with needs_followup inside the stored result.

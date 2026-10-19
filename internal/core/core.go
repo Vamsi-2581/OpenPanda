@@ -114,6 +114,15 @@ type Core struct {
 	// send (the metering half of the message layer — a spent budget reports
 	// back to the agent rather than hard-failing). <= 0 → defaultMsgBudget.
 	msgBudgetCap int
+	// delegLimits is the configured sub-agent orchestration bound
+	// (delegation.max_children/fanout/max_depth). Zero struct → the
+	// package defaults via NormalizedDelegation, so a config-free Core
+	// behaves exactly like the documented policy.
+	delegLimits config.DelegationConfig
+	// delegateActive counts delegateChild calls in flight — spawned and
+	// still awaited — across this Core. It is the observability leg of the
+	// fan-out bound (and the assertion point its tests poll).
+	delegateActive atomic.Int64
 	// steerMu guards interrupts — the user-inject delivery state (steer.go):
 	// the running round's cancel, so an inject can abort the in-flight agent
 	// turn. The message text itself travels on the task's board (durable).
@@ -919,6 +928,45 @@ func (c *Core) msgBudget() int {
 	return c.msgBudgetCap
 }
 
+// SetDelegationLimits applies the configured sub-agent bounds (the
+// delegation: section). Call after NewCore, before serving starts — the
+// fields are read unsynchronized afterward, like the other config installs.
+func (c *Core) SetDelegationLimits(d config.DelegationConfig) {
+	c.delegLimits = d
+}
+
+// delegateLimits resolves the effective bounds: whatever config installed,
+// normalized so unset fields carry the documented defaults.
+func (c *Core) delegateLimits() config.DelegationConfig {
+	return c.delegLimits.NormalizedDelegation()
+}
+
+// effectiveSpawnCap resolves the max_depth bound applying to a task: the
+// tightest value the delegation path already carried (SpawnCap) clamped
+// against this node's own config, so a forwarded subtree keeps the most
+// conservative bound any hop's operator set.
+func (c *Core) effectiveSpawnCap(t Task) int {
+	local := c.delegateLimits().MaxDepth
+	if t.SpawnCap > 0 && t.SpawnCap < local {
+		return t.SpawnCap
+	}
+	return local
+}
+
+// delegationEnabled reports whether this node permits agent-driven
+// sub-agent spawning at all (delegation.enabled). A nil flag is on —
+// configs predating the toggle must not silently disable orchestration.
+func (c *Core) delegationEnabled() bool {
+	return c.delegLimits.Enabled == nil || *c.delegLimits.Enabled
+}
+
+// delegateActiveCount reports how many delegate children are in flight on
+// this node right now (spawned and still awaited) — the fan-out bound's
+// live counter, surfaced for tests and the metrics path.
+func (c *Core) delegateActiveCount() int64 {
+	return c.delegateActive.Load()
+}
+
 // AttachSupervisor builds a supervisor client from the model config and
 // attaches it — but only when the model is actually configured (an API key is
 // present), so a model-less node keeps single-shot agent execution instead of
@@ -1686,6 +1734,7 @@ func (c *Core) expireLeases(ctx context.Context) {
 			}
 			c.relayToParent(ctx, bus.MsgTaskResult, tk.Chain, res)
 			c.signalResult(id, res)
+			c.reportLateChildResult(ctx, id)
 		}
 	}
 	c.logger.Info("monitor expired tasks", "count", len(expired))

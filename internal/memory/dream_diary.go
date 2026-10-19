@@ -5,6 +5,7 @@ package memory
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -21,12 +22,19 @@ func NewDreamDiary(path string) *DreamDiary {
 	return &DreamDiary{path: path}
 }
 
+// diaryThemeRows caps how many REM themes a section lists — the themes are a
+// reflection hint for the reader, not an exhaustive histogram.
+const diaryThemeRows = 8
+
 // Append records one sweep as a dated section. It is append-only and creates
 // the file on first use.
 func (d *DreamDiary) Append(report Report, now time.Time) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## %s\n", now.Format("2006-01-02"))
 	fmt.Fprintf(&b, "- Scanned %d candidates / 扫描候选：%d 条\n", report.Candidates, report.Candidates)
+	if len(report.Themes) > 0 {
+		fmt.Fprintf(&b, "- Themes / 主题：%s\n", themeLine(report.Themes))
+	}
 	if len(report.Promoted) > 0 {
 		b.WriteString("- Promoted to long-term memory / 提升到长期记忆：\n")
 		for _, p := range report.Promoted {
@@ -53,6 +61,29 @@ func (d *DreamDiary) Append(report Report, now time.Time) error {
 		return fmt.Errorf("memory: append DREAMS.md: %w", err)
 	}
 	return nil
+}
+
+// themeLine renders the REM histogram as "name×count" pairs, most frequent
+// first and name-sorted within a tie so the diary is deterministic.
+func themeLine(themes map[string]int) string {
+	names := make([]string, 0, len(themes))
+	for name := range themes {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if themes[names[i]] != themes[names[j]] {
+			return themes[names[i]] > themes[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	if len(names) > diaryThemeRows {
+		names = names[:diaryThemeRows]
+	}
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		parts = append(parts, fmt.Sprintf("%s×%d", n, themes[n]))
+	}
+	return strings.Join(parts, "、")
 }
 
 // dirOf returns the directory part of a path (the DREAMS.md file lives in the

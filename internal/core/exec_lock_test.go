@@ -8,6 +8,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,8 +28,14 @@ func TestExecLockKeys(t *testing.T) {
 	if got := execLockKeys(Task{ResourceKeys: []string{"plan:1:a", "hardware:servo"}}, "hardware:servo"); !slices.Equal(got, []string{"plan:1:a", "hardware:servo"}) {
 		t.Fatalf("explicit keys must not duplicate the actuator: %v", got)
 	}
-	if got := execLockKeys(Task{}, ""); !slices.Equal(got, []string{"agent:*"}) {
+	if got := execLockKeys(Task{TaskID: "t-anon"}, ""); !slices.Equal(got, []string{"task:t-anon"}) {
 		t.Fatalf("anonymous keys = %v", got)
+	}
+	// A submitter-pinned work dir serializes on the directory, not the task:
+	// two tasks aiming at the same pinned tree must not edit it concurrently.
+	dir := t.TempDir()
+	if got := execLockKeys(Task{TaskID: "t-pin", WorkDir: dir}, ""); len(got) != 1 || !strings.HasPrefix(got[0], "dir:") {
+		t.Fatalf("pinned workdir keys = %v", got)
 	}
 }
 
@@ -136,7 +143,7 @@ func TestExecDanceReleaseReacquire(t *testing.T) {
 		t.Fatalf("accept: %v", err)
 	}
 	full := execLockKeys(tk, "hardware:servo")
-	dance := queue.DefaultKeys(tk.ResourceKeys, tk.Project)
+	dance := queue.DefaultKeys(tk.ResourceKeys, tk.Project, tk.WorkDir, tk.TaskID)
 	if !slices.Equal(full, []string{"project:proj", "hardware:servo"}) || !slices.Equal(dance, []string{"project:proj"}) {
 		t.Fatalf("setup keys: full=%v dance=%v", full, dance)
 	}

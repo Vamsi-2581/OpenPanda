@@ -825,17 +825,22 @@ func (m tuiModel) statusRow() string {
 // footer. It returns plain text; statusRow paints the whole row at once, because
 // the row's width arithmetic has to measure columns, not escape sequences.
 func (m tuiModel) contextLine() string {
+	pendingTag := ""
+	if n := len(m.pendingInputs); n > 0 {
+		pendingTag = "  " + m.th.glyph("·", "|") + "  " +
+			m.th.accent.Render(i18n.Tf(m.loc, "tui.queue.n", "n", strconv.Itoa(n)))
+	}
 	if m.mode == modeAsking {
 		dur := elapsed(time.Since(m.started))
 		tag := lipgloss.NewStyle().Bold(true).Foreground(m.th.breathingColor(m.animTick)).
 			Render(m.th.glyph("⚡", "[!]") + " " + i18n.T(m.loc, "tui.status.running") + " · " + dur)
 		if m.projName != "" {
-			return tag + "  " + m.th.glyph("·", "|") + "  " + m.th.muted.Render(m.th.glyph("▪", "#")+" "+m.projName)
+			return tag + "  " + m.th.glyph("·", "|") + "  " + m.th.muted.Render(m.th.glyph("▪", "#")+" "+m.projName) + pendingTag
 		}
-		return tag
+		return tag + pendingTag
 	}
 	if m.r == nil {
-		return ""
+		return pendingTag
 	}
 	sess := i18n.T(m.loc, "tui.ctx.bare")
 	sessID, convoLen := m.r.sessID(), m.r.convoLen()
@@ -856,7 +861,7 @@ func (m tuiModel) contextLine() string {
 	if m.r.authorized() {
 		parts = append(parts, i18n.T(m.loc, "repl.footer.authz")+":"+i18n.T(m.loc, "repl.footer.authz.on"))
 	}
-	return strings.Join(parts, "  "+m.th.glyph("·", "|")+"  ")
+	return strings.Join(parts, "  "+m.th.glyph("·", "|")+"  ") + pendingTag
 }
 
 // hintLine is the key legend for the status row, in plain text. It sheds hints

@@ -136,6 +136,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", h.cancelTask)
 	mux.HandleFunc("POST /api/tasks/{id}/revert", h.revertTask)
 	mux.HandleFunc("POST /api/tasks/{id}/messages", h.sendTaskMessage)
+	mux.HandleFunc("GET /api/tasks/{id}/messages", h.listTaskMessages)
 	mux.HandleFunc("GET /api/tasks/{id}/operations/{operation}", h.getApprovalOperation)
 	mux.HandleFunc("GET /api/tasks/{id}/logs", h.taskLogs)
 	// Task output artifacts: the download/list/preview trio — a screenshot a
@@ -492,17 +493,21 @@ type handler struct {
 // optional (omitempty): old clients never see them, new clients paint richer
 // views when they are present.
 type taskJSON struct {
-	ID        string `json:"id"`
-	ParentID  string `json:"parent_id"`
-	Project   string `json:"project"`
-	Title     string `json:"title"`
-	State     string `json:"state"`
-	Owner     string `json:"owner"`
-	AttemptID string `json:"attempt_id"`
-	Intent    string `json:"intent,omitempty"`
-	Spec      string `json:"spec,omitempty"`
-	Result    string `json:"result,omitempty"`
-	Risk      string `json:"risk,omitempty"`
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id"`
+	// SpawnDepth is the task's generation inside a delegation tree (0 root,
+	// 1 child, 2 grandchild); omitted for standalone rows so the kanban only
+	// badges cards that belong to a sub-agent fan-out.
+	SpawnDepth int    `json:"spawn_depth,omitempty"`
+	Project    string `json:"project"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	Owner      string `json:"owner"`
+	AttemptID  string `json:"attempt_id"`
+	Intent     string `json:"intent,omitempty"`
+	Spec       string `json:"spec,omitempty"`
+	Result     string `json:"result,omitempty"`
+	Risk       string `json:"risk,omitempty"`
 	// Queue redesign fields: the board sorts by priority, then seq (drag
 	// order, 0 = not dragged), and jumps into session_id when set.
 	Priority     string   `json:"priority"`
@@ -610,6 +615,7 @@ func toTaskJSON(t core.Task) taskJSON {
 	out := taskJSON{
 		ID:           t.TaskID,
 		ParentID:     t.ParentID,
+		SpawnDepth:   t.SpawnDepth,
 		Project:      t.Project,
 		Title:        t.Title,
 		State:        t.State,

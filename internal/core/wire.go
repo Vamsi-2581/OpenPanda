@@ -287,6 +287,13 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		PlanID:  t.PlanID,
 		StageID: t.StageID,
 		Inputs:  t.Inputs,
+		// A re-route is the same task changing hands, not a new generation:
+		// carry the row's spawn depth so the next executor inherits the
+		// depth budget the subtree already spent (§6.1). MaxDepth is the
+		// tightest bound the path has seen — a stricter receiver clamps it
+		// further, never looser.
+		Depth:    t.SpawnDepth,
+		MaxDepth: c.effectiveSpawnCap(t),
 	}
 	// Session resume hint (§5.2): only the node that minted the handle can
 	// use it, so it rides the wire only when the route leads back there.
@@ -615,6 +622,9 @@ func (c *Core) handleResult(ctx context.Context, env bus.Envelope) {
 	// the outcome (a root with no predecessor is a no-op).
 	c.relayToParent(ctx, bus.MsgTaskResult, t.Chain, p)
 	c.signalResult(p.TaskID, p)
+	// A delegate child whose parent already reported still owes the tree a
+	// findable outcome — the board post is the durable copy.
+	c.reportLateChildResult(ctx, p.TaskID)
 }
 
 // relayToParent forwards a control/result message to this task's parent in the

@@ -116,3 +116,25 @@ func TestChars(t *testing.T) {
 		t.Errorf("chars = %d, want 9", m.Chars())
 	}
 }
+
+// TestSeparatorRejected pins the format-injection guard: an entry carrying the
+// § delimiter would silently split into two on the next load, so every write
+// path (Add / Replace / Save) refuses it.
+func TestSeparatorRejected(t *testing.T) {
+	var m MemFile
+	if err := m.Add("law § 12 applies"); !errors.Is(err, ErrSeparator) {
+		t.Fatalf("add with §: got %v, want ErrSeparator", err)
+	}
+	m.Entries = []string{"plain"}
+	if err := m.Replace("plain", "law § 12 applies"); !errors.Is(err, ErrSeparator) {
+		t.Fatalf("replace with §: got %v, want ErrSeparator", err)
+	}
+	if m.Entries[0] != "plain" {
+		t.Fatalf("rejected replace must not mutate: %v", m.Entries)
+	}
+	// And the store boundary refuses a programmatically-poisoned file too.
+	h := NewHermes(t.TempDir())
+	if err := h.SaveMemory(MemFile{Entries: []string{"a § b"}}); !errors.Is(err, ErrSeparator) {
+		t.Fatalf("save with §: got %v, want ErrSeparator", err)
+	}
+}

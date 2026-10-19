@@ -164,6 +164,24 @@ func runTaskShow(args []string) {
 	// zero, where a long intent used to read as the end of the record.
 	taskField("id", t.TaskID)
 	taskField("parent", orDash(t.ParentID))
+	// Sub-agent visibility: a task that fanned out shows its children with
+	// their live states — the line between "one agent running" and "the
+	// parent is orchestrating N sub-agents in parallel" should be visible
+	// from the record itself, not only inside --trace events.
+	kids, kerr := store.Children(context.Background(), t.TaskID)
+	// Spawn depth matters only inside a sub-agent tree — a root that fanned
+	// out (depth 0 with children) and every delegated child show it; a
+	// standalone task stays quiet.
+	if kerr == nil && (len(kids) > 0 || t.SpawnDepth > 0) {
+		taskField("depth", strconv.Itoa(t.SpawnDepth))
+	}
+	if kerr == nil && len(kids) > 0 {
+		var lines []string
+		for _, k := range kids {
+			lines = append(lines, fmt.Sprintf("%s  [%s]  %s", k.TaskID, colorState(k.State), k.Title))
+		}
+		taskField("children", strings.Join(lines, "\n"))
+	}
 	taskField("project", orDash(t.Project))
 	taskField("title", t.Title)
 	stateLabel := colorState(t.State)
@@ -562,18 +580,33 @@ func latestRouteFallback(events []core.Event) string {
 
 // taskJSON is the --json wire form of one task (fields mirror the web API's
 // taskJSON closely enough for scripts).
+// taskChildJSON is the compact sub-agent reference embedded in a parent's
+// taskJSON — id/state/title is all a script needs to follow the tree.
+type taskChildJSON struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+	Title string `json:"title,omitempty"`
+}
+
 type taskJSON struct {
 	ID       string `json:"id"`
 	ParentID string `json:"parent_id,omitempty"`
-	Project  string `json:"project,omitempty"`
-	Title    string `json:"title"`
-	State    string `json:"state"`
-	Priority string `json:"priority"`
-	Owner    string `json:"owner,omitempty"`
-	Executor string `json:"executor,omitempty"`
-	Pinned   string `json:"pinned,omitempty"`
-	Session  string `json:"session_id,omitempty"`
-	Intent   string `json:"intent,omitempty"`
+	// Children lists the task's spawned sub-agents (PANDA_DELEGATE children,
+	// `task add --parent-id` rows) so an orchestrating parent reads as one.
+	Children []taskChildJSON `json:"children,omitempty"`
+	// SpawnDepth is the task's generation in the delegation tree: 0 for the
+	// user's root task, 1 for its direct children, and so on. Omitted for
+	// standalone tasks that are neither parent nor child.
+	SpawnDepth *int   `json:"spawn_depth,omitempty"`
+	Project    string `json:"project,omitempty"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	Priority   string `json:"priority"`
+	Owner      string `json:"owner,omitempty"`
+	Executor   string `json:"executor,omitempty"`
+	Pinned     string `json:"pinned,omitempty"`
+	Session    string `json:"session_id,omitempty"`
+	Intent     string `json:"intent,omitempty"`
 	// WorkDir is the submitter's pin (a session worktree), empty for
 	// ordinary tasks; ExecWorkDir is where the run actually happened.
 	WorkDir     string `json:"work_dir,omitempty"`
@@ -636,6 +669,15 @@ func taskToJSONWithStore(store *core.TaskStore, t core.Task) taskJSON {
 	j.WaitingLink = t.State == core.StateDispatched &&
 		store.TaskOutboxPending(context.Background(), t.TaskID)
 	j.RouteFallback = store.RouteFallbackPeer(context.Background(), t.TaskID)
+	if kids, err := store.Children(context.Background(), t.TaskID); err == nil {
+		for _, k := range kids {
+			j.Children = append(j.Children, taskChildJSON{ID: k.TaskID, State: k.State, Title: k.Title})
+		}
+		if len(kids) > 0 || t.SpawnDepth > 0 {
+			d := t.SpawnDepth
+			j.SpawnDepth = &d
+		}
+	}
 	return j
 }
 

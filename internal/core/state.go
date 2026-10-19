@@ -256,6 +256,22 @@ type Task struct {
 	// each forward hop decrements it, and a task that runs out may no longer
 	// be delegated — the mesh-wide convergence bound alongside MaxChainDepth.
 	DelegationBudget int
+	// SpawnDepth is the sub-agent generation this task sits at in its causal
+	// tree: a user-submitted root is 0, its PANDA_DELEGATE children 1, their
+	// children 2, and so on. It rides the wire's Depth field (whose §6.1
+	// comment already meant this) and persists here so every node a subtree
+	// walks through enforces the same delegation.max_depth — refusing a
+	// spawn needs the row's truth, not the spawning process's memory.
+	SpawnDepth int
+	// SpawnCap is the tightest delegation.max_depth seen anywhere along this
+	// task's delegation path: 0 means "no inherited bound — the local node's
+	// config applies". A delegate payload advertises the effective cap the
+	// sender enforced (its own config tightened by whatever ITS parent
+	// carried), the receiver persists min(its config, the wire value), and
+	// the subtree thereafter enforces the most conservative bound any hop's
+	// operator configured — so a permissive origin cannot launder children
+	// through a strict node.
+	SpawnCap int
 	// TokenBudget is the remaining LLM token quota the task may spend across
 	// the mesh (§6.1): 0 means unbounded (a legacy wire or a pre-budget row),
 	// a positive value is the spendable remainder, and -1 is the persisted

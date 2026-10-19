@@ -27,6 +27,9 @@ export function DetailView({
   const change = useChangeSignal()
   const [tick, setTick] = useState(0)
   const { data: task, error } = useAsync(() => api.task(id), [id], change + tick)
+  // The task's board rides the same refresh cadence: a queued note posted
+  // below must render, not just be accepted, or the send reads as lost.
+  const { data: board } = useAsync(() => api.taskBoardMessages(id), [id], change + tick)
   // A stalled task emits no SSE event, so the badge can only appear on a
   // local clock tick.
   useVisibleInterval(() => setTick((v) => v + 1), 30_000)
@@ -95,6 +98,10 @@ export function DetailView({
         r.warning ? 'info' : 'success',
       )
       setMsgText('')
+      // Refetch now: a store-only delivery (no engine to fan out a trace
+      // event) emits no SSE signal, so the note would sit invisible until
+      // the next tick — which reads exactly like a lost message.
+      setTick((v) => v + 1)
     })
   }
 
@@ -273,6 +280,33 @@ export function DetailView({
             {t('detail.msgInject')}
           </button>
           <span class="dim task-msg-hint">{t('detail.msgHint')}</span>
+        </div>
+      )}
+
+      {board && board.messages.length > 0 && (
+        // The board scope is where queued user notes, steers and sibling
+        // posts land — reading it back is what makes "queued" a state the
+        // user can see rather than a toast that forgot itself.
+        <div class="card task-board u-mt-16">
+          <h2>{t('detail.board.title')}</h2>
+          <ul class="task-board-list">
+            {board.messages.map((m, i) => (
+              <li key={`${m.sender}-${m.sender_seq}-${i}`} class="task-board-row">
+                <span class="task-board-sender">
+                  {m.sender === 'user' || m.sender.startsWith('user:')
+                    ? t('detail.board.you')
+                    : m.sender_label || m.sender}
+                </span>
+                {m.grade !== 'status' && (
+                  <span class={`badge ${m.grade === 'steer' ? 'blue' : 'dim'}`}>{m.grade}</span>
+                )}
+                <span class="task-board-body">{m.body}</span>
+                <span class="dim task-board-time">
+                  {m.sent_at ? fmt(new Date(m.sent_at * 1000).toISOString()) : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

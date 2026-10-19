@@ -1,0 +1,275 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import type { MemoryGraph, MemoryGraphNode } from '../api/client'
+
+/** Pure geometry/model helpers for the memory graph — no DOM, no randomness,
+ *  so the same graph always lands in the same picture and the whole layout is
+ *  unit-testable (node --test). The component (memory-graph.tsx) owns the SVG.
+ *
+ *  Geometry: provenance surfaces live in an inner disc, clustered around one
+ *  anchor per kind; knowledge terms ring the outside when both layers show. A
+ *  no-overlap relaxation then unfolds the clusters, anchored so the layers
+ *  never swap places. Single-layer views get the whole canvas. */
+
+export type LayerMode = 'all' | 'files' | 'entities'
+
+export interface Placed extends MemoryGraphNode {
+  x: number
+  y: number
+}
+
+export interface Cluster {
+  key: string
+  x: number
+  y: number
+  /** Soft-halo radius — grows with the cluster's node count. */
+  r: number
+}
+
+export interface Layout {
+  pos: Map<string, Placed>
+  clusters: Cluster[]
+}
+
+export const ENTITY_KIND = 'entity'
+
+export function isEntity(n: MemoryGraphNode): boolean {
+  return n.layer === 'entity' || n.kind === ENTITY_KIND
+}
+
+/** Kind → anchor angle (0 = right, negative = up): core files at the top, the
+ *  rest ringing the circle clockwise in reading order. */
+const KIND_ANGLE: Record<string, number> = {
+  core: -Math.PI / 2,
+  topic: -Math.PI / 2 + (2 * Math.PI) / 5,
+  project: -Math.PI / 2 + (4 * Math.PI) / 5,
+  daily: -Math.PI / 2 + (6 * Math.PI) / 5,
+  skill: -Math.PI / 2 + (8 * Math.PI) / 5,
+}
+
+/** Keep only the nodes the active layer/kind/date filters admit; an edge
+ *  survives only when both of its endpoints do. Nodes without a first_seen
+ *  date are always visible (the files predate the diary). */
+export function filterGraph(
+  graph: MemoryGraph,
+  opts: { layer: LayerMode; hiddenKinds: ReadonlySet<string>; until?: string },
+): MemoryGraph {
+  const nodes = graph.nodes.filter((n) => {
+    if (opts.layer === 'files' && isEntity(n)) return false
+    if (opts.layer === 'entities' && !isEntity(n)) return false
+    if (opts.hiddenKinds.has(n.kind)) return false
+    if (opts.until && n.first_seen && n.first_seen > opts.until) return false
+    return true
+  })
+  const ids = new Set(nodes.map((n) => n.id))
+  const edges = graph.edges.filter((e) => ids.has(e.from) && ids.has(e.to))
+  return { nodes, edges }
+}
+
+/** Distinct first_seen dates, ascending — the timeline's play steps. */
+export function seenDates(graph: MemoryGraph): string[] {
+  const set = new Set<string>()
+  for (const n of graph.nodes) if (n.first_seen) set.add(n.first_seen)
+  return [...set].sort()
+}
+
+/** Evidence mass → rendered radius: √ keeps a 9× node from dwarfing the rest. */
+export function nodeRadius(n: MemoryGraphNode): number {
+  const w = Math.max(1, n.weight ?? 1)
+  if (isEntity(n)) return Math.min(13, 5.5 + 1.25 * Math.sqrt(w))
+  if (n.kind === 'core') return Math.min(19, 9.5 + 1.3 * Math.sqrt(w))
+  return Math.min(17, 7.5 + 1.3 * Math.sqrt(w))
+}
+
+/** Freshness → node opacity: touched within a week stays fully lit, an old
+ *  surface fades toward the floor. */
+export function recencyAlpha(lastSeen: string | undefined, now: number): number {
+  if (!lastSeen) return 1
+  const t = Date.parse(lastSeen)
+  if (Number.isNaN(t)) return 1
+  const days = Math.max(0, (now - t) / 86400000)
+  if (days <= 7) return 1
+  if (days >= 240) return 0.6
+  return 1 - 0.4 * ((days - 7) / 233)
+}
+
+/** Display width in "units": CJK ≈ 1, latin ≈ 0.55 (they render roughly half
+ *  as wide at the graph's font size). */
+function uwidth(s: string): number {
+  return [...s].reduce((n, ch) => n + (ch.charCodeAt(0) < 0x100 ? 0.55 : 1), 0)
+}
+
+/** Wrap a label into at most two lines (CJK ≈ 1 unit, latin ≈ 0.55), with an
+ *  ellipsis when even two lines do not fit. */
+export function labelLines(label: string, maxUnits = 7): string[] {
+  if (uwidth(label) <= maxUnits) return [label]
+  const chars = [...label]
+  const take = (cap: number): string => {
+    let cur = ''
+    while (chars.length > 0 && uwidth(cur + chars[0]!) <= cap) cur += chars.shift()!
+    return cur
+  }
+  const first = take(maxUnits)
+  let second = take(maxUnits)
+  if (chars.length > 0) {
+    while (second && uwidth(second + '…') > maxUnits) second = second.slice(0, -1)
+    second += '…'
+  }
+  return [first, second]
+}
+
+/** Single-line label for inside an entity pill — truncated with an ellipsis
+ *  that keeps one unit of room for the '…' itself. */
+export function fitText(label: string, maxUnits = 10): string {
+  if (uwidth(label) <= maxUnits) return label
+  let cur = ''
+  for (const ch of [...label]) {
+    if (uwidth(cur + ch) + 1 > maxUnits) break
+    cur += ch
+  }
+  return cur + '…'
+}
+
+/** Visual footprint radius — what spacing and edge endpoints must respect.
+ *  Files are circles (nodeRadius); entities are pills sized by their label,
+ *  so a long term's half-width is its extent. */
+export function nodeExtent(n: MemoryGraphNode): number {
+  if (isEntity(n)) {
+    return Math.max(15, (uwidth(fitText(n.label)) * 10.6 + 18) / 2)
+  }
+  return nodeRadius(n)
+}
+
+/** Deterministic cluster-and-relax layout. `seed` carries positions from a
+ *  previous layout of mostly-the-same nodes (timeline ticks, filter toggles):
+ *  surviving nodes start where they were, so playback ripples instead of
+ *  reshuffling — and the relax loop's early exit makes a seeded pass nearly
+ *  free. */
+export function layoutGraph(
+  graph: MemoryGraph,
+  w: number,
+  h: number,
+  seed?: ReadonlyMap<string, { x: number; y: number }>,
+): Layout {
+  const cx = w / 2
+  const cy = h / 2
+  const R = Math.max(120, Math.min(w, h) / 2 - 58)
+
+  const files = graph.nodes.filter((n) => !isEntity(n))
+  const entities = graph.nodes.filter(isEntity)
+  const mixed = files.length > 0 && entities.length > 0
+
+  const innerR = mixed ? R * 0.52 : R * 0.92
+  const outerMin = mixed ? R * 0.6 : R * 0.12
+  const outerMax = mixed ? R * 0.98 : R * 0.92
+
+  const pos = new Map<string, Placed>()
+  const clusters: Cluster[] = []
+  const byKind = new Map<string, MemoryGraphNode[]>()
+  for (const n of files) {
+    const list = byKind.get(n.kind) ?? []
+    list.push(n)
+    byKind.set(n.kind, list)
+  }
+  const byWeight = (a: MemoryGraphNode, b: MemoryGraphNode) =>
+    (b.weight ?? 1) - (a.weight ?? 1) || a.label.localeCompare(b.label)
+
+  // Seed files: a sunflower fan around each kind anchor (golden angle keeps
+  // same-weight nodes from stacking).
+  const anchors = new Map<string, { x: number; y: number }>()
+  for (const [kind, list] of byKind) {
+    const angle = KIND_ANGLE[kind] ?? -Math.PI / 2
+    const ax = cx + Math.cos(angle) * innerR * 0.6
+    const ay = cy + Math.sin(angle) * innerR * 0.6
+    anchors.set(kind, { x: ax, y: ay })
+    clusters.push({ key: kind, x: ax, y: ay, r: 42 + 16 * Math.sqrt(list.length) })
+    ;[...list].sort(byWeight).forEach((n, i) => {
+      const s = seed?.get(n.id)
+      const t = i * 2.399963
+      const rr = i === 0 ? 0 : 14 + 13 * Math.sqrt(i)
+      pos.set(n.id, { ...n, x: s?.x ?? ax + Math.cos(t) * rr, y: s?.y ?? ay + Math.sin(t) * rr })
+    })
+  }
+
+  // Seed entities: a three-ring band around the outside (or the whole disc
+  // when they are the only layer).
+  ;[...entities].sort(byWeight).forEach((n, i) => {
+    const s = seed?.get(n.id)
+    const t = -Math.PI / 2 + (i / Math.max(1, entities.length)) * Math.PI * 2
+    const rr = outerMin + (outerMax - outerMin) * ((i % 3) / 2)
+    pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(t) * rr, y: s?.y ?? cy + Math.sin(t) * rr })
+  })
+
+  const list = graph.nodes.map((n) => pos.get(n.id)!)
+  // Spacing follows each node's real footprint (pill width / circle radius)
+  // plus a per-pair air gap — long terms get room, small circles pack tighter.
+  const minDist = (a: Placed, b: Placed) => {
+    const gap = isEntity(a) && isEntity(b) ? 8 : isEntity(a) || isEntity(b) ? 14 : 18
+    return nodeExtent(a) + nodeExtent(b) + gap
+  }
+  const clampRadius = (p: Placed, lo: number, hi: number) => {
+    const dx = p.x - cx
+    const dy = p.y - cy
+    const d = Math.max(1, Math.hypot(dx, dy))
+    const target = d < lo ? lo : d > hi ? hi : d
+    if (target !== d) {
+      p.x = cx + (dx / d) * target
+      p.y = cy + (dy / d) * target
+    }
+  }
+
+  // Relax: no-overlap repulsion + a soft pull back to the layer's home band.
+  // `moved` tracks the largest displacement per iteration; once nothing moves
+  // by more than a fraction of a unit the picture has converged — a seeded
+  // re-layout typically exits in single-digit iterations instead of 140.
+  for (let it = 0; it < 140; it++) {
+    let moved = 0
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i]!
+        const b = list[j]!
+        let dx = b.x - a.x
+        let dy = b.y - a.y
+        let d2 = dx * dx + dy * dy
+        if (d2 < 1e-4) {
+          dx = i - j || 0.5
+          dy = 0.5
+          d2 = dx * dx + dy * dy
+        }
+        const d = Math.sqrt(d2)
+        const min = minDist(a, b)
+        if (d < min) {
+          const push = ((min - d) / d) * 0.32
+          a.x -= dx * push
+          a.y -= dy * push
+          b.x += dx * push
+          b.y += dy * push
+          moved = Math.max(moved, (min - d) * 0.32)
+        }
+      }
+    }
+    for (const p of list) {
+      const px = p.x
+      const py = p.y
+      if (isEntity(p)) {
+        const d = Math.max(1, Math.hypot(p.x - cx, p.y - cy))
+        const home = mixed ? (outerMin + outerMax) / 2 : R * 0.5
+        const pull = ((home - d) / d) * 0.05
+        p.x += (p.x - cx) * pull
+        p.y += (p.y - cy) * pull
+        clampRadius(p, mixed ? outerMin : 0, outerMax)
+      } else {
+        const a = anchors.get(p.kind)
+        if (a) {
+          p.x += (a.x - p.x) * 0.02
+          p.y += (a.y - p.y) * 0.02
+        }
+        clampRadius(p, 0, innerR)
+      }
+      moved = Math.max(moved, Math.hypot(p.x - px, p.y - py))
+    }
+    if (moved < 0.05) break
+  }
+
+  return { pos, clusters }
+}

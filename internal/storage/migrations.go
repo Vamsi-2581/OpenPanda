@@ -74,6 +74,8 @@ var migrations = []Migration{
 	{Version: 47, Name: "add_exec_locks", Apply: migrateV47},
 	{Version: 48, Name: "add_exec_locks_gc", Apply: migrateV48},
 	{Version: 49, Name: "add_exec_locks_run_id", Apply: migrateV49},
+	{Version: 50, Name: "add_tasks_spawn_depth", Apply: migrateV50},
+	{Version: 51, Name: "add_tasks_spawn_cap", Apply: migrateV51},
 }
 
 // migrateV44 adds task_messages: the per-scope message board sibling tasks
@@ -1228,4 +1230,33 @@ func migrateV49(tx MigrationExec) error {
 		return nil // pre-47 DBs have nothing to alter
 	}
 	return addColumnIfMissingTx(tx, "exec_locks", "run_id", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV50 adds tasks.spawn_depth: the sub-agent generation the task sits
+// at in its causal tree (user-submitted root = 0, its delegate children = 1,
+// grandchildren = 2…). The wire's Depth field (bus.TaskDelegatePayload) has
+// documented this semantics since §6.1 — "Parent.Depth+1 at every spawn hop"
+// — but producers stamped the chain length instead and receivers never
+// persisted it, so a task's true generation was lost at the first hop. The
+// column makes delegation.max_depth enforceable on every node a subtree
+// walks through: the spawn check reads the row, not local memory.
+func migrateV50(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "spawn_depth", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateV51 adds tasks.spawn_cap: the tightest delegation.max_depth seen
+// along this task's delegation path (0 = none inherited — the receiving
+// node's own config applies). A mesh subtree keeps the most conservative
+// bound: node A (max_depth 3) delegating into node B (max_depth 1) produces
+// a subtree that can never out-spawn what B's operator allowed.
+func migrateV51(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "spawn_cap", "INTEGER NOT NULL DEFAULT 0")
 }

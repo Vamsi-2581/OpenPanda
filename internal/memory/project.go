@@ -114,6 +114,11 @@ func (p *Projects) Save(name string, m MemFile) error {
 	if m.Chars() > limit {
 		return fmt.Errorf("%w: at %d/%d chars", ErrOverLimit, m.Chars(), limit)
 	}
+	for _, e := range m.Entries {
+		if strings.ContainsRune(e, '§') {
+			return ErrSeparator
+		}
+	}
 	// Serialize the write so concurrent saves of the same project cannot
 	// interleave into a torn file (P1-21); the write itself is atomic (P1-20).
 	p.mu.Lock()
@@ -121,6 +126,7 @@ func (p *Projects) Save(name string, m MemFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("memory: create project dir: %w", err)
 	}
+	_ = os.Chmod(filepath.Dir(path), 0o700)
 	if err := util.WriteFileAtomic(path, m.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("memory: write project memory %q: %w", name, err)
 	}

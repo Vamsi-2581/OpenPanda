@@ -94,6 +94,18 @@ export function QueueView({
     return [...set].sort()
   }, [tasks])
 
+  // Sub-agent map: parent_id → number of spawned children. A card that
+  // fanned out shows the count; a child card shows the ↳ marker, so the
+  // board reads "the parent is orchestrating N sub-agents" instead of
+  // rendering children as indistinguishable plain tasks.
+  const subagents = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const task of tasks ?? []) {
+      if (task.parent_id) m.set(task.parent_id, (m.get(task.parent_id) ?? 0) + 1)
+    }
+    return m
+  }, [tasks])
+
   /** One-click board wipe: confirm first (it cancels running work), then
    *  DELETE /api/tasks and refresh from server truth. */
   const [busyClear, setBusyClear] = useState(false)
@@ -181,6 +193,7 @@ export function QueueView({
               key={col.key}
               colKey={col.key}
               tasks={sortTasks(byColumn.get(col.key)!)}
+              subagents={subagents}
               onOpen={onOpen}
               onOpenSession={onOpenSession}
               onMutated={bump}
@@ -350,12 +363,14 @@ interface DragState {
 function KanbanColumn({
   colKey,
   tasks,
+  subagents,
   onOpen,
   onOpenSession,
   onMutated,
 }: {
   colKey: 'todo' | 'doing' | 'review' | 'done'
   tasks: Task[]
+  subagents: Map<string, number>
   onOpen(id: string): void
   onOpenSession(id: string): void
   onMutated(): void
@@ -425,6 +440,7 @@ function KanbanColumn({
               key={task.id}
               task={task}
               index={i}
+              childCount={subagents.get(task.id) ?? 0}
               dropBefore={drag != null && drag.dragID !== task.id && drag.overIndex === i}
               onOpen={onOpen}
               onOpenSession={onOpenSession}
@@ -461,6 +477,7 @@ function KanbanColumn({
 function KanbanCard({
   task,
   index,
+  childCount,
   dropBefore,
   onOpen,
   onOpenSession,
@@ -471,6 +488,8 @@ function KanbanCard({
 }: {
   task: Task
   index: number
+  /** Number of spawned sub-agent children (0 = leaf task). */
+  childCount: number
   dropBefore: boolean
   onOpen(id: string): void
   onOpenSession(id: string): void
@@ -570,7 +589,14 @@ function KanbanCard({
       }}
     >
       <div class="kanban-card-top">
-        <span class="kanban-title">{task.title || task.id}</span>
+        <span class="kanban-title">
+          {task.parent_id && (
+            <span class="kanban-subagent" title={t('queue.subagent')} aria-label={t('queue.subagent')}>
+              ↳{task.spawn_depth != null && task.spawn_depth > 1 ? task.spawn_depth : ''}
+            </span>
+          )}
+          {task.title || task.id}
+        </span>
         {deletable && (
           <button
             class="kanban-del"
@@ -613,6 +639,11 @@ function KanbanCard({
             title={t('queue.delegated', { n: String(task.delegation_chain!.length) })}
           >
             <Icon name="network" size={11} /> {task.delegation_chain!.length}
+          </span>
+        )}
+        {childCount > 0 && (
+          <span class="kanban-owner" title={t('queue.children', { n: String(childCount) })}>
+            <Icon name="bot" size={11} /> {childCount}
           </span>
         )}
         {task.session_id && (

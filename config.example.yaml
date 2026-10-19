@@ -327,6 +327,23 @@ injection:
 #                              # success rate into routing scores. Local
 #                              # metrics only — never peer-reported.
 
+# Sub-agent delegation limits. A parent agent may decompose its work into
+# child tasks that run in parallel and report back through the shared message
+# board; these knobs bound how wide and how deep that fan-out may grow.
+# delegation:
+#   enabled: true              # false forbids agent-driven sub-agent spawning
+#                              # on this node outright (delegate markers get a
+#                              # refusal, not a child task)
+#   max_children: 8            # total child tasks one task may spawn over all
+#                              # of its rounds (per task, not per node)
+#   fanout: 4                  # child spawns awaited concurrently per parent;
+#                              # node-wide parallelism is still bounded by
+#                              # card.capacity.max_concurrent
+#   max_depth: 3               # deepest spawn generation: root task = depth 0,
+#                              # children = 1, grandchildren = 2, ... A task at
+#                              # max_depth is not offered the delegation
+#                              # protocol and cannot spawn further children.
+#
 # Memory system tunables. Character caps for each memory file class; files
 # over the cap are refused on write.
 # memory:

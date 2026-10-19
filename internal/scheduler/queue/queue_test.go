@@ -114,13 +114,30 @@ func TestSortReadyPolicy(t *testing.T) {
 }
 
 func TestDefaultKeys(t *testing.T) {
-	if got := DefaultKeys(nil, "panda"); len(got) != 1 || got[0] != "project:panda" {
+	if got := DefaultKeys(nil, "panda", "", "t1"); len(got) != 1 || got[0] != "project:panda" {
 		t.Fatalf("project default = %v", got)
 	}
-	if got := DefaultKeys(nil, ""); len(got) != 1 || got[0] != DefaultResourceKey {
+	// An anonymous task locks only itself: two anonymous tasks run in
+	// parallel, each in its own derived work dir (core.prepareRunDir).
+	if got := DefaultKeys(nil, "", "", "t1"); len(got) != 1 || got[0] != "task:t1" {
 		t.Fatalf("anonymous default = %v", got)
 	}
-	if got := DefaultKeys([]string{"node:opi"}, "panda"); got[0] != "node:opi" {
+	if got := DefaultKeys(nil, "", "", "t2"); len(got) != 1 || got[0] != "task:t2" {
+		t.Fatalf("anonymous tasks must not share one lock: %v", got)
+	}
+	// A submitter-pinned work dir is the shared tree: two tasks pinning the
+	// same directory (in any spelling) serialize on it.
+	dir := t.TempDir()
+	a := DefaultKeys(nil, "", dir, "t1")
+	b := DefaultKeys(nil, "", dir+"/", "t2")
+	if len(a) != 1 || len(b) != 1 || a[0] != b[0] {
+		t.Fatalf("same pinned dir must collide on one key: %v vs %v", a, b)
+	}
+	c := DefaultKeys(nil, "", dir+"-other", "t3")
+	if c[0] == a[0] {
+		t.Fatalf("different dirs must not collide: %v vs %v", a, c)
+	}
+	if got := DefaultKeys([]string{"node:opi"}, "panda", dir, "t1"); got[0] != "node:opi" {
 		t.Fatalf("explicit keys must win: %v", got)
 	}
 }
@@ -232,6 +249,29 @@ func TestSchedulerParallelDisjointSerialConflict(t *testing.T) {
 	waitFor(t, func() bool { return len(runner.startedIDs()) == 3 }, "proj-a-2 never started after conflict freed")
 	runner.release <- "opi"
 	runner.release <- "proj-a-2"
+	<-runner.done
+	<-runner.done
+}
+
+// Two anonymous tasks — no keys, no project — each take a lock of their own
+// now that every anonymous task runs in a private per-task work dir. Before
+// the private-dir change they shared one conservative lock and serialized
+// despite free budget, which is exactly the serial behaviour this removes.
+func TestSchedulerAnonymousTasksRunInParallel(t *testing.T) {
+	store := &fakeStore{ready: []ReadyTask{
+		{ID: "anon-a", CreatedAt: 1},
+		{ID: "anon-b", CreatedAt: 2},
+	}}
+	runner := newGateRunner()
+	s := New(store, runner, 4, nil)
+
+	s.tick(context.Background())
+	waitForStarted(t, runner, 2)
+	if got := s.Registry().HeldBy("task:anon-a"); got != "anon-a" {
+		t.Fatalf("task:anon-a held by %q", got)
+	}
+	runner.release <- "anon-a"
+	runner.release <- "anon-b"
 	<-runner.done
 	<-runner.done
 }

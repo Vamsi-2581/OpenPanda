@@ -278,6 +278,13 @@ type TaskDelegatePayload struct {
 	Depth            int   `json:"depth,omitempty"`
 	DelegationBudget *int  `json:"delegation_budget,omitempty"`
 	TokenBudget      int64 `json:"token_budget,omitempty"`
+	// MaxDepth advertises the effective delegation.max_depth the sender
+	// enforced for this subtree — its own config tightened by whatever its
+	// ancestors carried. The receiver clamps min(its own config, this value)
+	// and persists the result, so the strictest bound any hop's operator set
+	// governs the whole subtree. Zero = legacy sender: the receiver's own
+	// config alone applies.
+	MaxDepth int `json:"max_depth,omitempty"`
 }
 
 // ConsentDigest is the content hash a tier-2 consent grant binds to (the

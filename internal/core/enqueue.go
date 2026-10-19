@@ -285,6 +285,9 @@ func (c *Core) runScheduled(ctx context.Context, taskID string) {
 	// Unblock any synchronous waiter (delegation-style waits on enqueued
 	// tasks); a no-op when nobody is waiting.
 	c.signalResult(taskID, result)
+	// A delegate child that finished after its parent reported leaves its
+	// outcome on the parent's children board instead of vanishing.
+	c.reportLateChildResult(ctx, taskID)
 }
 
 // relayResultForRemote sends a locally-finished task's result to its
@@ -428,10 +431,14 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		StageID: t.StageID,
 		Inputs:  t.Inputs,
 		// §6.1/§8.2: the queue path carries the same mesh contract as the
-		// synchronous dispatch — depth, remaining budget, transport, deadline.
+		// synchronous dispatch — spawn depth, remaining budget, transport,
+		// deadline. Depth is the task's generation in its causal tree, NOT
+		// the chain length: the chain counts routing hops, a forwarded task
+		// stays the same generation no matter how far it travels.
 		Transport:        t.Transport,
 		DeadlineUnix:     t.DeadlineUnix,
-		Depth:            len(chain),
+		Depth:            t.SpawnDepth,
+		MaxDepth:         c.effectiveSpawnCap(t),
 		DelegationBudget: &t.DelegationBudget,
 		TokenBudget:      t.TokenBudget,
 	}

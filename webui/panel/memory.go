@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -56,9 +57,16 @@ func listDaily(dir string) []topicJSON {
 		if e.IsDir() {
 			continue
 		}
-		if stem, ok := strings.CutSuffix(e.Name(), ".md"); ok {
-			names = append(names, stem)
+		stem, ok := strings.CutSuffix(e.Name(), ".md")
+		// Only real YYYY-MM-DD logs belong to the warm layer listing — a
+		// stray README.md dropped into daily/ is not a diary entry.
+		if !ok {
+			continue
 		}
+		if _, err := time.Parse("2006-01-02", stem); err != nil {
+			continue
+		}
+		names = append(names, stem)
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	if len(names) > maxDailyView {
@@ -196,16 +204,20 @@ func (h *handler) putMemory(w http.ResponseWriter, r *http.Request) {
 
 // saveDreams writes DREAMS.md verbatim (the diary is prose, not §-entries),
 // capped at maxMemoryView bytes and written atomically like every other
-// memory file.
+// memory file — same 0700/0600 tightening too: the diary's promoted entries
+// are memory content, so it is not world-readable either.
 func (h *handler) saveDreams(content string) error {
 	if len(content) > maxMemoryView {
 		return errors.New("dreams diary exceeds the 64 KiB edit cap")
 	}
 	path := filepath.Join(h.cfg.Storage.MemoryPath, "DREAMS.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return util.WriteFileAtomic(path, []byte(content), 0o644)
+	_ = os.Chmod(dir, 0o700)
+	// WriteFileAtomic chmods the temp before rename — the file lands 0600.
+	return util.WriteFileAtomic(path, []byte(content), 0o600)
 }
 
 // putMemoryTopic serves PUT /api/memory/topics/{name} — create-or-rewrite one
@@ -366,7 +378,13 @@ func readFileCapped(path string) string {
 		return ""
 	}
 	if len(data) > maxMemoryView {
-		return string(data[:maxMemoryView]) + "\n…（已截断）"
+		// Cut on a rune boundary: a mid-rune split would hand the JSON
+		// encoder invalid UTF-8 and render as replacement characters.
+		cut := maxMemoryView
+		for cut > 0 && !utf8.RuneStart(data[cut]) {
+			cut--
+		}
+		return string(data[:cut]) + "\n…（已截断）"
 	}
 	return string(data)
 }

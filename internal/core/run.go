@@ -397,7 +397,7 @@ func (c *Core) claimForRun(ctx context.Context, taskID, intent string, plan *com
 	// wait, the same accounting the context-fetch wait already used — excess
 	// delegations decline and route elsewhere rather than queuing here.
 	keys := execLockKeys(task, plan.ActuatorID)
-	dance := queue.DefaultKeys(task.ResourceKeys, task.Project)
+	dance := queue.DefaultKeys(task.ResourceKeys, task.Project, task.WorkDir, task.TaskID)
 	// The run nonce stamped on this acquisition's exec_locks rows — releases
 	// predicate on it so a late unlock can only drop this run's own rows,
 	// never the fresh rows of a re-execution (see execlock.go).
@@ -967,11 +967,31 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 	var filesTruncated bool
 	verdict := entry.SuperviseVerdict{Status: entry.VerdictDone}
 	// delegations bounds how many PANDA_DELEGATE promotions one task may make
-	// (§4.2). Each re-runs the round with the child's result folded into the
-	// intent, so the counter — not the judge budget — is the guard against a
-	// marker-happy agent; the mesh budget bounds the spawned tree itself.
-	const maxDelegateRequests = 4
+	// (§4.2): the configured delegation.max_children, with the schema's
+	// maxItems as the protocol ceiling. Each promotion re-runs the round
+	// with the child's result folded into the intent, so the counter — not
+	// the judge budget — is the guard against a marker-happy agent; the
+	// mesh budget bounds the spawned tree itself.
+	delegLimits := c.delegateLimits()
+	maxDelegations := delegLimits.MaxChildren
+	if maxDelegations < 1 {
+		maxDelegations = 1
+	}
+	// canSpawn gates the whole sub-agent surface for this task: a task at
+	// the configured depth limit (or on a node whose operator disabled
+	// delegation) gets no protocol hint, and any delegate marker it still
+	// emits is refused rather than spawned.
+	canSpawn := c.delegationEnabled() && task.SpawnDepth < c.effectiveSpawnCap(task)
+	// Seed the spend counter from the rows, not from this episode: a re-driven
+	// or resumed run that started at zero would get to mint a whole second
+	// budget on top of the children it already spawned, laundering the cap
+	// once per restart. Counting every child row (terminal included) matches
+	// the config's "across all its rounds" meaning and also covers children
+	// the agent minted itself via `task add --parent-id`.
 	delegations := 0
+	if kids, kerr := c.store.Children(execCtx, taskID); kerr == nil {
+		delegations = len(kids)
+	}
 	// steerRounds bounds how many extra rounds user injects (steer.go) may
 	// grant: the steer's round is on the house (a single-round task would
 	// otherwise end empty when its only round is aborted), but a spamming
@@ -1118,10 +1138,18 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 
 		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title, workDir, promptLang, outputLang)
 		usedSkills = skillsUsed
+		// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
+		// left learns the marker format — a task at delegation.max_depth
+		// gets no rope it cannot use.
+		if canSpawn {
+			prompt += i18n.T(promptLang, "prompt.delegate.hint")
+		}
 		// The sibling-board protocol hint rides only when the task actually
 		// shares a scope — a standalone task has nobody to post to, so the
-		// hint would be prompt noise.
-		if messageScope(task) != "" {
+		// hint would be prompt noise. A parent with live children is the
+		// exception: it hosts their task:<self> board and can address
+		// "children", so orchestrating parents learn the protocol too.
+		if messageScope(task) != "" || len(pendingChildren) > 0 {
 			prompt += i18n.T(promptLang, "prompt.msgboard.hint")
 		}
 
@@ -1178,7 +1206,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// the user for authorization instead of delegating for it.
 		if plan.Kind == "agent" {
 			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
-				runCtx = commander.WithResultSchema(runCtx, agentResultSchemaFor(c.abilityIDs(), restricted))
+				runCtx = commander.WithResultSchema(runCtx, agentResultSchemaFor(c.abilityIDs(), restricted, delegLimits.MaxChildren))
 			}
 		}
 		// The round runs under its own cancel so a user inject (steer.go) can
@@ -1281,8 +1309,14 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			}
 			if len(drs) > 0 {
 				res.Stdout = cleaned
-				if delegations < maxDelegateRequests {
-					take := maxDelegateRequests - delegations
+				if !canSpawn {
+					// The depth cap never gave this task the protocol hint,
+					// but a schema-emitted delegate_requests (or a marker it
+					// saw in a sibling's board post) still parses — answer
+					// with the same refusal vocabulary the budget path uses.
+					currentIntent += "\n\n[system] delegation depth limit reached — this task may not spawn sub-agents; finish with local resources and report."
+				} else if delegations < maxDelegations {
+					take := maxDelegations - delegations
 					if take > len(drs) {
 						take = len(drs)
 					}
@@ -1303,8 +1337,9 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					// a marker-happy agent cannot loop forever past the cap.
 					round--
 					continue
+				} else {
+					currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
 				}
-				currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
 			}
 		}
 

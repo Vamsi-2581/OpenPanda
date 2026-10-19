@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/memory"
@@ -263,5 +265,72 @@ func TestPutProjectMemory(t *testing.T) {
 	h.ServeHTTP(rr, authedReq(http.MethodPut, "/api/projects/demo/memory", strings.NewReader(big)))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("over-limit project memory status = %d, want 400", rr.Code)
+	}
+}
+
+// TestGetMemoryDailyFiltersNonDateFiles: a stray *.md dropped into daily/ is
+// not a diary page — only real YYYY-MM-DD names may be listed.
+func TestGetMemoryDailyFiltersNonDateFiles(t *testing.T) {
+	h, cfg := newMemoryPanel(t)
+	dailyDir := filepath.Join(cfg.Storage.MemoryPath, "daily")
+	if err := os.MkdirAll(dailyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"2026-10-01.md": "- 10:00:00 log",
+		"README.md":     "not a diary",
+		"notes.md":      "not a diary either",
+	} {
+		if err := os.WriteFile(filepath.Join(dailyDir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out := doJSON(t, h, authedReq(http.MethodGet, "/api/memory", nil))
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	daily, _ := out["daily"].([]any)
+	if len(daily) != 1 {
+		t.Fatalf("daily list = %v, want exactly the dated file", daily)
+	}
+	first, _ := daily[0].(map[string]any)
+	if first["name"] != "2026-10-01" {
+		t.Fatalf("daily[0].name = %v, want 2026-10-01", first["name"])
+	}
+}
+
+// TestPutDreamsTightensPerms: DREAMS.md holds promoted memory content — the
+// console write must keep the 0600 memory-file contract, not 0644.
+func TestPutDreamsTightensPerms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are best-effort on Windows")
+	}
+	h, cfg := newMemoryPanel(t)
+	code, _ := doJSON(t, h, authedReq(http.MethodPut, "/api/memory/dreams", strings.NewReader(`{"content":"## 2026-10-18\n- note"}`)))
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	fi, err := os.Stat(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("DREAMS.md mode = %o, want 0600", fi.Mode().Perm())
+	}
+}
+
+// TestReadFileCappedRuneBoundary: the 64 KiB view cap must cut on a rune
+// boundary — an all-CJK file hits a mid-rune byte offset with certainty.
+func TestReadFileCappedRuneBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.md")
+	if err := os.WriteFile(path, []byte(strings.Repeat("中", maxMemoryView)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readFileCapped(path)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated output is not valid UTF-8")
+	}
+	if !strings.Contains(got, "已截断") {
+		t.Fatalf("truncation marker missing")
 	}
 }

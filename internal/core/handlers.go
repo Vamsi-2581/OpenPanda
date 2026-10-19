@@ -211,6 +211,29 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 	if err := c.store.SetDelegationBudget(ctx, t.TaskID, budget); err != nil {
 		c.logger.Warn("adopt delegation budget", "task", t.TaskID, "err", err)
 	}
+	// The spawn generation travels the wire too (§6.1 Depth): without it a
+	// child delegated here would mint a fresh depth-0 view of a subtree
+	// already near the cap, and this node's SpawnChildTask check would
+	// approve grandchildren the origin's limit forbids.
+	if p.Depth > 0 {
+		if err := c.store.SetSpawnDepth(ctx, t.TaskID, p.Depth); err != nil {
+			c.logger.Warn("adopt spawn depth", "task", t.TaskID, "err", err)
+		}
+	}
+	// The depth bound travels with the generation (§6.1): the payload
+	// advertises the tightest cap any hop enforced, and this node clamps it
+	// against its own delegation.max_depth — never looser. The result lands
+	// on the row so SpawnChildTask enforces min(local, inherited) for every
+	// grandchild this task spawns here, restart or re-route notwithstanding.
+	if p.MaxDepth > 0 {
+		cap := c.delegateLimits().MaxDepth
+		if p.MaxDepth < cap {
+			cap = p.MaxDepth
+		}
+		if err := c.store.SetSpawnCap(ctx, t.TaskID, cap); err != nil {
+			c.logger.Warn("adopt spawn cap", "task", t.TaskID, "err", err)
+		}
+	}
 	// Same adoption for the token quota (§6.1): zero is the legacy/unbounded
 	// default the column already carries, so only a declared remainder needs
 	// persisting — and a negative wire value never reaches here (declined

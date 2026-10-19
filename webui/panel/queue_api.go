@@ -187,6 +187,30 @@ func (h *handler) sendTaskMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"task_id": id, "status": status, "warning": warning})
 }
 
+// listTaskMessages serves GET /api/tasks/{id}/messages — the read side of the
+// send endpoint: everything currently on the task's own board scope, which is
+// where queued user notes, steer posts and sibling-task messages live. A send
+// that only accepted and never showed would leave the queue invisible; the
+// detail view polls this alongside the task row so a posted note renders as
+// soon as it lands. Unknown ids answer 404; a live board on an empty scope
+// answers an empty list.
+func (h *handler) listTaskMessages(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.store.Get(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, errors.New("no such task"))
+		return
+	}
+	msgs, err := h.store.TaskMessages(r.Context(), "task:"+id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if msgs == nil {
+		msgs = []core.TaskMessage{}
+	}
+	writeJSON(w, map[string]any{"task_id": id, "messages": msgs})
+}
+
 // writeTaskMessageErr maps a message-delivery failure onto the right status:
 // unknown task → 404, terminal or remote-executor refusals → 409 (a state
 // conflict the user must resolve), anything else → 500.

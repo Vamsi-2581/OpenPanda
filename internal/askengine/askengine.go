@@ -121,8 +121,14 @@ type Engine struct {
 
 	hermes   *memory.Hermes
 	projects *memory.Projects
-	remind   *reminders.Store
-	skills   *skills.Store
+	// daily is the warm-layer diary the Dreaming engine consolidates from.
+	// Task summaries land here as *trusted* lines (the model's own words,
+	// not verbatim user text — see noteDailyObservation), which is what
+	// makes a Deep-phase promotion possible at all: task titles are written
+	// with AppendExternal and can never open the provenance gate alone.
+	daily  *memory.Daily
+	remind *reminders.Store
+	skills *skills.Store
 
 	mcp        *mcp.Client
 	mcpCommand string
@@ -823,6 +829,7 @@ func New(ctx context.Context, cfg *config.Config, opts Options) (*Engine, error)
 		db:             db,
 		injector:       injector,
 		hermes:         hermes,
+		daily:          memory.NewDaily(hermes.WarmDir()),
 		projects:       projects,
 		remind:         remind,
 		skills:         skillStore,
@@ -974,6 +981,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// belong to this machine's stable identity rather than a fleeting hash
 	// that leaves tasks stranded when the process exits.
 	sched := core.NewCore(e.db, stableID, card, schedulerTier(e.cfg.Node.ResourceClass), e.logger, e.cfg.Model)
+	sched.SetDelegationLimits(e.cfg.Delegation)
 	// Row ownership probe: the identity lock tells a borrowed engine (a CLI
 	// sharing the daemon's stable node id) from the row's owner. A live daemon
 	// holds the lock and heartbeats the row, so a borrowed engine's Shutdown
@@ -998,7 +1006,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	sched.SetRouterPolicy(e.cfg.Injection, e.cfg.Routing)
 	sched.AttachSupervisor(e.cfg.Model)
 	if e.skills != nil {
-		sched.SetMemoryStores(e.injector, memory.NewDaily(e.hermes.WarmDir()), e.skills)
+		sched.SetMemoryStores(e.injector, e.daily, e.skills)
 	}
 	sched.SetProjectStores(projectstore.NewStore(e.db), e.cfg.Storage.ProjectsPath)
 	sched.SetWorkDir(e.cfg.Storage.WorkPath)
@@ -1266,6 +1274,11 @@ const (
 	// advancing (routing → executing → judging) instead of a frozen spinner.
 	ProgressRoute ProgressKind = "route" // scheduler picked a node
 	ProgressExec  ProgressKind = "exec"  // the agent/adapter started running
+	// ProgressSpawn is the fan-out milestone: a running agent emitted a
+	// PANDA_DELEGATE request and the runtime spawned a causal child task for
+	// it. It makes parallel decomposition visible — several in a row read as
+	// the orchestrator dispatching sub-agents, not as repeated routing noise.
+	ProgressSpawn ProgressKind = "spawn" // a delegate child task was spawned
 	ProgressJudge ProgressKind = "judge" // a supervision round is evaluating the result
 	// ProgressWait is the round following a task the queue parked — its link
 	// is not live yet, so the work has not started. Name carries the observed
@@ -1350,6 +1363,8 @@ func StatusText(p Progress) string {
 			extra = fmt.Sprintf(" (%s)", p.Model)
 		}
 		return fmt.Sprintf("running %s%s%s…", p.Name, extra, roundNote(p))
+	case ProgressSpawn:
+		return fmt.Sprintf("spawning sub-agent %s…", p.Name)
 	case ProgressJudge:
 		// A judge_start marker arrives with no verdict yet; phrase it without
 		// the empty parens the missing verdict used to leave behind.
@@ -1635,6 +1650,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 		if t != nil && strings.TrimSpace(t.Answer) == "" && strings.TrimSpace(t.Report) == "" {
 			if report, rerr := entry.SummarizeResult(ctx, client, t.TaskTitle, "", t.OK, t.ExitCode, t.Stdout, t.Stderr, effectiveLocale); rerr == nil {
 				t.Report = report
+				e.noteDailyObservation(report)
 			}
 		}
 		return t
@@ -2449,6 +2465,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 			sumClient, _ := e.healthyClient()
 			if report, rerr := entry.SummarizeResult(ctx, sumClient, resumed.TaskTitle, in.Intent, resumed.OK, resumed.ExitCode, resumed.Stdout, resumed.Stderr, targetLoc); rerr == nil {
 				resumed.Report = report
+				e.noteDailyObservation(report)
 			}
 			return resumed
 		}
@@ -2478,6 +2495,21 @@ func progressForEvent(typ string, data any) (Progress, bool) {
 		model := eventField(data, "model")
 		return Progress{Kind: ProgressExec, Name: name, Model: model,
 			Round: intField(data, "round"), Budget: intField(data, "budget")}, true
+	case "delegate_request":
+		// The orchestrator's fan-out: one per PANDA_DELEGATE request, named
+		// after what the child is for (title → capabilities → pinned node →
+		// its task id) so a parallel spawn reads as N labelled sub-agents.
+		name := eventField(data, "title")
+		if name == "" {
+			name = strings.Join(eventFieldList(data, "requires"), ", ")
+		}
+		if name == "" {
+			name = eventField(data, "node")
+		}
+		if name == "" {
+			name = eventField(data, "child")
+		}
+		return Progress{Kind: ProgressSpawn, Name: name}, true
 	case core.EvProgress, core.EvSubagentEvent:
 		note := eventField(data, "note")
 		if note != "" {
@@ -2531,6 +2563,32 @@ func stringField(v any) string {
 		return rv.String()
 	}
 	return ""
+}
+
+// eventFieldList reads a map field that holds a list of strings — the
+// requires array of a delegate_request arrives as []string pre-marshal and as
+// []any after a state-transition JSON round trip.
+func eventFieldList(data any, key string) []string {
+	var raw any
+	switch v := data.(type) {
+	case map[string]any:
+		raw = v[key]
+	case []byte:
+		var m map[string]any
+		if json.Unmarshal(v, &m) == nil {
+			raw = m[key]
+		}
+	}
+	var out []string
+	switch list := raw.(type) {
+	case []string:
+		out = list
+	case []any:
+		for _, it := range list {
+			out = append(out, stringField(it))
+		}
+	}
+	return out
 }
 
 // intField extracts a numeric field the same way eventField does for strings:
@@ -2768,8 +2826,25 @@ func (e *Engine) ResumeApproved(ctx context.Context, taskID, workDir string, cb 
 	loc, _ := e.localeNow()
 	if report, rerr := entry.SummarizeResult(ctx, sumClient, res.TaskTitle, "", res.OK, res.ExitCode, res.Stdout, res.Stderr, loc); rerr == nil {
 		res.Report = report
+		e.noteDailyObservation(report)
 	}
 	return res
+}
+
+// noteDailyObservation records an agent-authored digest into the warm-layer
+// daily log as a trusted line (Daily.Append, not AppendExternal). The digest
+// is the model's own summary of a task outcome — "the agent's own
+// observation" in the Dreaming taint model (design §17.3) — and it is the
+// only trusted writer in the system: without it every candidate carries an
+// external provenance and Deep can never promote. A failed append is logged,
+// never fatal to the answer path.
+func (e *Engine) noteDailyObservation(text string) {
+	if e.daily == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	if err := e.daily.Append(time.Now(), text); err != nil && e.logger != nil {
+		e.logger.Warn("append daily observation", "err", err)
+	}
 }
 
 // recordEntryUsage bills the entry (commander) model's own token consumption

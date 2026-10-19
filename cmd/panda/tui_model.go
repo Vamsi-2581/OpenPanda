@@ -111,6 +111,13 @@ type tuiModel struct {
 	started     time.Time
 	chatHistory *chatHistory
 
+	// pendingInputs is the busy-mode submission queue: lines the user enters
+	// while a turn or an exec owns the foreground. They drain FIFO the moment
+	// the foreground frees — a queued prompt becomes the next turn, a queued
+	// command runs as the next exec. Nothing is ever reordered or dropped
+	// silently; each enqueue is echoed into the transcript.
+	pendingInputs []string
+
 	// scrollOffset is how many lines the transcript is scrolled back from the
 	// live bottom; 0 means anchored at the bottom. It is clamped on BOTH ends:
 	// the lower end here, and the upper end against scrollLimit.

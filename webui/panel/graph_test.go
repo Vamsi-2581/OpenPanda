@@ -154,6 +154,124 @@ func TestMemoryGraphEdges(t *testing.T) {
 	}
 }
 
+// graphNode returns the node map with the given id, failing the test when the
+// node is missing.
+func graphNode(t *testing.T, out map[string]any, id string) map[string]any {
+	t.Helper()
+	raw, _ := out["nodes"].([]any)
+	for _, n := range raw {
+		if m, ok := n.(map[string]any); ok && m["id"] == id {
+			return m
+		}
+	}
+	t.Fatalf("node %s missing: %v", id, out["nodes"])
+	return nil
+}
+
+// The knowledge layer: recurring terms become entity nodes with dated
+// evidence, tied to the surfaces containing them by mention edges and to each
+// other by co-occurrence edges. Names already carrying a node stay out.
+func TestMemoryGraphEntities(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	hermes := memory.NewHermesWithLimits(cfg.Storage.MemoryPath, memory.Limits{})
+	if err := hermes.SaveTopic("work", memory.MemFile{Entries: []string{"friday deploys"}}); err != nil {
+		t.Fatal(err)
+	}
+	dailyDir := hermes.WarmDir()
+	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	day := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dailyDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	day("2026-01-02.md", "巡护链路 只读排查\n巡护链路 只读排查\n巡护链路 只读排查\n")
+	day("2026-01-03.md", "巡护链路 只读排查\ndog dog\n")
+	h := New(Deps{
+		Store:     newTestStore(t),
+		Projects:  memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
+		Cfg:       cfg,
+		StaticDir: t.TempDir(),
+		Token:     testToken,
+	})
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	ids := graphNodeIDs(t, out)
+	for _, want := range []string{"entity:巡护链路", "entity:只读排查", "entity:dog"} {
+		if !ids[want] {
+			t.Errorf("missing entity node %s", want)
+		}
+	}
+	if ids["entity:work"] {
+		t.Errorf("a topic name must not duplicate into the knowledge layer")
+	}
+	n := graphNode(t, out, "entity:巡护链路")
+	if n["layer"] != "entity" || n["kind"] != "entity" {
+		t.Errorf("entity layer/kind = %v/%v, want entity/entity", n["layer"], n["kind"])
+	}
+	if w, _ := n["weight"].(float64); int(w) != 4 {
+		t.Errorf("entity weight = %v, want 4", n["weight"])
+	}
+	if n["first_seen"] != "2026-01-02" || n["last_seen"] != "2026-01-03" {
+		t.Errorf("entity dates = %v..%v, want 2026-01-02..2026-01-03", n["first_seen"], n["last_seen"])
+	}
+	// Mention: the diary contains the phrase four times across two days.
+	if w := graphEdgeWeight(out, "daily", "entity:巡护链路", "mention"); w != 4 {
+		t.Errorf("mention weight = %d, want 4", w)
+	}
+	// Co-occurrence: the two phrases share all four lines.
+	if w := graphEdgeWeight(out, "entity:只读排查", "entity:巡护链路", "co"); w != 4 {
+		t.Errorf("co weight = %d, want 4", w)
+	}
+	// The diary node carries the filename dates, not the file mtime.
+	d := graphNode(t, out, "daily")
+	if d["first_seen"] != "2026-01-02" || d["last_seen"] != "2026-01-03" {
+		t.Errorf("daily dates = %v..%v, want 2026-01-02..2026-01-03", d["first_seen"], d["last_seen"])
+	}
+	// Surfaces carry the provenance layer flag.
+	if m := graphNode(t, out, "core:memory"); m["layer"] != "file" {
+		t.Errorf("core node layer = %v, want file", m["layer"])
+	}
+}
+
+// The dream diary is dated by its own section headers, not the file mtime.
+func TestMemoryGraphDreamDates(t *testing.T) {
+	_, cfg := newMemoryPanel(t)
+	content := "## 2026-01-01\n- scanned 1\n## 2026-01-04\n- promoted 2\n"
+	if err := os.WriteFile(filepath.Join(cfg.Storage.MemoryPath, "DREAMS.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Deps{
+		Store:     newTestStore(t),
+		Projects:  memory.NewProjectsWithLimits(cfg.Storage.ProjectsPath, memory.Limits{}),
+		Cfg:       cfg,
+		StaticDir: t.TempDir(),
+		Token:     testToken,
+	})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, authedReq(http.MethodGet, "/api/memory/graph", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	n := graphNode(t, out, "core:dreams")
+	if n["first_seen"] != "2026-01-01" || n["last_seen"] != "2026-01-04" {
+		t.Errorf("dream dates = %v..%v, want 2026-01-01..2026-01-04", n["first_seen"], n["last_seen"])
+	}
+}
+
 // The response must be byte-identical across requests — edges dedup through a
 // map, so any ordering leak would surface as flaky diffs in the UI and tests.
 func TestMemoryGraphDeterministic(t *testing.T) {
@@ -166,6 +284,15 @@ func TestMemoryGraphDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := hermes.SaveTopic("beta-topic", memory.MemFile{Entries: []string{"x"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Entity-rich diary text exercises the knowledge layer's maps (terms,
+	// mentions, co-occurrence) under the same byte-identity check.
+	dailyDir := hermes.WarmDir()
+	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dailyDir, "2026-01-02.md"), []byte("巡检链路 部署巡检\n巡检链路 部署巡检\ndog dog\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var first []byte

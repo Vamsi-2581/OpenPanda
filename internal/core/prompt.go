@@ -240,9 +240,9 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	// the agent's exploration. Execution details stay in the task's event
 	// stream (panda task <id>) for anyone who wants the full trail.
 	prompt += rider
-	// §4.2 Sub-MainAgent protocol hint: the marker format the run loop
-	// parses. Kept terse — it rides every agent round.
-	prompt += i18n.T(promptLang, "prompt.delegate.hint")
+	// The §4.2 delegation-protocol hint is appended by the run loop instead:
+	// only a task with spawn budget left (delegation.max_depth) may learn
+	// the marker format, which this builder cannot see.
 	// §4.3 clarification protocol hint: headless execution cannot prompt
 	// mid-run, so a blocked agent ends its turn with the marker the run
 	// loop parks on. Same rider placement — every agent round.

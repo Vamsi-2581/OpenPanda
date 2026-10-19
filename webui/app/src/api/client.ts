@@ -291,6 +291,9 @@ export function isTaskStalled(task: Task, now = Date.now()): boolean {
 export interface Task {
   id: string
   parent_id: string
+  /** Sub-agent generation inside a delegation tree: 1 = direct child,
+      2 = grandchild, ... Absent (0) for root/standalone tasks. */
+  spawn_depth?: number
   project: string
   title: string
   state: string
@@ -367,6 +370,22 @@ export type TaskMessageResult = {
   /** No consumer drains this store — the note is durable but nobody reads
    *  it until a daemon or console picks the queue up. Server-localized. */
   warning?: string
+}
+
+/** One board entry under the task's own scope: a queued user note, a steer,
+ *  or a sibling-task message the agent could read at a round boundary. */
+export interface TaskBoardMessage {
+  scope: string
+  sender: string
+  rcpt: string
+  sender_seq: number
+  sender_label: string
+  /** status = advisory note, report = structured summary, steer = user inject,
+   *  artifact_ref = produced-file pointer. */
+  grade: 'status' | 'report' | 'steer' | 'artifact_ref' | string
+  body: string
+  sent_at: number
+  recv_at: number
 }
 
 export interface ApprovalOperation {
@@ -780,6 +799,13 @@ export const api = {
    *  when this console runs the task). */
   sendTaskMessage(id: string, text: string, inject: boolean): Promise<TaskMessageResult> {
     return request('POST', `/api/tasks/${encodeURIComponent(id)}/messages`, { text, inject })
+  },
+
+  /** The task's own board scope — queued user notes, steers and sibling
+   *  messages the detail view renders so a posted note is visible, not just
+   *  accepted. */
+  taskBoardMessages(id: string): Promise<{ task_id: string; messages: TaskBoardMessage[] }> {
+    return request('GET', `/api/tasks/${encodeURIComponent(id)}/messages`)
   },
 
   /** Persist a drag: ids arrive top-to-bottom and get seq 1..n. */
@@ -1692,24 +1718,38 @@ export interface MemoryFiles {
   daily: TopicFile[] // warm-layer diary (read-only, newest first)
 }
 
-/** GET /api/memory/graph — nodes are memory surfaces and skills; edges are
- *  provenance ([from:…] promotions out of the daily diary) or literal name
- *  mentions between surfaces, weighted by their evidence count. */
+/** GET /api/memory/graph — two layers over the same evidence. Provenance
+ *  ("file") nodes are the memory surfaces and skills; knowledge ("entity")
+ *  nodes are terms literally recurring inside them. Edges are provenance
+ *  ([from:…] promotions out of the daily diary), literal name mentions between
+ *  surfaces, entity mentions (surface → entity), or entity co-occurrence. */
 export interface MemoryGraphNode {
   id: string
-  kind: 'core' | 'topic' | 'project' | 'daily' | 'skill' | string
+  kind: 'core' | 'topic' | 'project' | 'daily' | 'skill' | 'entity' | string
+  /** Provenance surfaces vs extracted knowledge terms. */
+  layer?: 'file' | 'entity' | string
   label: string
   chars?: number
   entries?: number // §-entry count (entry-shaped surfaces)
   files?: number // diary node: daily-log count
   status?: string
+  /** Evidence mass — entries/files/chars for surfaces, occurrences for
+   *  entities — scaling the rendered node. */
+  weight?: number
+  /** Dated evidence (YYYY-MM-DD) where the data honestly carries it; empty
+   *  means "always visible" on the timeline. */
+  first_seen?: string
+  last_seen?: string
+  /** Literal source lines the term appears in (entity nodes only) — the
+   *  detail card shows them so a node explains itself. */
+  evidence?: string[]
 }
 
 export interface MemoryGraphEdge {
   from: string
   to: string
-  kind: 'promotion' | 'reference' | string
-  weight?: number // evidence count: promotion markers / name mentions
+  kind: 'promotion' | 'reference' | 'mention' | 'co' | string
+  weight?: number // evidence count: promotions / mentions / co-occurrences
 }
 
 export interface MemoryGraph {
@@ -1874,9 +1914,10 @@ export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> 
 // ---- Streaming session ask (SSE over fetch POST) ----
 
 /** One `status` SSE event. `text` is the server's English fallback; `kind`
- *  names the milestone ("task", "plan", "tool", "route", "exec", "judge",
- *  "wait", "retry") so the console can re-phrase it in the user's locale. The
- *  retry fields are populated when kind === 'retry'. */
+ *  names the milestone ("task", "plan", "tool", "route", "exec", "spawn",
+ *  "judge", "wait", "retry") so the console can re-phrase it in the user's
+ *  locale. "spawn" marks a delegate fan-out — one per sub-agent the parent
+ *  dispatched. The retry fields are populated when kind === 'retry'. */
 export interface AskStatusEvent {
   text: string
   kind?: string

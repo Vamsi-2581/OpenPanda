@@ -23,7 +23,10 @@ package queue
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +38,7 @@ import (
 type ReadyTask struct {
 	ID           string
 	Project      string
+	WorkDir      string // submitter-pinned work directory ("" = derive per task)
 	Priority     int
 	Seq          int64
 	CreatedAt    int64
@@ -60,22 +64,51 @@ type Runner interface {
 	Run(ctx context.Context, taskID string)
 }
 
-// DefaultResourceKey is the conservative lock taken by a task that declares
-// neither explicit resource keys nor a project: two anonymous agent tasks may
-// otherwise trample each other's working directory, so they serialize.
-const DefaultResourceKey = "agent:*"
-
 // DefaultKeys fills in the resource keys a task occupies when it declared
 // none: project tasks lock their project (same project shares a worktree and
-// must serialize), everything else falls back to the shared agent lock.
-func DefaultKeys(keys []string, project string) []string {
+// must serialize), a task with a submitter-pinned work directory locks that
+// directory (two tasks writing one pinned tree serialize), and everything
+// else locks its own id — which is to say, nothing at all: an anonymous task
+// runs in a private per-task work dir (core.prepareRunDir), so a shared lock
+// would only make independent tasks queue behind each other. Concurrency for
+// those stays bounded by the node's MaxConcurrent, not by exclusion.
+func DefaultKeys(keys []string, project, workDir, taskID string) []string {
 	if len(keys) > 0 {
 		return keys
 	}
 	if project != "" {
 		return []string{"project:" + project}
 	}
-	return []string{DefaultResourceKey}
+	if wd := workdirKey(workDir); wd != "" {
+		return []string{"dir:" + wd}
+	}
+	return []string{"task:" + taskID}
+}
+
+// workdirKey normalizes a submitter-pinned work directory into its lock
+// identity: spelling variants of one directory ("~/x", "./x", "/a/../x")
+// must collide on the same key or the serialization the key exists for
+// leaks. Symlinks resolve on a best-effort basis — an unresolvable path
+// still gets a cleaned absolute spelling, which is exactly what the pinned
+// dir's second task would compute too.
+func workdirKey(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	if strings.HasPrefix(dir, "~/") || dir == "~" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		}
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
 }
 
 // sortReady orders the ready set by the scheduling policy: explicit drag
@@ -336,7 +369,7 @@ func (s *Scheduler) tick(ctx context.Context) int {
 		if active >= s.max {
 			return len(ready) // budget exhausted; a finishing task wakes the next pass
 		}
-		keys := DefaultKeys(t.ResourceKeys, t.Project)
+		keys := DefaultKeys(t.ResourceKeys, t.Project, t.WorkDir, t.ID)
 		if !s.registry.TryAcquire(keys, t.ID) {
 			continue // a running task holds a needed resource: stay queued
 		}

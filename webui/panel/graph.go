@@ -4,9 +4,12 @@ package panel
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -15,24 +18,34 @@ import (
 
 // ---- Memory graph ---------------------------------------------------------
 //
-// GET /api/memory/graph derives the console's knowledge-graph view: every
-// memory surface (USER.md / MEMORY.md / DREAMS.md / topics / project memory /
-// the warm-layer diary) plus every skill becomes a node, and two cheap,
-// honest edge kinds connect them:
+// GET /api/memory/graph derives the console's knowledge-graph view in two
+// layers:
 //
-//   - "promotion": an entry carrying the Dreamer's [from:日志] tag — the
-//     warm-layer diary feeding long-term memory.
-//   - "reference": one surface naming another by name inside its text —
-//     MEMORY.md mentioning a topic, a project memory mentioning a skill.
+//   - Provenance ("file"): every memory surface (USER.md / MEMORY.md /
+//     DREAMS.md / topics / project memory / the warm-layer diary) plus every
+//     skill becomes a node, and two cheap, honest edge kinds connect them:
+//
+//     · "promotion": an entry carrying the Dreamer's [from:日志] tag — the
+//       warm-layer diary feeding long-term memory.
+//     · "reference": one surface naming another by name inside its text —
+//       MEMORY.md mentioning a topic, a project memory mentioning a skill.
+//
+//   - Knowledge ("entity"): terms that literally recur inside those surfaces
+//     (see graph_terms.go) — repeated Chinese phrases, Latin words and quoted
+//     names — tied back to the surfaces by "mention" edges and to each other
+//     by "co" edges (co-occurrence in the same entry/line).
 //
 // No inference, no embeddings: every edge a reader sees is either a provenance
-// marker the Dreamer wrote or a literal name mention, so the graph can never
-// claim a relationship that isn't in the files.
+// marker the Dreamer wrote or a literal string the files contain, so the graph
+// can never claim a relationship that isn't in the files.
 
 // graphNodeJSON / graphEdgeJSON are the wire shapes of the graph response.
 type graphNodeJSON struct {
-	ID    string `json:"id"`
-	Kind  string `json:"kind"` // core | topic | project | daily | skill
+	ID   string `json:"id"`
+	Kind string `json:"kind"` // core | topic | project | daily | skill | entity
+	// Layer separates provenance from knowledge: "file" nodes are the memory
+	// surfaces themselves, "entity" nodes are terms recurring inside them.
+	Layer string `json:"layer"`
 	Label string `json:"label"`
 	// Chars is the surface size — the view scales the node with it.
 	Chars int `json:"chars,omitempty"`
@@ -43,15 +56,28 @@ type graphNodeJSON struct {
 	Files int `json:"files,omitempty"`
 	// Status carries skill approval state (pending skills render dimmed).
 	Status string `json:"status,omitempty"`
+	// Weight is the node's evidence mass — entries/files/characters for
+	// surfaces, occurrence count for entities — and scales the rendered node.
+	Weight int `json:"weight,omitempty"`
+	// FirstSeen/LastSeen are YYYY-MM-DD dates the data honestly carries
+	// (diary filenames, DREAMS.md sections, file mtimes, per-day entity
+	// sightings). Empty when the surface has no dated evidence; the timeline
+	// then treats the node as always visible.
+	FirstSeen string `json:"first_seen,omitempty"`
+	LastSeen  string `json:"last_seen,omitempty"`
+	// Evidence carries a few literal source lines an entity term was seen in
+	// — the detail card shows them so the node explains itself.
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 type graphEdgeJSON struct {
 	From string `json:"from"`
 	To   string `json:"to"`
-	Kind string `json:"kind"` // promotion | reference
+	Kind string `json:"kind"` // promotion | reference | mention | co
 	// Weight is the evidence count behind the edge — promotion markers
-	// written into the target, or name mentions in the source — so the view
-	// can render stronger links heavier. Capped, never zero.
+	// written into the target, name mentions in the source, occurrences of an
+	// entity in a surface, or lines two entities share — so the view can
+	// render stronger links heavier. Capped, never zero.
 	Weight int `json:"weight,omitempty"`
 }
 
@@ -61,6 +87,16 @@ type graphText struct {
 	id      string
 	content string
 }
+
+// Knowledge-layer caps: enough terms and links to fill the view without
+// turning the payload (or the picture) into a hairball.
+const (
+	entityCap      = 60        // entity nodes kept, highest evidence first
+	mentionEdgeCap = 400       // entity→surface links kept, highest evidence first
+	coMinCount     = 2         // lines two entities must share to earn a co edge
+	coEdgeCap      = 200       // entity↔entity links kept, highest evidence first
+	extractBudget  = 256 << 10 // daily-log bytes the term scan will read
+)
 
 // getMemoryGraph serves GET /api/memory/graph. Every source is optional — a
 // fresh node returns a sparse graph, never an error.
@@ -75,23 +111,37 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	hermes := h.memoryHermes()
 	nodes := []graphNodeJSON{}
 	var texts []graphText
+	// extractDocs feed the knowledge layer: one doc per dated daily file (so
+	// entity dates land on the day they were actually seen) plus every other
+	// surface, tag-stripped so markers never become terms.
+	var extractDocs []graphText
 	// mentionCandidates are the (node id → display name) pairs the reference
 	// scan looks for inside other surfaces. Kept apart from `nodes` so a
-	// file's own text cannot self-link.
-	type candidate struct{ id, name string }
+	// file's own text cannot self-link. `lower` is the precomputed lowercase
+	// name — one lowering per candidate instead of one per surface scan.
+	type candidate struct{ id, name, lower string }
 	var candidates []candidate
 
 	addCore := func(id, label, path string, countEntries bool) {
 		content := readFileCapped(filepath.Join(root, path))
-		n := graphNodeJSON{ID: id, Kind: "core", Label: label, Chars: len([]rune(content))}
+		n := graphNodeJSON{ID: id, Kind: "core", Layer: "file", Label: label, Chars: len([]rune(content))}
 		if countEntries {
 			n.Entries = len(memory.ParseMem([]byte(content)).Entries)
 		}
+		n.Weight = surfaceWeight(n)
+		n.LastSeen = fileDate(filepath.Join(root, path))
+		if id == "core:dreams" {
+			// The dream diary is dated by its own section headers.
+			if first, last := dreamDates(content); first != "" {
+				n.FirstSeen, n.LastSeen = first, last
+			}
+		}
 		nodes = append(nodes, n)
 		texts = append(texts, graphText{id: id, content: content})
+		extractDocs = append(extractDocs, graphText{id: id, content: stripTags(content)})
 		// Core filenames ("USER.md") are distinctive mentions — a surface
 		// naming one earns an honest reference edge like any other.
-		candidates = append(candidates, candidate{id: id, name: label})
+		candidates = append(candidates, candidate{id: id, name: label, lower: strings.ToLower(label)})
 	}
 	addCore("core:user", "USER.md", "USER.md", true)
 	addCore("core:memory", "MEMORY.md", "MEMORY.md", true)
@@ -99,31 +149,46 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 
 	if names, err := hermes.ListTopics(); err == nil {
 		for _, name := range names {
-			content := readFileCapped(filepath.Join(hermes.TopicsDir(), name+".md"))
+			path := filepath.Join(hermes.TopicsDir(), name+".md")
+			content := readFileCapped(path)
 			id := "topic:" + name
-			nodes = append(nodes, graphNodeJSON{
-				ID: id, Kind: "topic", Label: name,
+			n := graphNodeJSON{
+				ID: id, Kind: "topic", Layer: "file", Label: name,
 				Chars:   len([]rune(content)),
 				Entries: len(memory.ParseMem([]byte(content)).Entries),
-			})
+			}
+			n.Weight = surfaceWeight(n)
+			n.LastSeen = fileDate(path)
+			nodes = append(nodes, n)
 			texts = append(texts, graphText{id: id, content: content})
-			candidates = append(candidates, candidate{id: id, name: name})
+			extractDocs = append(extractDocs, graphText{id: id, content: stripTags(content)})
+			candidates = append(candidates, candidate{id: id, name: name, lower: strings.ToLower(name)})
 		}
 	}
 
 	// The warm layer aggregates to one diary node: promotion tags do not name
 	// a specific daily file, so per-day nodes would invent edges the data
-	// does not carry.
+	// does not carry. The knowledge layer still sees the days themselves (as
+	// "daily:<date>" docs) so entity dates stay honest. The extraction budget
+	// bounds the scan on a long history — newest days first, oldest dropped.
 	daily := listDaily(hermes.WarmDir())
 	{
 		var diary strings.Builder
 		chars := 0
+		budget := extractBudget
 		for _, d := range daily {
 			diary.WriteString(d.Content)
 			diary.WriteString("\n")
 			chars += len([]rune(d.Content))
+			if isDayName(d.Name) && budget > 0 {
+				extractDocs = append(extractDocs, graphText{id: "daily:" + d.Name, content: stripTags(d.Content)})
+				budget -= len(d.Content)
+			}
 		}
-		nodes = append(nodes, graphNodeJSON{ID: "daily", Kind: "daily", Label: "daily", Chars: chars, Files: len(daily)})
+		n := graphNodeJSON{ID: "daily", Kind: "daily", Layer: "file", Label: "daily", Chars: chars, Files: len(daily)}
+		n.Weight = surfaceWeight(n)
+		n.FirstSeen, n.LastSeen = dailyDates(daily)
+		nodes = append(nodes, n)
 		texts = append(texts, graphText{id: "daily", content: diary.String()})
 	}
 
@@ -135,9 +200,15 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				id := "project:" + name
-				nodes = append(nodes, graphNodeJSON{ID: id, Kind: "project", Label: name, Chars: mf.Chars(), Entries: len(mf.Entries)})
+				n := graphNodeJSON{ID: id, Kind: "project", Layer: "file", Label: name, Chars: mf.Chars(), Entries: len(mf.Entries)}
+				n.Weight = surfaceWeight(n)
+				if path, err := h.projects.Path(name); err == nil {
+					n.LastSeen = fileDate(path)
+				}
+				nodes = append(nodes, n)
 				texts = append(texts, graphText{id: id, content: string(mf.Bytes())})
-				candidates = append(candidates, candidate{id: id, name: name})
+				extractDocs = append(extractDocs, graphText{id: id, content: stripTags(string(mf.Bytes()))})
+				candidates = append(candidates, candidate{id: id, name: name, lower: strings.ToLower(name)})
 			}
 		}
 	}
@@ -147,13 +218,15 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 			for _, e := range index {
 				id := "skill:" + e.Name
 				nodes = append(nodes, graphNodeJSON{
-					ID: id, Kind: "skill", Label: e.Name, Status: string(e.Status),
+					ID: id, Kind: "skill", Layer: "file", Label: e.Name, Status: string(e.Status), Weight: 1,
 				})
-				candidates = append(candidates, candidate{id: id, name: e.Name})
+				candidates = append(candidates, candidate{id: id, name: e.Name, lower: strings.ToLower(e.Name)})
 				// A skill's own name+description is a text surface too: a skill
 				// describing work on a topic or project earns the same honest
 				// reference edge a memory file would.
-				texts = append(texts, graphText{id: id, content: e.Name + " " + e.Description})
+				content := e.Name + " " + e.Description
+				texts = append(texts, graphText{id: id, content: content})
+				extractDocs = append(extractDocs, graphText{id: id, content: content})
 			}
 		}
 	}
@@ -164,6 +237,9 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	addEdge := func(from, to, kind string, weight int) {
 		if from == to {
 			return
+		}
+		if weight > edgeWeightCap {
+			weight = edgeWeightCap
 		}
 		edgeSet[from+"\x00"+to+"\x00"+kind] = graphEdgeJSON{From: from, To: to, Kind: kind, Weight: weight}
 	}
@@ -176,10 +252,118 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 			if cand.id == g.id || !mentionable(cand.name) {
 				continue
 			}
-			if n := countMentions(lower, strings.ToLower(cand.name), mentionCap); n > 0 {
+			if n := countMentions(lower, cand.lower, edgeWeightCap); n > 0 {
 				addEdge(g.id, cand.id, "reference", n)
 			}
 		}
+	}
+
+	// Knowledge layer: the terms recurring in the surfaces become nodes; the
+	// names already carrying a node (surface labels, topic/project/skill
+	// names) are excluded so the two layers never duplicate each other.
+	exclude := map[string]bool{}
+	for _, n := range nodes {
+		exclude[strings.ToLower(n.Label)] = true
+		exclude[strings.ToLower(strings.TrimSuffix(n.Label, ".md"))] = true
+	}
+	terms := extractTerms(extractDocs, exclude, entityCap)
+	collectEvidence(terms, extractDocs)
+
+	// seenBy is the dated-evidence roll-up per surface: entities inherit the
+	// first/last sighting of the surfaces they appear in ("daily:<date>" docs
+	// carry the day itself).
+	seenBy := map[string][2]string{}
+	for _, n := range nodes {
+		seenBy[n.ID] = [2]string{n.FirstSeen, n.LastSeen}
+	}
+	for _, t := range terms {
+		first, last := "", ""
+		for id := range t.Docs {
+			f, l := seenBy[id][0], seenBy[id][1]
+			if day, ok := strings.CutPrefix(id, "daily:"); ok {
+				f, l = day, day
+			}
+			first = minDay(first, f)
+			last = maxDay(last, l)
+		}
+		nodes = append(nodes, graphNodeJSON{
+			ID: "entity:" + t.Term, Kind: "entity", Layer: "entity",
+			Label: t.Term, Weight: t.Count, FirstSeen: first, LastSeen: last,
+			Evidence: t.Samples,
+		})
+	}
+
+	// Mention edges: surface → entity, weighted by occurrences in that
+	// surface. Daily docs collapse back onto the aggregated diary node.
+	var mentions []edgeHit
+	for _, t := range terms {
+		per := map[string]int{}
+		for docID, c := range t.Docs {
+			sid := docID
+			if strings.HasPrefix(sid, "daily:") {
+				sid = "daily"
+			}
+			per[sid] += c
+		}
+		for _, sid := range sortedIDs(per) {
+			mentions = append(mentions, edgeHit{from: sid, to: "entity:" + t.Term, weight: per[sid]})
+		}
+	}
+	sortEdgeHits(mentions)
+	if len(mentions) > mentionEdgeCap {
+		mentions = mentions[:mentionEdgeCap]
+	}
+	for _, m := range mentions {
+		addEdge(m.from, m.to, "mention", m.weight)
+	}
+
+	// Co-occurrence edges: two entities sharing an entry/line, at least
+	// coMinCount times. A term nested inside another is the same evidence
+	// twice, so nested pairs never earn an edge. Term forms are lowered once
+	// here — lowering inside the line×term loop was the old hotspot.
+	termLower := make([]string, len(terms))
+	for i, t := range terms {
+		termLower[i] = strings.ToLower(t.Term)
+	}
+	coCount := map[string]int{}
+	for _, d := range extractDocs {
+		lower := strings.ToLower(d.content)
+		for line := range strings.Lines(lower) {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var present []string
+			for i, tl := range termLower {
+				if strings.Contains(line, tl) {
+					present = append(present, terms[i].Term)
+				}
+			}
+			for i := 0; i < len(present); i++ {
+				for j := i + 1; j < len(present); j++ {
+					a, b := present[i], present[j]
+					if strings.Contains(a, b) || strings.Contains(b, a) {
+						continue
+					}
+					coCount[a+"\x00"+b]++
+				}
+			}
+		}
+	}
+	var co []edgeHit
+	for key, n := range coCount {
+		if n < coMinCount {
+			continue
+		}
+		from, to, _ := strings.Cut(key, "\x00")
+		co = append(co, edgeHit{from: "entity:" + from, to: "entity:" + to, weight: n})
+	}
+	sortEdgeHits(co)
+	if len(co) > coEdgeCap {
+		co = co[:coEdgeCap]
+	}
+	for _, e := range co {
+		addEdge(e.from, e.to, "co", e.weight)
 	}
 
 	edges := make([]graphEdgeJSON, 0, len(edgeSet))
@@ -200,9 +384,129 @@ func (h *handler) getMemoryGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"nodes": nodes, "edges": edges})
 }
 
-// mentionCap bounds the evidence count riding on one reference edge — plenty
-// to tell a stray mention from a recurring one without long scans.
-const mentionCap = 50
+// edgeWeightCap bounds the evidence count riding on one edge — plenty to tell
+// a stray mention from a recurring one without long scans.
+const edgeWeightCap = 50
+
+// surfaceWeight turns a surface's size into the evidence mass the view scales
+// nodes with: § entries where the file has them, daily files for the diary,
+// and a character-derived floor for prose.
+func surfaceWeight(n graphNodeJSON) int {
+	w := n.Entries
+	if n.Files > w {
+		w = n.Files
+	}
+	if c := n.Chars / 300; c > w {
+		w = c
+	}
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// dateLayout is the wire format of the graph's dated evidence.
+const dateLayout = "2006-01-02"
+
+// fileDate returns the file's mtime as a date; "" when unreadable.
+func fileDate(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fi.ModTime().Format(dateLayout)
+}
+
+// isDayName reports whether a daily-file stem is a valid YYYY-MM-DD date.
+func isDayName(name string) bool {
+	_, err := time.Parse(dateLayout, name)
+	return err == nil
+}
+
+// dailyDates returns the first/last date covered by the diary files.
+func dailyDates(daily []topicJSON) (string, string) {
+	first, last := "", ""
+	for _, d := range daily {
+		if !isDayName(d.Name) {
+			continue
+		}
+		first = minDay(first, d.Name)
+		last = maxDay(last, d.Name)
+	}
+	return first, last
+}
+
+// dreamDates extracts the first/last "## YYYY-MM-DD" section dates from the
+// dream diary.
+func dreamDates(content string) (string, string) {
+	first, last := "", ""
+	for _, m := range dreamSectionRe.FindAllStringSubmatch(content, -1) {
+		day := m[1]
+		if !isDayName(day) {
+			continue
+		}
+		first = minDay(first, day)
+		last = maxDay(last, day)
+	}
+	return first, last
+}
+
+// dreamSectionRe matches a dream-diary section header ("## 2026-10-18").
+var dreamSectionRe = regexp.MustCompile(`(?m)^##\s+(\d{4}-\d{2}-\d{2})`)
+
+// minDay/maxDay fold ISO dates; "" (no evidence) always loses.
+func minDay(a, b string) string {
+	if a == "" || (b != "" && b < a) {
+		return b
+	}
+	return a
+}
+
+func maxDay(a, b string) string {
+	if a == "" || b > a {
+		return b
+	}
+	return a
+}
+
+// stripTags removes the memory system's own markers ([from:…] promotions, the
+// [ext] provenance flag) before term extraction — markers are not content.
+func stripTags(s string) string {
+	s = strings.ReplaceAll(s, memory.PromotionSourceTag, " ")
+	s = strings.ReplaceAll(s, memory.ExternalMarker, " ")
+	return s
+}
+
+// sortedIDs returns the map's keys in sorted order — deterministic iteration
+// for anything that feeds the response.
+func sortedIDs(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// edgeHit is one weighted edge candidate before it enters the dedup map.
+type edgeHit struct {
+	from, to string
+	weight   int
+}
+
+// sortEdgeHits orders edge candidates by evidence desc, then endpoints — the
+// cap keeps the strongest links and the order never depends on map iteration.
+func sortEdgeHits(hits []edgeHit) {
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].weight != hits[j].weight {
+			return hits[i].weight > hits[j].weight
+		}
+		if hits[i].from != hits[j].from {
+			return hits[i].from < hits[j].from
+		}
+		return hits[i].to < hits[j].to
+	})
+}
 
 // mentionable reports whether a name is worth scanning for — single/double
 // character names mention-match too aggressively to be honest edges.

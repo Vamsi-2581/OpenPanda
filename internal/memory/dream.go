@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Deep-phase thresholds, matching OpenClaw's documented defaults (design
@@ -19,7 +20,9 @@ const (
 	defaultMinScore   = 0.8
 	defaultMinRecall  = 3
 	defaultMinQueries = 3
-	// minCandidateChars drops daily-log lines too short to carry a durable fact.
+	// minCandidateChars drops daily-log lines too short to carry a durable
+	// fact. Measured in runes: with len() a CJK line of ~4 ideographs would
+	// already pass the byte count, which is far below the intended bar.
 	minCandidateChars = 10
 )
 
@@ -127,6 +130,12 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 		path := filepath.Join(dir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
+			// A log deleted or archived between ReadDir and ReadFile (the
+			// retention sweep and the panel's delete route do not share this
+			// scan) is a skipped file, not a sweep failure.
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf("memory: read %s: %w", e.Name(), err)
 		}
 		for i, line := range strings.Split(string(data), "\n") {
@@ -162,11 +171,19 @@ func (d *Dreamer) light() ([]*Candidate, error) {
 
 	out := make([]*Candidate, 0, len(byText))
 	for _, c := range byText {
-		if len(c.Text) >= minCandidateChars {
+		if utf8.RuneCountInString(c.Text) >= minCandidateChars {
 			out = append(out, c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	// Deterministic order: count first (strongest signal), text as the
+	// tiebreak so equal-count candidates promote in a stable sequence —
+	// map iteration order must never decide which fact lands first.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Text < out[j].Text
+	})
 	return out, nil
 }
 
@@ -229,6 +246,12 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 		if c.Count < d.minRecall || len(c.Days) < d.minQueries {
 			continue
 		}
+		// Substance dedup: a candidate already covered by an existing entry
+		// (same text embedded in a longer note) would pile a near-duplicate
+		// onto MEMORY.md on every sweep it recurs.
+		if coveredBy(mem.Entries, c.Text) {
+			continue
+		}
 		entry := c.Text
 		viaWhitelist := false
 		if trusted {
@@ -248,8 +271,9 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 			// A candidate already promoted into MEMORY.md (and still present in
 			// the warm daily logs) is not an error — skip it, don't abort the
 			// whole sweep. An over-limit add likewise leaves consolidation to
-			// the agent rather than failing the dream.
-			if errors.Is(err, ErrOverLimit) || errors.Is(err, ErrDuplicate) {
+			// the agent rather than failing the dream, and a line carrying the
+			// § delimiter simply can never be a memory entry.
+			if errors.Is(err, ErrOverLimit) || errors.Is(err, ErrDuplicate) || errors.Is(err, ErrSeparator) {
 				continue
 			}
 			return nil, err
@@ -266,6 +290,19 @@ func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
 		}
 	}
 	return promoted, nil
+}
+
+// coveredBy reports whether some existing entry already contains text
+// verbatim — the cheap half of near-duplicate suppression (the reverse
+// direction, a longer candidate superseding a short entry, stays the agent's
+// consolidation call via memory_replace).
+func coveredBy(entries []string, text string) bool {
+	for _, e := range entries {
+		if strings.Contains(e, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // trustedDaysWithin counts the distinct days a candidate was observed by a

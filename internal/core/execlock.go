@@ -77,13 +77,14 @@ var errExecLockBusy = errors.New("exec lock busy")
 
 // execLockKeys returns the resource keys a task's execution occupies on this
 // node: the same set the queue registry orders on (explicit keys, else the
-// project, else the shared anonymous lock), plus the resolved physical
-// actuator. The actuator is added here because a delegated actuator task
-// carries no queue keys at all, yet its driver must still exclude every other
-// driver for the same device — the in-process actuatorLocks mutex covers one
-// process, this key carries the exclusion to the rest.
+// project, else the pinned work dir, else the task's own id), plus the
+// resolved physical actuator. The actuator is added here because a delegated
+// actuator task carries no queue keys at all, yet its driver must still
+// exclude every other driver for the same device — the in-process
+// actuatorLocks mutex covers one process, this key carries the exclusion to
+// the rest.
 func execLockKeys(task Task, actuatorID string) []string {
-	keys := slices.Clone(queue.DefaultKeys(task.ResourceKeys, task.Project))
+	keys := slices.Clone(queue.DefaultKeys(task.ResourceKeys, task.Project, task.WorkDir, task.TaskID))
 	if actuatorID != "" && !slices.Contains(keys, actuatorID) {
 		keys = append(keys, actuatorID)
 	}

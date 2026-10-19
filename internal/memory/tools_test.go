@@ -90,3 +90,30 @@ func TestToolNilStore(t *testing.T) {
 		t.Fatalf("nil store: got %v, want ErrNoStore", err)
 	}
 }
+
+// TestToolReadHonorsTarget: a named layer must list that layer alone — the
+// old behavior returned both personal layers for target=user|memory, so a
+// "what's in MEMORY.md" read silently included the user profile.
+func TestToolReadHonorsTarget(t *testing.T) {
+	tool := NewTool(NewHermes(t.TempDir()), nil)
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "user", "entry": "prefers dark mode"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(ToolAdd, map[string]any{"target": "memory", "entry": "core is Go"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := tool.Execute(ToolRead, map[string]any{"target": "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "prefers dark mode") || strings.Contains(out, "core is Go") {
+		t.Errorf("target=user must list only the user layer, got %q", out)
+	}
+	out, err = tool.Execute(ToolRead, map[string]any{"target": "memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "core is Go") || strings.Contains(out, "prefers dark mode") {
+		t.Errorf("target=memory must list only the memory layer, got %q", out)
+	}
+}

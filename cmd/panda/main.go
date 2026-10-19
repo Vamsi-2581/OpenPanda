@@ -264,6 +264,9 @@ func runDaemon(args []string) {
 	// a peer conn yields when the real daemon redials.
 	coreNode.SetEdgeAuthority(true)
 	coreNode.SetRouterPolicy(cfg.Injection, cfg.Routing)
+	// Sub-agent orchestration bounds (delegation: section): how wide a task
+	// fans out, how many children run at once, how deep the tree grows.
+	coreNode.SetDelegationLimits(cfg.Delegation)
 	// Extended-policy agent runs expose the node's MCP server to the
 	// delegated agent CLI (work-dir .mcp.json); minimal policy ignores it.
 	coreNode.SetAgentMCPPassthrough(cfg.MCP.Command)
@@ -858,6 +861,7 @@ func printUsage(w *os.File) {
 	h("  task move <id> <seq>", "cli.help.d.task_move", wide)
 	h("  task artifact <id> [--list|--file|--out]", "cli.help.d.task_artifact", wide)
 	h("  task board <id>", "cli.help.d.task_board", wide)
+	h("  task send [--inject] <id> <text>", "cli.help.d.task_send", wide)
 	h("  cancel|approve|reject|logs <id>", "cli.help.d.task_verbs", wide)
 	h("  plan run <file.yaml> [--dry-run]", "cli.help.d.plan_run", wide)
 	h("  plan show <plan-id>", "cli.help.d.plan_show", wide)

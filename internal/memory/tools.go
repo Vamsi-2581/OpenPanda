@@ -74,8 +74,20 @@ func (t *Tool) read(args map[string]any) (string, error) {
 		target = s
 	}
 	switch target {
-	case "", targetUser, targetMemory:
+	case "":
 		return t.readPersonal()
+	case targetUser, targetMemory:
+		// A named layer lists that layer alone — returning both for an
+		// explicit target would make a "what's in MEMORY.md" read lie by
+		// including the user profile.
+		if t.hermes == nil {
+			return "", ErrNoStore
+		}
+		m, err := t.load(target, args)
+		if err != nil {
+			return "", err
+		}
+		return formatEntries(target, m), nil
 	case targetProject:
 		project, err := argString(args, "project")
 		if err != nil {
@@ -91,6 +103,8 @@ func (t *Tool) read(args map[string]any) (string, error) {
 	}
 }
 
+// readPersonal lists both personal layers — the no-target view the merge
+// workflow wants before deciding where an entry belongs.
 func (t *Tool) readPersonal() (string, error) {
 	if t.hermes == nil {
 		return "", ErrNoStore

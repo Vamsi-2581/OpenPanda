@@ -108,7 +108,7 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		m.resetLive()
 		if errors.Is(msg.err, context.Canceled) {
 			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
-			return m, tea.Batch(done, m.printBlock(note))
+			return m.withPending(done, m.printBlock(note))
 		}
 		blk := block{kind: blockError, body: msg.err.Error()}
 		// A classified model failure carries its kind + provider detail into
@@ -127,8 +127,11 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		if m.r != nil {
 			m.r.recordErrorTurn(prompt, msg.err)
 		}
-		return m, tea.Batch(done, m.printBlock(blk))
+		return m.withPending(done, m.printBlock(blk))
 	}
+	// A queued submission drains only when the foreground is truly free — an
+	// approval card still owns it, so the pending line waits for the answer
+	// and drains on the resumed commit instead.
 	out := msg.out
 	if out != nil && out.NeedsApproval && out.Approval != nil {
 		// The watcher stays quiet while the card is up: the parked task's own
@@ -194,7 +197,7 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 	done := m.turnEnded()
 	if out == nil {
 		m.resetLive()
-		return m, done
+		return m.withPending(done)
 	}
 	if m.r != nil {
 		m.r.recordOutcome(context.Background(), m.pendingPrompt, out)
@@ -209,9 +212,9 @@ func (m tuiModel) commit(out *askengine.Result) (tea.Model, tea.Cmd) {
 	}
 	m.resetLive()
 	if blk.body == "" && blk.kind == blockAnswer {
-		return m, done
+		return m.withPending(done)
 	}
-	return m, tea.Batch(done, m.printBlock(blk))
+	return m.withPending(done, m.printBlock(blk))
 }
 
 // resultBlock turns an engine Result into the transcript block for its kind.
@@ -493,7 +496,7 @@ func (m tuiModel) denyPending() (tea.Model, tea.Cmd) {
 	if note != "" {
 		cmds = append(cmds, m.printBlock(block{kind: blockNote, body: note}))
 	}
-	return m, tea.Batch(cmds...)
+	return m.withPending(cmds...)
 }
 
 // liveAnswerText materializes the streamed answer only at render/commit boundaries.

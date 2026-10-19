@@ -356,6 +356,140 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	t.Fatal("queued task never reached done via peer within deadline")
 }
 
+// TestAnonymousTasksRunInParallel is the end-to-end proof of the
+// serialization fix: two anonymous tasks — no keys, no project, no pinned
+// work dir — occupy one private work dir each (prepareRunDir's
+// attachedWorkDir branch), so their lock keys are their own task ids and
+// nothing makes them queue behind each other. Before the per-task-dir work
+// they shared one conservative "agent:*" lock and ran strictly serially on
+// a node with free slots.
+func TestAnonymousTasksRunInParallel(t *testing.T) {
+	db := openTestDB(t)
+	card := ledger.Card{
+		Device:        "queue-node",
+		ResourceClass: "Standard",
+		Native: []ledger.NativeAbility{
+			{ID: "sys:slow", Command: "sleep", Args: []string{"1"}},
+		},
+		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
+	}
+	c := NewCore(db, "queue-node", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.StartQueueScheduler(ctx)
+
+	var ids []string
+	for _, title := range []string{"anon-a", "anon-b"} {
+		tk, err := c.Enqueue(ctx, TaskInput{
+			Title: title, Intent: "x", Requires: []string{"sys:slow"}, Authorized: true,
+		}, DefaultQueueSpec())
+		if err != nil {
+			t.Fatalf("enqueue %s: %v", title, err)
+		}
+		ids = append(ids, tk.TaskID)
+	}
+
+	// Both tasks must reach running while the other is still running —
+	// overlap, not just eventual completion. sleep(1) keeps the window wide
+	// enough that a serialized pair can never satisfy this.
+	deadline := time.Now().Add(5 * time.Second)
+	overlapped := false
+	for time.Now().Before(deadline) {
+		running := 0
+		done := 0
+		for _, id := range ids {
+			got, err := c.store.Get(ctx, id)
+			if err != nil {
+				t.Fatalf("get %s: %v", id, err)
+			}
+			switch got.State {
+			case StateRunning:
+				running++
+			case StateDone:
+				done++
+			}
+		}
+		if running == 2 {
+			overlapped = true
+			break
+		}
+		if done == 2 {
+			t.Fatal("both finished but never ran concurrently — still serialized")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !overlapped {
+		t.Fatal("anonymous tasks never overlapped within deadline")
+	}
+	// The observed overlap returns with both sleepers still mid-run; their
+	// per-task work dirs live inside this test's TempDir, so the rows must
+	// settle before t.TempDir cleanup or the removal races their writes.
+	waitLocalTasksSettled(t, c)
+}
+
+// TestSameWorkDirSerializes pins the other half of the contract: a
+// submitter-pinned work directory IS a shared tree, so two tasks pointing at
+// it must serialize on the dir's lock — parallelism stops exactly where real
+// sharing starts.
+func TestSameWorkDirSerializes(t *testing.T) {
+	db := openTestDB(t)
+	card := ledger.Card{
+		Device:        "queue-node",
+		ResourceClass: "Standard",
+		Native: []ledger.NativeAbility{
+			{ID: "sys:slow", Command: "sleep", Args: []string{"1"}},
+			{ID: "sys:info", Command: "echo", Args: []string{"ok"}},
+		},
+		Capacity: ledger.Capacity{CPUCores: 4, RAMGB: 8, MaxConcurrent: 4},
+	}
+	c := NewCore(db, "queue-node", card, 5, testLogger(), config.ModelConfig{})
+	c.SetWorkDir(t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.StartQueueScheduler(ctx)
+
+	pinned := t.TempDir()
+	q1 := DefaultQueueSpec()
+	q1.WorkDir = pinned
+	first, err := c.Enqueue(ctx, TaskInput{
+		Title: "slow in pinned", Intent: "x", Requires: []string{"sys:slow"}, Authorized: true,
+	}, q1)
+	if err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	q2 := DefaultQueueSpec()
+	q2.WorkDir = pinned
+	second, err := c.Enqueue(ctx, TaskInput{
+		Title: "fast in pinned", Intent: "x", Requires: []string{"sys:info"}, Authorized: true,
+	}, q2)
+	if err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		f, _ := c.store.Get(ctx, first.TaskID)
+		if f.State == StateRunning {
+			s, _ := c.store.Get(ctx, second.TaskID)
+			if s.State != StateQueued {
+				t.Fatalf("same-workdir task state = %s, want queued while dir held", s.State)
+			}
+			for time.Now().Before(time.Now().Add(5 * time.Second)) {
+				s, _ = c.store.Get(ctx, second.TaskID)
+				if s.State == StateDone {
+					waitLocalTasksSettled(t, c)
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatal("second task never ran after pinned dir freed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("first task never reached running")
+}
+
 // TestDrainFlagPausesQueueAndBeatsDraining covers the maintenance-mode
 // mechanism end to end at unit level: the settings flag makes the queue
 // store report nothing claimable (in-flight work still finishes — it is

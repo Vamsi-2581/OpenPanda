@@ -47,6 +47,12 @@ func TestProgressForEvent(t *testing.T) {
 		// numbers decode as float64 — extraction must survive that too.
 		{"agent progress notes tool action", core.EvProgress, map[string]any{"note": `Bash: curl -s "https://news.com"`}, Progress{Kind: ProgressTool, Name: `Bash: curl -s "https://news.com"`}, true},
 		{"subagent event notes action", core.EvSubagentEvent, map[string]any{"note": "Task: analyze files"}, Progress{Kind: ProgressTool, Name: "Task: analyze files"}, true},
+		// A delegate fan-out surfaces as a spawn milestone per child, named
+		// after the most descriptive field the request carried.
+		{"delegate request names the child by title", "delegate_request", map[string]any{"child": "t-9", "title": "scan parser", "requires": []string{"agent:claude"}}, Progress{Kind: ProgressSpawn, Name: "scan parser"}, true},
+		{"delegate request falls back to requires", "delegate_request", map[string]any{"child": "t-9", "requires": []string{"gpu:train", "agent:claude"}}, Progress{Kind: ProgressSpawn, Name: "gpu:train, agent:claude"}, true},
+		{"delegate request survives the JSON form", "delegate_request", []byte(`{"child":"t-9","requires":["gpu:train"]}`), Progress{Kind: ProgressSpawn, Name: "gpu:train"}, true},
+		{"delegate request bare child id last", "delegate_request", map[string]any{"child": "t-9"}, Progress{Kind: ProgressSpawn, Name: "t-9"}, true},
 		{"unrelated event is silent", core.EvSubmit, map[string]any{}, Progress{}, false},
 	}
 	for _, tc := range cases {

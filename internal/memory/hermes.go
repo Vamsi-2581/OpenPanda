@@ -241,6 +241,11 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 	if m.Chars() > limit {
 		return fmt.Errorf("%w: at %d/%d chars", ErrOverLimit, m.Chars(), limit)
 	}
+	for _, e := range m.Entries {
+		if strings.ContainsRune(e, '§') {
+			return ErrSeparator
+		}
+	}
 	// Serialize the write so a concurrent SaveMemory/SaveUser cannot truncate and
 	// interleave with this one, which would leave a torn MEMORY.md on disk.
 	h.mu.Lock()
@@ -248,6 +253,10 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("memory: create memory dir: %w", err)
 	}
+	// Same contract as the daily-log append path: tighten a pre-existing
+	// directory so a memory root first created under a looser umask does
+	// not keep leaking the file listing to other local accounts.
+	_ = os.Chmod(filepath.Dir(path), 0o700)
 	// 0o600 like sessions and config: USER.md/MEMORY.md record verbatim user
 	// facts and history, which other local accounts have no business reading.
 	if err := util.WriteFileAtomic(path, m.Bytes(), 0o600); err != nil {

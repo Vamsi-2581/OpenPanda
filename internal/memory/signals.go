@@ -64,21 +64,27 @@ func consolidationSignal(firstSeen, lastSeen time.Time) float64 {
 }
 
 // noveltySignal measures how much a candidate says that memory does not already
-// contain: the fraction of the candidate's words absent from the existing
-// MEMORY entries. A brand-new fact scores high (it adds information); a fact
-// that merely restates what is already memorized scores low. A cold start
-// (empty memory) is neutral — there is nothing to compare against, so novelty
-// is maximal rather than zero, otherwise the very first memory could never be
-// promoted.
+// contain: the fraction of the candidate's novelty units absent from the
+// existing MEMORY entries. A brand-new fact scores high (it adds information);
+// a fact that merely restates what is already memorized scores low. A cold
+// start (empty memory) is neutral — there is nothing to compare against, so
+// novelty is maximal rather than zero, otherwise the very first memory could
+// never be promoted.
+//
+// Novelty units are not plain tokens: single-ideograph CJK tokens make
+// unrelated sentences overlap on shared characters (美/式/咖/啡), deflating
+// the score of every Chinese candidate. noveltyTokens uses character bigrams
+// for Han runs, which is the unit that actually distinguishes one Chinese
+// phrase from another.
 func noveltySignal(candidate string, memory []string) float64 {
 	if len(memory) == 0 {
 		return 1
 	}
-	cand := tokenize(candidate)
+	cand := noveltyTokens(candidate)
 	if len(cand) == 0 {
 		return 0
 	}
-	mem := tokenize(strings.Join(memory, " "))
+	mem := noveltyTokens(strings.Join(memory, " "))
 	var overlap int
 	for w := range cand {
 		if _, ok := mem[w]; ok {
@@ -86,6 +92,50 @@ func noveltySignal(candidate string, memory []string) float64 {
 		}
 	}
 	return 1 - float64(overlap)/float64(len(cand))
+}
+
+// noveltyTokens splits text into the units novelty is measured on: lowercased
+// Latin runs (same as tokenize) plus character bigrams over each maximal Han
+// run — a lone ideograph keeps its unigram so a single Chinese character is
+// never invisible to the comparison.
+func noveltyTokens(s string) map[string]struct{} {
+	out := make(map[string]struct{})
+	var latin strings.Builder
+	var han []rune
+	flushLatin := func() {
+		if latin.Len() > 0 {
+			out[strings.ToLower(latin.String())] = struct{}{}
+			latin.Reset()
+		}
+	}
+	flushHan := func() {
+		switch len(han) {
+		case 0:
+		case 1:
+			out[string(han[0])] = struct{}{}
+		default:
+			for i := 0; i+1 < len(han); i++ {
+				out[string(han[i:i+2])] = struct{}{}
+			}
+		}
+		han = han[:0]
+	}
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			flushLatin()
+			han = append(han, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			flushHan()
+			latin.WriteRune(r)
+		default:
+			flushLatin()
+			flushHan()
+		}
+	}
+	flushLatin()
+	flushHan()
+	return out
 }
 
 // conceptualSignal maps the density of "concept" tokens — words carrying a

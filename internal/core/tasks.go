@@ -268,7 +268,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
 		&agentSession, &agentSessionNode, &agentSessionAdapter, &t.AuthSig, &t.AuthPub, &t.AuthTs,
-		&remote, &screenOut); err != nil {
+		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap); err != nil {
 		return Task{}, err
 	}
 	decode := func(col, raw string, v any) {
@@ -1575,6 +1575,31 @@ func (s *TaskStore) SetDetail(ctx context.Context, taskID string, d TaskDetail) 
 	return nil
 }
 
+// SetSpawnDepth persists the task's sub-agent generation (§6.1 Depth on the
+// wire). Stamped at spawn on the parent side and adopted from the payload on
+// a delegate accept — never recomputed from the chain, which records routing
+// hops, not spawn generations.
+func (s *TaskStore) SetSpawnDepth(ctx context.Context, taskID string, depth int) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET spawn_depth=?, updated_at=? WHERE task_id=?`,
+		depth, s.now(), taskID); err != nil {
+		return fmt.Errorf("set spawn depth: %w", err)
+	}
+	return nil
+}
+
+// SetSpawnCap persists the tightest delegation.max_depth the task inherited
+// (0 = none — local config applies). Stamped at spawn from the parent's
+// effective cap and adopted at delegate-accept from the payload's max_depth.
+func (s *TaskStore) SetSpawnCap(ctx context.Context, taskID string, cap int) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET spawn_cap=?, updated_at=? WHERE task_id=?`,
+		cap, s.now(), taskID); err != nil {
+		return fmt.Errorf("set spawn cap: %w", err)
+	}
+	return nil
+}
+
 // SetDelegationBudget persists the remaining mesh-wide delegation budget the
 // task carries (whitepaper §6.1). Stamped on creation — locally at submit,
 // remotely when a delegate envelope adopts the payload's budget — so a
@@ -1826,7 +1851,7 @@ func (s *TaskStore) ListReady(ctx context.Context) ([]Task, error) {
 // is claimed and the runner loads it for real.
 func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT task_id, project, priority, seq, created_at, resource_keys_json
+		`SELECT task_id, project, priority, seq, created_at, resource_keys_json, work_dir
 		 FROM tasks WHERE state = ? AND scheduled = 1`, StateQueued)
 	if err != nil {
 		return nil, err
@@ -1836,7 +1861,7 @@ func (s *TaskStore) ListReadySummaries(ctx context.Context) ([]queue.ReadyTask, 
 	for rows.Next() {
 		var t queue.ReadyTask
 		var keysJSON sql.NullString
-		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON); err != nil {
+		if err := rows.Scan(&t.ID, &t.Project, &t.Priority, &t.Seq, &t.CreatedAt, &keysJSON, &t.WorkDir); err != nil {
 			return nil, err
 		}
 		if keysJSON.Valid {
@@ -3074,7 +3099,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, exec_work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output`
+	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap`
 
 func (s *TaskStore) scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task

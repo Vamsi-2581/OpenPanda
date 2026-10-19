@@ -131,7 +131,11 @@ func (s *Scheduler) statePath(name string) string {
 	return filepath.Join(s.dreamer.hermes.ColdDir(), name)
 }
 
-// readState reads a stored timestamp, or a zero time on first run.
+// readState reads a stored timestamp, or a zero time on first run. A stamp
+// that exists but does not parse is treated as "never ran" rather than an
+// error: the writes are atomic so only a manual edit can corrupt one, and a
+// permanently-failing tick would silently disable both dreaming and pruning
+// until someone removed the file by hand.
 func (s *Scheduler) readState(name string) (time.Time, error) {
 	data, err := os.ReadFile(s.statePath(name))
 	if err != nil {
@@ -142,7 +146,7 @@ func (s *Scheduler) readState(name string) (time.Time, error) {
 	}
 	sec, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("memory: parse %s: %w", name, err)
+		return time.Time{}, nil
 	}
 	return time.Unix(sec, 0), nil
 }

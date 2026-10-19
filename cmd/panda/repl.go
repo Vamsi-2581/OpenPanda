@@ -1570,6 +1570,9 @@ func (r *repl) cmdTask(arg string) {
 	case "continue":
 		r.cmdTaskContinue(fields[1:])
 		return
+	case "board":
+		r.cmdTaskBoard(strings.Join(fields[1:], " "))
+		return
 	}
 	id, ok := r.resolveRef(arg)
 	if !ok {
@@ -1592,6 +1595,42 @@ func (r *repl) cmdTask(arg string) {
 	ref := refOr(taskRefsFor(r.commandContext(), r.store, []core.Task{t}), t.TaskID)
 	if hint := taskNextStepHint(r.loc, r.cfg, t, ref); hint != "" {
 		r.outln(pal().Muted(hint))
+	}
+}
+
+// cmdTaskBoard implements `/task board <id>`: read back the task's message
+// board so a queued or injected note is visible from the REPL — the same
+// read-back the web detail view and `panda task board` expose.
+func (r *repl) cmdTaskBoard(arg string) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		r.outln("usage: /task board <task-id>")
+		return
+	}
+	id, ok := r.resolveRef(arg)
+	if !ok {
+		return
+	}
+	t, err := r.store.Get(r.commandContext(), id)
+	if err != nil {
+		r.storeErr(err)
+		return
+	}
+	for _, sc := range core.BoardScopes(t) {
+		msgs, err := r.store.TaskMessages(r.commandContext(), sc)
+		if err != nil {
+			r.storeErr(err)
+			return
+		}
+		r.outf("== %s (%d slot%s)\n", sc, len(msgs), pluralS(len(msgs)))
+		for _, m := range msgs {
+			to := m.Rcpt
+			if to == "" {
+				to = "*"
+			}
+			age := time.Since(time.Unix(m.SentAt, 0)).Round(time.Second)
+			r.outf("  %s -> %s  #%d  %-12s %s ago\n    %s\n", m.Sender, to, m.SenderSeq, m.Grade, age, m.Body)
+		}
 	}
 }
 

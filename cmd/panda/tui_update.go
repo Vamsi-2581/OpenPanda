@@ -238,15 +238,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.KeyCtrlJ {
 				return m, nil
 			}
-			return m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+			return m.drainAfter(m.onKey(tea.KeyMsg{Type: tea.KeyEnter}))
 		}
 		if isLeakedEscapeFragment(msg) {
 			return m, nil
 		}
-		return m.onKey(msg)
+		return m.drainAfter(m.onKey(msg))
 
 	case tea.MouseMsg:
-		return m.onMouse(msg)
+		return m.drainAfter(m.onMouse(msg))
 
 	case spinner.TickMsg:
 		m.animTick++
@@ -282,7 +282,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchMsg:
 		return m.onWatch(msg)
 	case execOutputMsg:
-		if msg.exec == nil || msg.exec != m.exec || msg.generation != m.execGen {
+		if msg.exec == nil {
+			return m, nil
+		}
+		// A background exec never owns the screen: its chunks pump the event
+		// channel dry (Write blocks on a full buffer) and stay invisible until
+		// the done commit folds them into one transcript block.
+		if msg.exec.background {
+			return m, waitForExec(msg.exec)
+		}
+		if msg.exec != m.exec || msg.generation != m.execGen {
 			return m, nil
 		}
 		// No accumulation here: commandExec.Write already appended the chunk
@@ -292,6 +301,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// non-zero Builder copied by value").
 		return m, waitForExec(msg.exec)
 	case execDoneMsg:
+		if msg.exec != nil && msg.exec.background {
+			// A mid-turn command finished: fold its echo and output into the
+			// transcript without touching the mode — the turn still owns the
+			// live region, the exec slot was never taken.
+			if m.chatHistory != nil {
+				if msg.text != "" {
+					m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockUser, body: msg.text})
+				}
+				if out := strings.TrimSpace(ansi.Strip(commitFrame(msg.output))); out != "" {
+					m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockInfo, body: out})
+				}
+				if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
+					m.chatHistory.blocks = append(m.chatHistory.blocks, block{kind: blockError, body: msg.err.Error()})
+				}
+			}
+			m.applyLocale()
+			m.refreshProject()
+			return m, nil
+		}
 		if msg.exec == nil || msg.exec != m.exec || msg.generation != m.execGen {
 			return m, nil
 		}
@@ -316,7 +344,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.scrollOffset = 0
-		return m, nil
+		// Free foreground drains the busy-mode queue: the next queued line
+		// submits exactly as if the user had waited for the prompt.
+		next, drain := m.drainPending()
+		return next, drain
 	case blockCommitMsg:
 		return m, nil
 	case droppedMsg:
@@ -327,8 +358,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.formTesting = false
 		if msg.err == nil {
-			// Connectivity proven — persist and activate immediately.
-			return m.finalizeWizard()
+			// Connectivity proven — persist and activate immediately. The
+			// wizard lands back in modeIdle without touching a key, so the
+			// busy queue drains through the same dispatch hook.
+			return m.drainAfter(m.finalizeWizard())
 		}
 		m.formTestErr = msg.err.Error()
 		return m, nil
@@ -485,14 +518,38 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleMouse()
 	}
 	if m.mode == modeExec {
-		if lines, ok := m.arrowScrollLines(msg); ok { // the input box is frozen here
+		if lines, ok := m.arrowScrollLines(msg); ok && strings.TrimSpace(m.ta.Value()) == "" {
+			// Arrow scroll only wins while the draft is empty — once the user
+			// is typing, arrows are cursor motion inside the input box.
 			m.scrollTranscript(lines)
 			return m, nil
 		}
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyCtrlC:
 			if m.exec != nil {
 				m.exec.cancel()
+			}
+			return m, nil
+		case tea.KeyEsc:
+			// Esc clears a draft first — the same two-step it has in asking
+			// mode — and only cancels the exec when there is nothing to edit.
+			if strings.TrimSpace(m.ta.Value()) != "" {
+				m.ta.Reset()
+				m.ta.SetHeight(1)
+				return m, nil
+			}
+			if m.exec != nil {
+				m.exec.cancel()
+			}
+			return m, nil
+		case tea.KeyEnter:
+			// Busy input: the line lands on the pending queue and submits the
+			// moment the exec frees the foreground — the queue-drain that
+			// keeps mid-run submissions non-blocking.
+			if text := strings.TrimSpace(m.ta.Value()); text != "" {
+				m.ta.Reset()
+				m.ta.SetHeight(1)
+				return m.enqueuePending(text)
 			}
 			return m, nil
 		case tea.KeyPgUp:
@@ -510,7 +567,10 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.scrollOffset = 0
 			return m, nil
 		default:
-			return m, nil
+			var cmd tea.Cmd
+			m.ta, cmd = m.ta.Update(msg)
+			m.ta.SetHeight(min(8, max(1, m.ta.LineCount())))
+			return m, cmd
 		}
 	}
 	switch msg.Type {
@@ -577,26 +637,10 @@ func (m tuiModel) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.interrupt()
 		}
 		if msg.Type == tea.KeyEnter {
-			text := strings.TrimSpace(m.ta.Value())
-			if text == "" {
-				return m, nil
+			if text := strings.TrimSpace(m.ta.Value()); text != "" {
+				return m.sendTurnInput(text)
 			}
-			if m.stream == nil || !m.stream.injectSteer(text) {
-				note := block{kind: blockError, body: i18n.T(m.loc, "tui.steer.full")}
-				return m, m.printBlock(note)
-			}
-			m.ta.Reset()
-			m.ta.SetHeight(1)
-			steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
-			// The steer rides inside pendingPrompt and is persisted as part of
-			// this turn's user side by recordOutcome — appending it to convo
-			// here would leave an unpaired user turn in the replayed history.
-			m.pendingPrompt += "\n" + steerPrefix + text
-			blk := block{
-				kind: blockNote,
-				body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
-			}
-			return m, m.printBlock(blk)
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.ta, cmd = m.ta.Update(msg)
@@ -691,7 +735,7 @@ func (m tuiModel) interrupt() (tea.Model, tea.Cmd) {
 	m.ta.SetHeight(1)
 	m.ta.Placeholder = i18n.T(m.loc, "tui.input.placeholder")
 	note := block{kind: blockNote, body: m.th.warn.Render("⏹ ") + i18n.T(m.loc, "tui.turn.stopped")}
-	return m, tea.Batch(
+	return m.withPending(
 		m.turnEnded(),
 		m.printBlock(note),
 	)
@@ -843,19 +887,7 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			case 1: // Steer / Inject
 				text := strings.TrimSpace(m.ta.Value())
 				if text != "" {
-					if m.stream == nil || !m.stream.injectSteer(text) {
-						note := block{kind: blockError, body: i18n.T(m.loc, "tui.steer.full")}
-						return m, m.printBlock(note)
-					}
-					m.ta.Reset()
-					m.ta.SetHeight(1)
-					steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
-					m.pendingPrompt += "\n" + steerPrefix + text
-					blk := block{
-						kind: blockNote,
-						body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
-					}
-					return m, m.printBlock(blk)
+					return m.sendTurnInput(text)
 				}
 			case 2: // Thought
 				m.expandThought = !m.expandThought
@@ -989,6 +1021,191 @@ func (m tuiModel) submit(text string) (tea.Model, tea.Cmd) {
 		return m.startExec(text)
 	}
 	return m.askTurn(text, "")
+}
+
+// pendingMax bounds the busy-mode queue. A line beyond it is refused loudly —
+// the draft goes back into the input box instead of growing memory forever or
+// vanishing into a queue the user can no longer reason about.
+const pendingMax = 64
+
+// enqueuePending lands one line on the busy-mode queue and echoes that fact
+// into the transcript — the visible half of "it queues, nothing blocks". The
+// queue itself drains FIFO from drainPending the moment the foreground frees.
+func (m tuiModel) enqueuePending(text string) (tea.Model, tea.Cmd) {
+	if len(m.pendingInputs) >= pendingMax {
+		m.ta.SetValue(text)
+		blk := block{kind: blockError, body: i18n.Tf(m.loc, "tui.queue.full", "n", strconv.Itoa(pendingMax))}
+		return m, m.printBlock(blk)
+	}
+	m.pendingInputs = append(m.pendingInputs, text)
+	blk := block{
+		kind: blockNote,
+		body: m.th.muted.Render("⏵ ") + i18n.Tf(m.loc, "tui.queue.queued", "text", text),
+	}
+	return m, m.printBlock(blk)
+}
+
+// drainPending submits queued lines while the foreground stays free — the
+// send half of the queue contract. It pops FIFO and stops as soon as a
+// submission claims the foreground (a turn, an exec, a picker) or the queue
+// empties; a line that resolves without taking the foreground ("/clear",
+// a print-and-done command) lets the next one run immediately rather than
+// stranding the queue until some later event.
+func (m tuiModel) drainPending() (tuiModel, tea.Cmd) {
+	var cmds []tea.Cmd
+	for len(m.pendingInputs) > 0 && m.mode == modeIdle && !m.quitting {
+		next := m.pendingInputs[0]
+		m.pendingInputs = m.pendingInputs[1:]
+		nm, cmd := m.submit(next)
+		tm, ok := nm.(tuiModel)
+		if !ok {
+			// A submit that does not come back as this model can never have
+			// taken the line: put it back rather than dropping it silently.
+			m.pendingInputs = append([]string{next}, m.pendingInputs...)
+			break
+		}
+		m = tm
+		cmds = append(cmds, cmd)
+	}
+	if len(cmds) == 0 {
+		return m, nil
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// drainAfter applies the busy-queue drain to any input-handling result: a
+// handler that ends in modeIdle — a picker Esc, a dialog answer, a panel
+// close — hands the foreground back, and queued lines must follow no matter
+// which surface freed it. Centralizing the check at the dispatch sites means
+// a future mode cannot forget the queue the way a per-site wrap could.
+func (m tuiModel) drainAfter(nm tea.Model, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	tm, ok := nm.(tuiModel)
+	if !ok || tm.mode != modeIdle || len(tm.pendingInputs) == 0 {
+		return nm, cmd
+	}
+	next, drain := tm.drainPending()
+	return next, tea.Batch(cmd, drain)
+}
+
+// withPending appends the queue drain to a terminal path's command set: every
+// place a turn or exec hands the foreground back (commit, error, interrupt,
+// exec done) wraps its own commands with this so a queued line follows them.
+func (m tuiModel) withPending(cmds ...tea.Cmd) (tea.Model, tea.Cmd) {
+	nm, drain := m.drainPending()
+	if drain == nil {
+		return nm, tea.Batch(cmds...)
+	}
+	return nm, tea.Batch(append(cmds, drain)...)
+}
+
+// sendTurnInput is the single routing point for text submitted while a turn
+// runs — Enter and the [⏎ 注入] footer button land here identically. The
+// split mirrors the task board's queue-and-inject contract:
+//
+//	/cmd, !cmd  — commands never become steering text: they either run now as
+//	              a background exec or queue when they need the foreground.
+//	plain text  — a steer queued for the next supervision round.
+func (m tuiModel) sendTurnInput(text string) (tea.Model, tea.Cmd) {
+	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!") {
+		m.ta.Reset()
+		m.ta.SetHeight(1)
+		return m.submitDuringTurn(text)
+	}
+	if m.stream == nil || !m.stream.injectSteer(text) {
+		note := block{kind: blockError, body: i18n.T(m.loc, "tui.steer.full")}
+		return m, m.printBlock(note)
+	}
+	m.ta.Reset()
+	m.ta.SetHeight(1)
+	steerPrefix := i18n.T(m.loc, "tui.turn.steerPrefix")
+	// The steer rides inside pendingPrompt and is persisted as part of this
+	// turn's user side by recordOutcome — appending it to convo here would
+	// leave an unpaired user turn in the replayed history.
+	m.pendingPrompt += "\n" + steerPrefix + text
+	blk := block{
+		kind: blockNote,
+		body: m.th.accent.Render("💡 ") + i18n.Tf(m.loc, "tui.turn.steered", "idea", text),
+	}
+	return m, m.printBlock(blk)
+}
+
+// submitDuringTurn routes a /cmd or !cmd typed while a turn is live. The
+// rule mirrors what the task board does with queue-vs-inject: commands that
+// need the foreground — anything that spawns a turn, opens a picker, or
+// mutates repl/UI state — join the pending queue; everything else runs NOW
+// as a background exec and commits its output into the transcript, because a
+// slash command is an immediate ask, not steering text.
+func (m tuiModel) submitDuringTurn(text string) (tea.Model, tea.Cmd) {
+	if strings.HasPrefix(text, "!") {
+		if text == "!!" {
+			// "!!" is a repeat — it re-runs the previous prompt as a full turn
+			// (submit -> repeatLastTurn), so it needs the foreground exactly
+			// like the line it replays. Backgrounding it would either spawn a
+			// second concurrent turn or replay through the classic path.
+			return m.enqueuePending(text)
+		}
+		return m.startBGExec(text)
+	}
+	name, arg := slashParts(text)
+	switch name {
+	case "quit", "exit":
+		m.quitting = true
+		return m, tea.Quit
+	case "clear", "cls", "claer":
+		// Visual clear only — safe mid-turn; it never touches the stream.
+		if m.chatHistory != nil {
+			m.chatHistory.clear()
+		}
+		return m, tea.ClearScreen
+	}
+	if m.turnNeedsForeground(name, arg) {
+		return m.enqueuePending(text)
+	}
+	return m.startBGExec(text)
+}
+
+// turnNeedsForeground reports whether a slash command cannot run as a
+// background exec while a turn is live: it either spawns a turn of its own,
+// opens a picker that owns the mode, mutates repl/UI state, or is a
+// long-lived stream no transcript commit could ever finish.
+func (m tuiModel) turnNeedsForeground(name, arg string) bool {
+	switch name {
+	case "new", "resume", "fork", "authorize", "project",
+		"ask", "goal", "plan", "spec":
+		return true
+	case "sessions", "projects", "model":
+		return arg == "" // bare opens a picker; an argument prints text
+	case "skills", "skill":
+		// Bare and "hub" both open the skills panel (submitSlash parity); any
+		// other verb is a print.
+		return arg == "" || arg == "hub"
+	case "lang":
+		return arg != "" // a bare "/lang" lists; an argument mutates locale
+	case "task":
+		return strings.HasPrefix(strings.TrimSpace(arg), "followup")
+	case "tasks":
+		fields := strings.Fields(arg)
+		if len(fields) == 0 {
+			return true // bare opens the board picker
+		}
+		for _, f := range fields {
+			if f == "watch" || f == "-w" || f == "clear" {
+				return true // a repaint stream never ends; clear needs the card
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// startBGExec runs a command concurrent with the live turn: same dispatch,
+// same captured output, but the exec never takes the mode or the m.exec slot —
+// its result lands in the transcript on completion.
+func (m tuiModel) startBGExec(text string) (tea.Model, tea.Cmd) {
+	m.execGen++
+	e, cmd := startCommandExec(m.r, text, m.execGen)
+	e.background = true
+	return m, cmd
 }
 
 // slashParts splits "/name arg…" into the command word and its argument. The

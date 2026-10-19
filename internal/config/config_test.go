@@ -788,3 +788,94 @@ func TestScratchRootHidesOnlyOutsideDataDir(t *testing.T) {
 		t.Fatalf("empty work path got scratch dir %q, want \"\"", got)
 	}
 }
+
+// Delegation defaults: a config without the section, and a Default() config,
+// both normalize to the documented 8/4/3 bounds.
+func TestDelegationDefaults(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: \"x\"\n")
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Delegation.MaxChildren != DefaultDelegationMaxChildren ||
+		cfg.Delegation.FanOut != DefaultDelegationFanOut ||
+		cfg.Delegation.MaxDepth != DefaultDelegationMaxDepth {
+		t.Fatalf("delegation = %+v, want %d/%d/%d", cfg.Delegation,
+			DefaultDelegationMaxChildren, DefaultDelegationFanOut, DefaultDelegationMaxDepth)
+	}
+	if d := Default().Delegation; d != (DelegationConfig{
+		MaxChildren: DefaultDelegationMaxChildren,
+		FanOut:      DefaultDelegationFanOut,
+		MaxDepth:    DefaultDelegationMaxDepth,
+	}) {
+		t.Fatalf("Default().Delegation = %+v", d)
+	}
+	if d := (DelegationConfig{}).NormalizedDelegation(); d.MaxChildren != 8 || d.FanOut != 4 || d.MaxDepth != 3 {
+		t.Fatalf("zero normalized = %+v", d)
+	}
+}
+
+// Explicit delegation values parse and survive normalization; a partial
+// section only fills the missing fields.
+func TestDelegationParsesYAML(t *testing.T) {
+	p := writeTemp(t, `
+node:
+  name: "x"
+delegation:
+  max_children: 20
+  fanout: 6
+  max_depth: 5
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Delegation.MaxChildren != 20 || cfg.Delegation.FanOut != 6 || cfg.Delegation.MaxDepth != 5 {
+		t.Fatalf("delegation = %+v", cfg.Delegation)
+	}
+	p2 := writeTemp(t, `
+node:
+  name: "x"
+delegation:
+  fanout: 2
+`)
+	cfg2, err := Load(p2)
+	if err != nil {
+		t.Fatalf("load partial: %v", err)
+	}
+	if cfg2.Delegation.FanOut != 2 || cfg2.Delegation.MaxChildren != DefaultDelegationMaxChildren {
+		t.Fatalf("partial delegation = %+v", cfg2.Delegation)
+	}
+}
+
+// Negative delegation values are rejected at validation time (before
+// normalization could silently turn them into defaults).
+func TestDelegationNegativeRejected(t *testing.T) {
+	for _, field := range []string{"max_children", "fanout", "max_depth"} {
+		p := writeTemp(t, "node:\n  name: \"x\"\ndelegation:\n  "+field+": -1\n")
+		if _, err := Load(p); err == nil {
+			t.Fatalf("delegation.%s=-1 accepted", field)
+		}
+	}
+}
+
+// delegation.enabled is a tri-state pointer: absent = on (pre-toggle
+// behavior), explicit false = orchestration forbidden on this node.
+func TestDelegationEnabledFlag(t *testing.T) {
+	p := writeTemp(t, "node:\n  name: \"x\"\n")
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Delegation.Enabled != nil {
+		t.Fatal("absent enabled parsed as non-nil")
+	}
+	p2 := writeTemp(t, "node:\n  name: \"x\"\ndelegation:\n  enabled: false\n")
+	cfg2, err := Load(p2)
+	if err != nil {
+		t.Fatalf("load disabled: %v", err)
+	}
+	if cfg2.Delegation.Enabled == nil || *cfg2.Delegation.Enabled {
+		t.Fatalf("enabled=false parsed as %+v", cfg2.Delegation.Enabled)
+	}
+}

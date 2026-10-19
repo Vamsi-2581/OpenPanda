@@ -222,7 +222,10 @@ hello 校验失败时服务端回 `hello_reject`（`reason`：`auth` 签名/密�
 - **传输与预算**：`transport`（`live` | `dtn`）选定实时链路还是 store-and-
   forward；`deadline_unix` 是 DTN 任务的绝对期限（过期即失效而非租约杀）；
   `depth`/`delegation_budget`/`token_budget` 是因果深度与逐跳递减的网状
-  配额——归零的任务只能执行或 decline，不再路由。`bundled_artifacts`
+  配额——归零的任务只能执行或 decline，不再路由；`max_depth` 随 depth
+  同行，携带发送方生效的递归上限（本机 delegation.max_depth 与继承值
+  取严），接收方按 min(本机配置, 线路值) 落库为 spawn_cap，整棵子树执行
+  沿途各跳中最保守的深度策略。`bundled_artifacts`
   是主动推送形态自带的输入工件（§8.3 fat-bundle）。
 - **信任钳制**（信任分区，experimental）：发向 `guarded` 档对端的委派按
   `network.trust.send.guarded` 裁剪暴露面——`context_level` 最高

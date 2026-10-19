@@ -344,6 +344,11 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			ResourceJSON:  in.ResourceJSON,
 			AttemptID:     t.AttemptID,
 			Authorized:    in.Authorized,
+			// First-hop forwards carry the origin's own policy too (§6.1):
+			// a strict operator's depth bound must clamp even when the task
+			// starts life delegated to a more permissive worker.
+			Depth:    t.SpawnDepth,
+			MaxDepth: c.effectiveSpawnCap(t),
 		}
 		// The project travels with the task: its memory inline, its tree as an
 		// artifact reference. Without this the executor gets a bare name it cannot

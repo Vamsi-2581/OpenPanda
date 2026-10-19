@@ -541,6 +541,36 @@ func TestMigrateV36RekeysOutboxes(t *testing.T) {
 	mconn.Close()
 }
 
+// V50 adds tasks.spawn_depth (sub-agent generation) with a 0 default so
+// rows written before the column existed read as depth-0 roots; V51 adds
+// the inherited spawn_cap bound beside it.
+func TestMigrateV50TasksSpawnDepth(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for _, col := range []string{"spawn_depth", "spawn_cap"} {
+		if !columnExists(t, db, "tasks", col) {
+			t.Fatalf("tasks.%s missing after migrate", col)
+		}
+	}
+	// A row inserted without the column set defaults to depth 0 (root).
+	if _, err := db.Exec(`INSERT INTO tasks (task_id, state, owner_node, attempt_id) VALUES ('t-root', 'done', 'n1', 'a1')`); err != nil {
+		t.Fatalf("insert legacy task: %v", err)
+	}
+	var depth int
+	if err := db.QueryRow(`SELECT spawn_depth FROM tasks WHERE task_id='t-root'`).Scan(&depth); err != nil {
+		t.Fatalf("read spawn_depth: %v", err)
+	}
+	if depth != 0 {
+		t.Fatalf("legacy row spawn_depth = %d, want 0", depth)
+	}
+}
+
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
 	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))

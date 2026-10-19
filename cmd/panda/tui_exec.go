@@ -39,6 +39,13 @@ type commandExec struct {
 	cancel     context.CancelFunc
 	events     chan tea.Msg
 
+	// background marks an exec started while a turn is live (modeAsking): its
+	// output commits straight into the transcript when done instead of taking
+	// over the mode/exec slot — the running turn owns both. Background execs
+	// are how "/cmd" and "!cmd" stay immediately usable mid-turn instead of
+	// queueing behind it.
+	background bool
+
 	mu     sync.Mutex
 	output strings.Builder
 }
