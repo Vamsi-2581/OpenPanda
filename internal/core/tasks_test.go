@@ -32,6 +32,49 @@ func createTask(t *testing.T, s *TaskStore, parent, title, owner string) Task {
 	return tk
 }
 
+// TestListBySession pins the read behind the chat header's orchestration card:
+// only the tasks linked to the asked-for conversation, newest first, and an
+// empty session id returns nothing instead of the whole table.
+func TestListBySession(t *testing.T) {
+	s := newTestStore(t)
+	var tick int64
+	s.now = func() int64 { tick++; return tick }
+	ctx := context.Background()
+
+	a := createTask(t, s, "", "thread a, first", "node")
+	b := createTask(t, s, "", "thread b, only", "node")
+	c := createTask(t, s, "", "thread a, second", "node")
+	for _, link := range []struct{ id, session string }{
+		{a.TaskID, "sess-a"},
+		{b.TaskID, "sess-b"},
+		{c.TaskID, "sess-a"},
+	} {
+		if err := s.SetSessionID(ctx, link.id, link.session); err != nil {
+			t.Fatalf("link %s to %s: %v", link.id, link.session, err)
+		}
+	}
+
+	got, err := s.ListBySession(ctx, "sess-a")
+	if err != nil {
+		t.Fatalf("list by session: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 tasks for sess-a, got %d", len(got))
+	}
+	// Newest first: `c` was created after `a`.
+	if got[0].TaskID != c.TaskID || got[1].TaskID != a.TaskID {
+		t.Fatalf("unexpected order: %s, %s", got[0].TaskID, got[1].TaskID)
+	}
+
+	// An unlinked task must not leak in, and an empty id is "no thread yet".
+	if other, err := s.ListBySession(ctx, "sess-b"); err != nil || len(other) != 1 || other[0].TaskID != b.TaskID {
+		t.Fatalf("sess-b: got %d rows (err=%v), want just %s", len(other), err, b.TaskID)
+	}
+	if none, err := s.ListBySession(ctx, ""); err != nil || len(none) != 0 {
+		t.Fatalf("empty session id: got %d rows (err=%v), want none", len(none), err)
+	}
+}
+
 // TestRecordEventBumpsUpdatedAt guards the web-console live-refresh path (P0
 // §1.5): an appended event that does not change state must still move
 // tasks.updated_at, because the panel's SSE change detector fingerprints on

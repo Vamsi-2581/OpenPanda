@@ -22,6 +22,14 @@ var Version = "0.0.11"
 // `panda version` and /api/version; not part of the semver itself.
 var Codename = "Rendezvous"
 
+// ReleaseDate is the day this release line shipped, "2006-01-02". It is the
+// one field of the release identity the build cannot derive — a binary knows
+// its version but not when that version went out — so it is edited alongside
+// Version and Codename when a release is cut, and left empty for ad-hoc
+// builds that never had a release day. The console's profile page prints it
+// as "发布于 …" and falls back to omitting the line when it is empty.
+var ReleaseDate = "2026-10-15"
+
 // ReleasePubKey is the Ed25519 public key (hex or base64) the self-update
 // path trusts to sign checksums.txt. The compiled-in default below is the
 // official OpenPanda release channel's key, so every build — release or a

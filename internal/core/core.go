@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
+	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/projects"
@@ -2920,6 +2922,8 @@ func (c *Core) summary() ledger.CapabilitySummary {
 		ResourceClass:   card.ResourceClass,
 		NodeKind:        card.NodeKind,
 		NodeIdentity:    card.NodeIdentity,
+		OS:              runtime.GOOS,
+		FormFactor:      hwinfo.FormFactor(),
 		SchedulerTier:   c.tier,
 		Chip:            card.Chip,
 		Capacity:        card.Capacity,

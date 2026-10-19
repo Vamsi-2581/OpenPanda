@@ -2741,6 +2741,27 @@ func (s *TaskStore) ListByProject(ctx context.Context, project string) ([]Task, 
 	return s.listTasks(ctx, "", project, "created_at DESC", 0)
 }
 
+// ListBySession returns the tasks one conversation spawned, newest first. The
+// chat's orchestration card reads this: the question is "what did THIS thread
+// start, and what is still moving", which neither the state nor the project
+// filter can answer — a thread can span states, and a project spans threads.
+// Uncapped on purpose: filtering a capped board read would silently drop the
+// oldest rows of the very list the card claims is complete, and a single
+// thread's task count stays small by construction.
+func (s *TaskStore) ListBySession(ctx context.Context, sessionID string) ([]Task, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE session_id = ? ORDER BY created_at DESC`,
+		sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanTasks(rows)
+}
+
 // ProjectStateCounts counts tasks grouped by project and state — one GROUP BY
 // for the whole listing, so a per-project work summary (the console's project
 // cards) does not cost a COUNT query per project row. Only named projects

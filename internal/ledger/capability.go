@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -22,11 +23,19 @@ import (
 
 // Card is the parsed form of capabilities.yaml for this node.
 type Card struct {
-	Device          string            `yaml:"device" json:"device"`
-	ResourceClass   string            `yaml:"resource_class" json:"resource_class"`
-	NodeKind        string            `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
-	NodeIdentity    string            `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
-	Chip            string            `yaml:"chip" json:"chip"`
+	Device        string `yaml:"device" json:"device"`
+	ResourceClass string `yaml:"resource_class" json:"resource_class"`
+	NodeKind      string `yaml:"node_kind,omitempty" json:"node_kind,omitempty"`
+	NodeIdentity  string `yaml:"node_identity,omitempty" json:"node_identity,omitempty"`
+	Chip          string `yaml:"chip" json:"chip"`
+	// OS and FormFactor are machine facts, not card declarations: the daemon
+	// stamps them at registration (runtime.GOOS and the hwinfo probe) so the
+	// workspace topology can draw the right glyph and system badge for this
+	// row. `yaml:"-"` keeps them out of capabilities.yaml — an operator
+	// editing the card must not be able to claim the machine runs something
+	// it does not.
+	OS              string            `yaml:"-" json:"os,omitempty"`
+	FormFactor      string            `yaml:"-" json:"form_factor,omitempty"`
 	Native          []NativeAbility   `yaml:"native" json:"native"`
 	Agents          map[string]Agent  `yaml:"agents" json:"agents"`
 	Manual          []ManualAbility   `yaml:"manual" json:"manual"`
@@ -210,10 +219,15 @@ func (r ResourceProfile) Declared() bool {
 // routing needs — ability IDs, scheduler tier, current capacity and the declared
 // hardware profile — not the executable commands, which stay on the owning node.
 type CapabilitySummary struct {
-	Device        string              `json:"device"`
-	ResourceClass string              `json:"resource_class"`
-	NodeKind      string              `json:"node_kind,omitempty"`
-	NodeIdentity  string              `json:"node_identity,omitempty"`
+	Device        string `json:"device"`
+	ResourceClass string `json:"resource_class"`
+	NodeKind      string `json:"node_kind,omitempty"`
+	NodeIdentity  string `json:"node_identity,omitempty"`
+	// OS / FormFactor describe the machine behind the node (runtime.GOOS and
+	// the hwinfo form-factor probe). Additive: peers that predate the fields
+	// simply leave them empty and the console draws an unknown-system glyph.
+	OS            string              `json:"os,omitempty"`
+	FormFactor    string              `json:"form_factor,omitempty"`
 	SchedulerTier int                 `json:"scheduler_tier"`
 	Chip          string              `json:"chip,omitempty"`
 	NativeIDs     []string            `json:"native_ids,omitempty"`
@@ -314,17 +328,33 @@ func Register(db *sql.DB, c Card, id string, tier int) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", "", tier)
+	// The system is a fact about the process, not something a card can
+	// declare, so it defaults here rather than at every call site: a card
+	// loaded by the REPL, a test fixture and the daemon all report the same
+	// runtime. Form factor needs a hardware probe and is stamped by the
+	// caller (empty means "unknown", never a guess).
+	osName := c.OS
+	if osName == "" {
+		osName = runtime.GOOS
+	}
+	return upsertNode(db, id, c.Device, c.Chip, kind, identity, string(native), string(agents), string(manual), string(capJSON), string(resJSON), "", "", "", "", tier, machineClass{OS: osName, Form: c.FormFactor})
+}
+
+// machineClass is the pair of machine facts stored beside a row: the system
+// the node runs and the form factor of the box it runs on.
+type machineClass struct {
+	OS   string
+	Form string
 }
 
 // upsertNode writes one directory row — native/agents/manual/capacity/resource
 // profile/neighbors/link metrics/contacts already marshalled to JSON — and
 // marks it online. Shared by Register (self, full card) and UpsertRemote
 // (peer, ID-only summary) so the upsert SQL lives in one place.
-func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON string, tier int) error {
+func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON string, tier int, m machineClass) error {
 	_, err := db.Exec(`
-		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, status, last_seen, scheduler_tier)
-		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+		INSERT INTO employee_cache (id, name, department, chip, node_kind, node_identity, native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, status, last_seen, scheduler_tier, os, device_class)
+		VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, chip=excluded.chip,
 			node_kind=excluded.node_kind, node_identity=excluded.node_identity,
@@ -344,8 +374,14 @@ func upsertNode(db *sql.DB, id, device, chip, kind, identity, nativeJSON, agents
 				ELSE excluded.contacts_json END,
 			projects_json=CASE WHEN excluded.projects_json='' THEN employee_cache.projects_json
 				ELSE excluded.projects_json END,
+			-- Machine facts survive a peer that cannot report them (an older
+			-- build, a summary that omits the fields): empty means "this beat
+			-- said nothing", not "this machine has no OS".
+			os=CASE WHEN excluded.os='' THEN employee_cache.os ELSE excluded.os END,
+			device_class=CASE WHEN excluded.device_class='' THEN employee_cache.device_class
+				ELSE excluded.device_class END,
 			status='online', last_seen=excluded.last_seen, scheduler_tier=excluded.scheduler_tier`,
-		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON, storage.Now(), tier,
+		id, device, chip, kind, identity, nativeJSON, agentsJSON, manualJSON, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON, storage.Now(), tier, m.OS, m.Form,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert %s: %w", id, err)
@@ -972,16 +1008,23 @@ func UpsertRemote(db *sql.DB, id string, s CapabilitySummary) error {
 	if identity == "" {
 		identity = id
 	}
-	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), string(contactsJSON), string(projectsJSON), s.SchedulerTier)
+	return upsertNode(db, id, s.Device, s.Chip, kind, identity, string(nativeJSON), string(agentsJSON), string(manualJSON), string(capJSON), string(resJSON), string(neighborsJSON), string(linksJSON), string(contactsJSON), string(projectsJSON), s.SchedulerTier, machineClass{OS: s.OS, Form: s.FormFactor})
 }
 
 // Node is a single employee_cache row, decoded.
 type Node struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Chip            string            `json:"chip,omitempty"`
-	NodeKind        string            `json:"node_kind"`
-	NodeIdentity    string            `json:"node_identity,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Chip         string `json:"chip,omitempty"`
+	NodeKind     string `json:"node_kind"`
+	NodeIdentity string `json:"node_identity,omitempty"`
+	// OS / FormFactor: the system this node runs and the kind of box it is,
+	// as advertised in its hello summary (employee_cache.os / device_class,
+	// v50). Empty on rows whose peer predates the fields or has not spoken
+	// since the upgrade — the workspace topology then draws an unknown glyph
+	// rather than guessing.
+	OS              string            `json:"os,omitempty"`
+	FormFactor      string            `json:"form_factor,omitempty"`
 	Status          string            `json:"status"`
 	LastSeen        int64             `json:"last_seen"`
 	SchedulerTier   int               `json:"scheduler_tier"`
@@ -1265,7 +1308,7 @@ func AbilityMatches(declared, required string) bool {
 
 // Query returns nodes matching filters. Empty status or name matches all.
 func Query(db *sql.DB, status, name string) ([]Node, error) {
-	q := `SELECT id, COALESCE(name,''), COALESCE(chip,''), COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), COALESCE(status,''), COALESCE(last_seen,0), COALESCE(scheduler_tier,0), native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0), COALESCE(ver,''), COALESCE(trust,'')
+	q := `SELECT id, COALESCE(name,''), COALESCE(chip,''), COALESCE(node_kind, 'physical'), COALESCE(node_identity, ''), COALESCE(status,''), COALESCE(last_seen,0), COALESCE(scheduler_tier,0), native_json, agents_json, manual_json, capacity_json, resource_profile_json, neighbors_json, links_json, contacts_json, projects_json, COALESCE(pub_key,''), COALESCE(key_verified,0), COALESCE(ver,''), COALESCE(trust,''), COALESCE(os,''), COALESCE(device_class,'')
 	      FROM employee_cache WHERE 1=1`
 	var args []any
 	if status != "" {
@@ -1292,7 +1335,7 @@ func Query(db *sql.DB, status, name string) ([]Node, error) {
 		var native, agents, manual, capJSON, resJSON, neighborsJSON, linksJSON, contactsJSON, projectsJSON sql.NullString
 		if err := rows.Scan(&n.ID, &n.Name, &n.Chip, &n.NodeKind, &n.NodeIdentity, &n.Status, &n.LastSeen, &n.SchedulerTier,
 			&native, &agents, &manual, &capJSON, &resJSON, &neighborsJSON, &linksJSON, &contactsJSON, &projectsJSON,
-			&n.PubKey, &n.KeyVerified, &n.Ver, &n.Trust); err != nil {
+			&n.PubKey, &n.KeyVerified, &n.Ver, &n.Trust, &n.OS, &n.FormFactor); err != nil {
 			return nil, err
 		}
 		if native.Valid && native.String != "" {
