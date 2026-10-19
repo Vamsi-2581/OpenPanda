@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
@@ -17,6 +18,40 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/version"
 )
 
+// hostHWin memoizes the hardware probe for the life of the process.
+//
+// CPUModel/RAMGB shell out (PowerShell on Windows, with a 5s ceiling), which
+// measured ~3s per call — and /api/self is read by the sidebar's identity chip
+// on every mount and now by the profile page too, so probing per request made
+// the console's own identity take seconds to appear. The values are properties
+// of the machine, not of the request; `panda detect` still probes live for the
+// one surface that exists to re-read hardware.
+type hostHWin struct {
+	chip string
+	ram  int
+}
+
+var (
+	hostHWinMu  sync.Mutex
+	hostHWinVal hostHWin
+)
+
+// hostHardware returns the memoized probe, filling in whatever is still
+// missing. A field is cached only once it answered: a probe that failed (a
+// machine without pwsh, a timeout under load) must not become the answer for
+// the rest of the process's life.
+func hostHardware() hostHWin {
+	hostHWinMu.Lock()
+	defer hostHWinMu.Unlock()
+	if hostHWinVal.chip == "" {
+		hostHWinVal.chip = hwinfo.CPUModel()
+	}
+	if hostHWinVal.ram == 0 {
+		hostHWinVal.ram = hwinfo.RAMGB()
+	}
+	return hostHWinVal
+}
+
 // selfJSON is the wire form of GET /api/self — this machine's device profile
 // (C3): OS/architecture/CPU/memory probed via internal/hwinfo (the same
 // helpers `panda detect` uses, sunk into the internal layer), plus this
@@ -25,23 +60,32 @@ import (
 // the console can paint a soft banner when the updater has degraded to
 // idle after a 403 / rate limit GitHub API call, instead of silently
 // hiding it until the user clicks System).
+//
+// ReleaseDate is the release line's ship date ("2006-01-02"), empty on
+// ad-hoc builds: the profile page pairs it with the version and codename so
+// the build can say when it went out, not just what it is.
 type selfJSON struct {
-	Hostname     string       `json:"hostname"`
-	OS           string       `json:"os"`
-	Arch         string       `json:"arch"`
-	Chip         string       `json:"chip,omitempty"`
-	CPUCores     int          `json:"cpu_cores"`
-	RAMGB        int          `json:"ram_gb,omitempty"`
-	NodeName     string       `json:"node_name,omitempty"`
-	NodeID       string       `json:"node_id,omitempty"`
-	NodeKind     string       `json:"node_kind,omitempty"`
-	NodeIdentity string       `json:"node_identity,omitempty"`
-	NodeRunning  bool         `json:"node_running"`
-	Node         *nodeRow     `json:"node,omitempty"`
-	Version      string       `json:"version"`
-	Codename     string       `json:"codename,omitempty"`
-	Update       *updateSlice `json:"update,omitempty"`
-	Runtime      *runtimeJSON `json:"runtime,omitempty"`
+	Hostname     string `json:"hostname"`
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
+	Chip         string `json:"chip,omitempty"`
+	CPUCores     int    `json:"cpu_cores"`
+	RAMGB        int    `json:"ram_gb,omitempty"`
+	NodeName     string `json:"node_name,omitempty"`
+	NodeID       string `json:"node_id,omitempty"`
+	NodeKind     string `json:"node_kind,omitempty"`
+	NodeIdentity string `json:"node_identity,omitempty"`
+	NodeRunning  bool   `json:"node_running"`
+	// FormFactor is the box this console runs on, probed once per process.
+	// The workspace map draws its own device from /api/self even when the
+	// directory has not registered this node yet.
+	FormFactor  string       `json:"form_factor,omitempty"`
+	Node        *nodeRow     `json:"node,omitempty"`
+	Version     string       `json:"version"`
+	Codename    string       `json:"codename,omitempty"`
+	ReleaseDate string       `json:"release_date,omitempty"`
+	Update      *updateSlice `json:"update,omitempty"`
+	Runtime     *runtimeJSON `json:"runtime,omitempty"`
 }
 
 // runtimeJSON reports this (panel/web) process's Go runtime — the surface a
@@ -108,6 +152,20 @@ type nodeRow struct {
 	Ver       string `json:"ver,omitempty"`
 	RTTMs     int64  `json:"rtt_ms,omitempty"`
 	Transport string `json:"transport,omitempty"`
+	// OS / FormFactor: the system the node runs and the kind of box it is
+	// (laptop|desktop|mini|server|vm). Advertised by the node itself; empty
+	// on a peer that predates the fields. The workspace topology draws its
+	// device glyph from these.
+	OS         string `json:"os,omitempty"`
+	FormFactor string `json:"form_factor,omitempty"`
+	// Neighbors / LinkMetrics / LinkKinds are this row's link-state
+	// advertisement: the peers it holds a live connection to, plus the
+	// measured RTT and transport for those edges. The workspace topology
+	// draws an edge per entry, which is what makes the map a mesh rather
+	// than a star around this console.
+	Neighbors   []string          `json:"neighbors,omitempty"`
+	LinkMetrics map[string]int64  `json:"link_metrics,omitempty"`
+	LinkKinds   map[string]string `json:"link_kinds,omitempty"`
 	// Trust is the operator-pinned trust-zone tier (experimental): empty or
 	// "mesh" is the pre-feature fleet default; guarded/open mark a zoned
 	// peer so the console can show the boundary it runs under.
@@ -126,15 +184,18 @@ type nodeAgentDetail struct {
 // ledger knows this node (matched by the configured node name), its
 // capability-card summary.
 func (h *handler) getSelf(w http.ResponseWriter, r *http.Request) {
+	hw := hostHardware()
 	out := selfJSON{
-		Hostname: hwinfo.Hostname(),
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Chip:     hwinfo.CPUModel(),
-		CPUCores: runtime.NumCPU(),
-		RAMGB:    hwinfo.RAMGB(),
-		Version:  version.Version,
-		Codename: version.Codename,
+		Hostname:    hwinfo.Hostname(),
+		OS:          runtime.GOOS,
+		Arch:        runtime.GOARCH,
+		Chip:        hw.chip,
+		CPUCores:    runtime.NumCPU(),
+		RAMGB:       hw.ram,
+		FormFactor:  hwinfo.FormFactor(),
+		Version:     version.Version,
+		Codename:    version.Codename,
+		ReleaseDate: version.ReleaseDate,
 	}
 	{
 		var m runtime.MemStats
@@ -210,6 +271,11 @@ func toNodeRow(n ledger.Node) nodeRow {
 		Capacity:      n.Capacity,
 		Ver:           n.Ver,
 		Trust:         n.Trust,
+		OS:            n.OS,
+		FormFactor:    n.FormFactor,
+		Neighbors:     n.Neighbors,
+		LinkMetrics:   n.LinkMetrics,
+		LinkKinds:     n.LinkKinds,
 	}
 	if n.LastSeen != 0 {
 		row.LastSeen = ts(n.LastSeen)

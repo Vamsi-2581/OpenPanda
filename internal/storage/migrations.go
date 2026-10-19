@@ -78,6 +78,13 @@ var migrations = []Migration{
 	{Version: 51, Name: "add_tasks_spawn_cap", Apply: migrateV51},
 	{Version: 52, Name: "add_tasks_scope_paths", Apply: migrateV52},
 	{Version: 53, Name: "add_tasks_isolate", Apply: migrateV53},
+	// v50 collided during the merge: this branch had already shipped
+	// add_employee_machine_class as 50 when upstream claimed 50-53 for the
+	// parallel-orchestration columns, so the machine facts move behind them.
+	// A store that ran the colliding build sits at user_version 50 with the
+	// machine columns present but spawn_depth missing — migrateV54 repairs
+	// that row too, since 50 will never run again on it.
+	{Version: 54, Name: "add_employee_machine_class", Apply: migrateV54},
 }
 
 // migrateV44 adds task_messages: the per-scope message board sibling tasks
@@ -1289,4 +1296,36 @@ func migrateV53(tx MigrationExec) error {
 		return err
 	}
 	return addColumnIfMissingTx(tx, "tasks", "isolate", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateV54 adds employee_cache.os and employee_cache.device_class: the two
+// machine facts the workspace topology draws with — which system a peer runs
+// (darwin/windows/linux) and what kind of box it is (laptop/desktop/mini/
+// server/vm). Neither is in the capability card: a card is a declaration the
+// operator can edit, while these are properties of the machine itself, filled
+// by the daemon at registration and carried in the hello summary. Rows that
+// predate this migration read as unknown until the peer speaks again.
+//
+// It also re-asserts tasks.spawn_depth. This branch briefly carried this
+// migration as version 50, and a store that ran that build recorded
+// user_version 50 without upstream's 50 ever running — so spawn_depth would
+// stay missing forever on exactly the boxes that upgraded through the
+// collision. Every statement here is idempotent, so a clean database that ran
+// 50-53 sees no change.
+func migrateV54(tx MigrationExec) error {
+	if exists, err := tableExistsTx(tx, "tasks"); err != nil {
+		return err
+	} else if exists {
+		if err := addColumnIfMissingTx(tx, "tasks", "spawn_depth", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	exists, err := tableExistsTx(tx, "employee_cache")
+	if err != nil || !exists {
+		return err
+	}
+	if err := addColumnIfMissingTx(tx, "employee_cache", "os", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "employee_cache", "device_class", "TEXT NOT NULL DEFAULT ''")
 }
