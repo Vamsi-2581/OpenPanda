@@ -60,6 +60,17 @@ type TaskInput struct {
 	Intent   string
 	SpecJSON string
 	Requires []string
+	// Paths declares the project-relative directories the task owns inside a
+	// shared worktree — a delegate child's scope claim. Non-empty turns the
+	// monolithic project lock into leaf keys so siblings on disjoint paths
+	// run in parallel; empty keeps the whole-project serialization.
+	Paths []string
+	// Isolate gives a delegate child a private copy of the project tree (a
+	// git worktree when the project is a repository) instead of the shared
+	// one: nothing shared is locked, any number of isolated siblings run
+	// concurrently, and the child's changes merge back into the project tree
+	// when it finishes. Ignored for tasks without a project.
+	Isolate bool
 	// PreferredNode is a soft routing hint: the scorer's user-priority term
 	// and RouteAtP's capable-match shortcut both weigh it, but an incapable
 	// or unavailable node simply loses — the task still lands somewhere.
@@ -336,6 +347,8 @@ func (c *Core) Submit(ctx context.Context, in TaskInput) (Task, bus.TaskResultPa
 			Intent:        in.Intent,
 			SpecJSON:      in.SpecJSON,
 			Requires:      in.Requires,
+			Paths:         in.Paths,
+			Isolate:       in.Isolate,
 			Chain:         chain,
 			PreferredNode: in.PreferredNode,
 			TargetNode:    in.TargetNode,
@@ -522,6 +535,26 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 		}
 		t.WorkDir = in.WorkDir
 	}
+	// A scope/isolation declaration rides the input for every path that
+	// creates a row here (Submit, Enqueue); the run reads the ROW flags, so
+	// persisting them at creation is what keeps a narrowed lock claim from
+	// pairing with the un-narrowed behavior. Children spawned through
+	// SpawnChildTask stamp the same columns on their own branch; remote
+	// accepts adopt them from the wire.
+	if in.Project != "" {
+		if paths := normalizeScopePaths(in.Paths); len(paths) > 0 {
+			if err := c.store.SetScopePaths(ctx, t.TaskID, paths); err != nil {
+				return fail(fmt.Errorf("set scope paths: %w", err))
+			}
+			t.ScopePaths = paths
+		}
+		if in.Isolate {
+			if err := c.store.SetIsolate(ctx, t.TaskID, true); err != nil {
+				return fail(fmt.Errorf("set isolate: %w", err))
+			}
+			t.Isolate = true
+		}
+	}
 	hash, level, err := c.packContext(ctx, in)
 	if err != nil {
 		return fail(fmt.Errorf("pack context: %w", err))
@@ -625,6 +658,20 @@ func (c *Core) resumeApproved(ctx context.Context, taskID string, relayUpstream 
 		if cur.ResultJSON != "" {
 			if err := json.Unmarshal([]byte(cur.ResultJSON), &result); err != nil {
 				return cur, bus.TaskResultPayload{}, fmt.Errorf("approve: decode stored result: %w", err)
+			}
+		}
+		// An isolated child parked for review keeps its workspace untouched:
+		// approving its work is the decision that lets those changes land on
+		// the shared tree — merge here, since this path bypasses run()'s
+		// terminal merge. On a node that never held the workspace the merge
+		// is a no-op; the executor's own accept (mirrored downstream) is the
+		// one that lands it.
+		if cur.Isolate && cur.Project != "" && cur.PlanID == "" {
+			if note := c.mergeIsolatedRun(ctx, cur); note != "" {
+				if result.Stdout != "" {
+					result.Stdout += "\n"
+				}
+				result.Stdout += note
 			}
 		}
 		if err := c.store.Approve(ctx, taskID); err != nil {

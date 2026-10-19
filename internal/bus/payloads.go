@@ -165,18 +165,30 @@ type Contact struct {
 //     context (no snapshot transfer).
 //   - context_level "full": context_data carries the inline snapshot (base64).
 type TaskDelegatePayload struct {
-	TaskID        string   `json:"task_id"`
-	ParentID      string   `json:"parent_id,omitempty"`
-	Project       string   `json:"project,omitempty"`
-	Title         string   `json:"title,omitempty"`
-	ContextType   string   `json:"context_type,omitempty"`
-	ContextHash   string   `json:"context_hash,omitempty"`
-	ContextLevel  string   `json:"context_level,omitempty"` // pointer|summary|full
-	ContextData   []byte   `json:"context_data,omitempty"`  // inline full snapshot
-	Intent        string   `json:"intent"`
-	SpecJSON      string   `json:"spec_json,omitempty"`
-	Requires      []string `json:"requires,omitempty"`
-	PreferredNode string   `json:"preferred_node,omitempty"` // soft routing hint; honored when it matches
+	TaskID       string   `json:"task_id"`
+	ParentID     string   `json:"parent_id,omitempty"`
+	Project      string   `json:"project,omitempty"`
+	Title        string   `json:"title,omitempty"`
+	ContextType  string   `json:"context_type,omitempty"`
+	ContextHash  string   `json:"context_hash,omitempty"`
+	ContextLevel string   `json:"context_level,omitempty"` // pointer|summary|full
+	ContextData  []byte   `json:"context_data,omitempty"`  // inline full snapshot
+	Intent       string   `json:"intent"`
+	SpecJSON     string   `json:"spec_json,omitempty"`
+	Requires     []string `json:"requires,omitempty"`
+	// Paths is the child's declared project scope — the subtrees it owns
+	// inside a shared worktree. It rides the wire so the receiving node
+	// derives the same scope leaf locks the origin used: same-node siblings
+	// with disjoint claims parallelize, overlapping ones serialize, and an
+	// empty claim keeps the whole-project lock on every hop.
+	Paths []string `json:"paths,omitempty"`
+	// Isolate gives the child a private copy of the project tree on the
+	// executing node (git worktree when available) instead of the shared
+	// one; the child locks nothing shared and its changes merge back into
+	// that node's project tree when it finishes. Carried so every hop and
+	// requeue preserves the mode the origin's agent chose.
+	Isolate       bool   `json:"isolate,omitempty"`
+	PreferredNode string `json:"preferred_node,omitempty"` // soft routing hint; honored when it matches
 	// TargetNode is the hard pin: the receiving node executes when the pin
 	// resolves to itself, forwards toward it when it resolves onward, and
 	// declines honestly when it resolves nowhere. It is the resolved row id

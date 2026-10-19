@@ -258,7 +258,8 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var scheduled int
 	var remote int
 	var screenOut int
-	var planID, stageID, needsJSON, inputsJSON, outputArt sql.NullString
+	var isolated int
+	var planID, stageID, needsJSON, inputsJSON, outputArt, scopePathsJSON sql.NullString
 	if err := row.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
 		&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
 		&result, &contextType, &contextHash, &complexity, &risk, &resource,
@@ -268,9 +269,10 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
 		&agentSession, &agentSessionNode, &agentSessionAdapter, &t.AuthSig, &t.AuthPub, &t.AuthTs,
-		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap); err != nil {
+		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap, &scopePathsJSON, &isolated); err != nil {
 		return Task{}, err
 	}
+	t.Isolate = isolated != 0
 	decode := func(col, raw string, v any) {
 		if raw == "" {
 			return
@@ -282,6 +284,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	decode("chain_json", chainJSON, &t.Chain)
 	decode("requires_json", requiresJSON.String, &t.Requires)
 	decode("resource_keys_json", resourceKeysJSON.String, &t.ResourceKeys)
+	decode("scope_paths_json", scopePathsJSON.String, &t.ScopePaths)
 	decode("needs_json", needsJSON.String, &t.Needs)
 	decode("input_artifacts_json", inputsJSON.String, &t.Inputs)
 	t.Intent = intent.String
@@ -1600,6 +1603,44 @@ func (s *TaskStore) SetSpawnCap(ctx context.Context, taskID string, cap int) err
 	return nil
 }
 
+// SetIsolate persists the isolated-execution mode of a delegated child:
+// true keeps every later run (requeue, resume, restart) on a private copy of
+// the project tree with nothing shared locked. Stamped at spawn from the
+// delegate request and adopted at delegate-accept from the payload.
+func (s *TaskStore) SetIsolate(ctx context.Context, taskID string, isolate bool) error {
+	v := 0
+	if isolate {
+		v = 1
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET isolate=?, updated_at=? WHERE task_id=?`,
+		v, s.now(), taskID); err != nil {
+		return fmt.Errorf("set isolate: %w", err)
+	}
+	return nil
+}
+
+// SetScopePaths persists the project-relative directories a delegated child
+// declared it owns. Stamped at spawn from the delegate request and adopted at
+// delegate-accept from the payload, so a later requeue/forward re-derives the
+// same scope leaf locks instead of widening the claim to the whole project.
+func (s *TaskStore) SetScopePaths(ctx context.Context, taskID string, paths []string) error {
+	raw := ""
+	if len(paths) > 0 {
+		b, err := json.Marshal(paths)
+		if err != nil {
+			return fmt.Errorf("marshal scope paths: %w", err)
+		}
+		raw = string(b)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET scope_paths_json=?, updated_at=? WHERE task_id=?`,
+		raw, s.now(), taskID); err != nil {
+		return fmt.Errorf("set scope paths: %w", err)
+	}
+	return nil
+}
+
 // SetDelegationBudget persists the remaining mesh-wide delegation budget the
 // task carries (whitepaper §6.1). Stamped on creation — locally at submit,
 // remotely when a delegate envelope adopts the payload's budget — so a
@@ -1762,6 +1803,24 @@ func (s *TaskStore) SetQueueMeta(ctx context.Context, taskID string, priority in
 		priority, sessionID, workDir, string(keysJSON), s.now(), taskID)
 	if err != nil {
 		return fmt.Errorf("set queue meta: %w", err)
+	}
+	return nil
+}
+
+// SetResourceKeys persists a task's queue/exec resource keys without the
+// scheduled flag SetQueueMeta carries. It exists for delegated rows whose
+// lock set is derived at accept time (a scoped child's leaf keys) — those
+// rows are already dispatched and must not be marked queue-owned.
+func (s *TaskStore) SetResourceKeys(ctx context.Context, taskID string, resourceKeys []string) error {
+	keysJSON, err := json.Marshal(resourceKeys)
+	if err != nil {
+		return fmt.Errorf("marshal resource keys: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE tasks SET resource_keys_json=?, updated_at=? WHERE task_id=?`,
+		string(keysJSON), s.now(), taskID)
+	if err != nil {
+		return fmt.Errorf("set resource keys: %w", err)
 	}
 	return nil
 }
@@ -3099,7 +3158,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, exec_work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap`
+	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap, scope_paths_json, isolate`
 
 func (s *TaskStore) scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task

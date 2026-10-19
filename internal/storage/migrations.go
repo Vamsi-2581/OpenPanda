@@ -76,6 +76,8 @@ var migrations = []Migration{
 	{Version: 49, Name: "add_exec_locks_run_id", Apply: migrateV49},
 	{Version: 50, Name: "add_tasks_spawn_depth", Apply: migrateV50},
 	{Version: 51, Name: "add_tasks_spawn_cap", Apply: migrateV51},
+	{Version: 52, Name: "add_tasks_scope_paths", Apply: migrateV52},
+	{Version: 53, Name: "add_tasks_isolate", Apply: migrateV53},
 }
 
 // migrateV44 adds task_messages: the per-scope message board sibling tasks
@@ -1259,4 +1261,32 @@ func migrateV51(tx MigrationExec) error {
 		return err
 	}
 	return addColumnIfMissingTx(tx, "tasks", "spawn_cap", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateV52 adds tasks.scope_paths_json: the project-relative directories a
+// delegated child declared it owns (the PANDA_DELEGATE paths claim). The
+// derived scope leaf locks already persist in resource_keys_json, but the
+// declaration itself must survive too: a queued child forwarded to another
+// node rebuilds its payload from the row, and without the paths the receiver
+// would fall back to the whole-project lock — silently serializing work the
+// origin had explicitly partitioned.
+func migrateV52(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "scope_paths_json", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV53 adds tasks.isolate: a delegated child's isolated-execution mode
+// (private copy of the project tree, nothing shared locked, changes merged
+// back on completion). The flag must survive requeues, forwards and restarts
+// — a row that lost it would re-run against the shared tree while its lock
+// set still protects nothing.
+func migrateV53(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "isolate", "INTEGER NOT NULL DEFAULT 0")
 }

@@ -27,6 +27,33 @@ func TestParseDelegateRequest(t *testing.T) {
 	}
 }
 
+// TestParseDelegateRequestPaths pins the scope claim field: a marker may
+// declare the project-relative paths the child owns, and the parsed request
+// carries them for the key derivation.
+func TestParseDelegateRequestPaths(t *testing.T) {
+	out := `PANDA_DELEGATE {"intent":"refactor api","paths":["pkg/api","web/src"],"title":"api"}`
+	drs, _ := parseDelegateRequests(out)
+	if len(drs) != 1 {
+		t.Fatalf("marker not parsed: %d", len(drs))
+	}
+	if got := drs[0].Paths; len(got) != 2 || got[0] != "pkg/api" || got[1] != "web/src" {
+		t.Fatalf("paths = %v", got)
+	}
+}
+
+// TestParseDelegateRequestIsolate pins the isolation flag: a marker may ask
+// for a private-copy run, and the parsed request carries it to dispatch.
+func TestParseDelegateRequestIsolate(t *testing.T) {
+	out := `PANDA_DELEGATE {"intent":"rewrite the renderer","isolate":true,"title":"renderer"}`
+	drs, _ := parseDelegateRequests(out)
+	if len(drs) != 1 {
+		t.Fatalf("marker not parsed: %d", len(drs))
+	}
+	if !drs[0].Isolate {
+		t.Fatal("isolate flag not parsed")
+	}
+}
+
 func TestParseDelegateRequestMalformedKept(t *testing.T) {
 	out := "start\nPANDA_DELEGATE {not json}\nend"
 	drs, kept := parseDelegateRequests(out)

@@ -22,7 +22,9 @@ import (
 // physical actuator — a delegated actuator task carries no queue keys at all,
 // and the device must still exclude every other driver.
 func TestExecLockKeys(t *testing.T) {
-	if got := execLockKeys(Task{Project: "p"}, "hardware:servo"); !slices.Equal(got, []string{"project:p", "hardware:servo"}) {
+	// A project task holds the legacy project key plus the scope root — the
+	// root is what conflicts with scoped children (scope:p/<path> leaves).
+	if got := execLockKeys(Task{Project: "p"}, "hardware:servo"); !slices.Equal(got, []string{"project:p", "scope:p", "hardware:servo"}) {
 		t.Fatalf("project+actuator keys = %v", got)
 	}
 	if got := execLockKeys(Task{ResourceKeys: []string{"plan:1:a", "hardware:servo"}}, "hardware:servo"); !slices.Equal(got, []string{"plan:1:a", "hardware:servo"}) {
@@ -144,7 +146,7 @@ func TestExecDanceReleaseReacquire(t *testing.T) {
 	}
 	full := execLockKeys(tk, "hardware:servo")
 	dance := queue.DefaultKeys(tk.ResourceKeys, tk.Project, tk.WorkDir, tk.TaskID)
-	if !slices.Equal(full, []string{"project:proj", "hardware:servo"}) || !slices.Equal(dance, []string{"project:proj"}) {
+	if !slices.Equal(full, []string{"project:proj", "scope:proj", "hardware:servo"}) || !slices.Equal(dance, []string{"project:proj", "scope:proj"}) {
 		t.Fatalf("setup keys: full=%v dance=%v", full, dance)
 	}
 

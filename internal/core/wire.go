@@ -273,6 +273,8 @@ func (c *Core) rerouteDeclined(ctx context.Context, taskID string) bool {
 		Intent:       t.Intent,
 		SpecJSON:     t.SpecJSON,
 		Requires:     t.Requires,
+		Paths:        t.ScopePaths,
+		Isolate:      t.Isolate,
 		Complexity:   t.Complexity,
 		Risk:         t.Risk,
 		ResourceJSON: t.ResourceJSON,

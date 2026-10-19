@@ -114,7 +114,10 @@ func TestSortReadyPolicy(t *testing.T) {
 }
 
 func TestDefaultKeys(t *testing.T) {
-	if got := DefaultKeys(nil, "panda", "", "t1"); len(got) != 1 || got[0] != "project:panda" {
+	// A project task holds the legacy project key plus the scope root: the
+	// root is what excludes scoped children (scope:panda/<path> leaves),
+	// while the legacy key keeps pre-scope rows serializing as before.
+	if got := DefaultKeys(nil, "panda", "", "t1"); len(got) != 2 || got[0] != "project:panda" || got[1] != "scope:panda" {
 		t.Fatalf("project default = %v", got)
 	}
 	// An anonymous task locks only itself: two anonymous tasks run in

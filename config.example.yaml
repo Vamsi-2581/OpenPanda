@@ -330,6 +330,22 @@ injection:
 # Sub-agent delegation limits. A parent agent may decompose its work into
 # child tasks that run in parallel and report back through the shared message
 # board; these knobs bound how wide and how deep that fan-out may grow.
+#
+# Same-node parallelism inside ONE project, two modes, both declared by the
+# delegating agent (no config knob):
+#   paths   — the child names the project-relative directories it owns and
+#             locks only those scopes: disjoint siblings run SIMULTANEOUSLY
+#             in the shared worktree; overlapping or undeclared claims
+#             serialize on the project lock exactly as before.
+#   isolate — the child gets a private copy of the project tree (a git
+#             worktree when the project is a repository, populated from HEAD
+#             plus the working tree's uncommitted changes): it locks nothing
+#             shared, runs fully parallel with everything, and its changes
+#             merge back into the project tree when it finishes. The merge
+#             is a three-way (fork baseline / project tree / child tree) —
+#             paths only the child touched apply cleanly, paths both sides
+#             changed are reported as conflicts and keep the project's
+#             bytes, and the workspace is kept for inspection on conflict.
 # delegation:
 #   enabled: true              # false forbids agent-driven sub-agent spawning
 #                              # on this node outright (delegate markers get a
