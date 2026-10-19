@@ -553,11 +553,14 @@ export function formatTaskEvent(type: string, rawData?: string): FormattedEvent 
       }
     }
     case 'context_overflow': {
+      // action=compact_retry is recovery in progress (info); action=parked
+      // or a bare event is the terminal state a human must resolve (warn).
+      const action = str(data?.action)
       return {
         type,
         label: t('events.context_overflow'),
-        badgeClass: 'warn',
-        summary: str(data?.note) || str(data?.reason) || undefined,
+        badgeClass: action === 'compact_retry' ? 'info' : 'warn',
+        summary: str(data?.note) || str(data?.reason) || (action === 'compact_retry' ? 'compact retry' : undefined),
         tags,
         rawJson,
       }

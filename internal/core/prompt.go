@@ -105,14 +105,77 @@ func taskSpecEnvelope(specJSON string) string {
 // agentPromptBudget is the soft cap (bytes) on the assembled agent prompt.
 // The budget exists because the prompt is composed of unbounded parts
 // (matched skill bodies, the memory manifest) and no adapter can see an
-// agent's context window from here; overflowing the window fails the run
-// deterministically (ContextOverflow parks it). When the budget is tight the
+// agent's context window from here; overflowing the window retries once on a
+// compressed prompt (compactRunNotes + overflowPromptBudget) and then parks
+// deterministically (ContextOverflow). When the budget is tight the
 // skills section degrades first — full bodies shrink to index lines — while
 // the intent and the memory manifest are kept whole: the degradation order
 // is intent > memory manifest > skill index > skill body. Set to 128KB so
 // multi-byte UTF-8 (e.g. Chinese text) has ample headroom without prematurely
 // degrading skills into index lines.
 const agentPromptBudget = 128000
+
+// overflowPromptBudget is the prompt cap a context-overflow retry runs
+// under: a quarter of the normal budget pushes every matched skill to its
+// index line, so the retry only overflows again when the intent or manifest
+// alone exceeds the agent's window.
+const overflowPromptBudget = agentPromptBudget / 4
+
+// compactRunNotes folds a run's accumulated intent extras (delegated-child
+// results, board posts, supervisor follow-ups) into one digest for a
+// context-overflow retry — they are the bulk of a long-running prompt, and
+// the task spec itself stays verbatim in the base intent either way. The
+// supervisor model writes the digest; without one the oldest notes drop and
+// the tail is hard-capped — losing detail, never correctness.
+func (c *Core) compactRunNotes(ctx context.Context, notes []string) []string {
+	if len(notes) == 0 {
+		return notes
+	}
+	joined := strings.Join(notes, "\n\n")
+	// The notes are already the thing that overflowed a window — feeding the
+	// supervisor the whole pile would fail the same way. The newest tail is
+	// what the digest needs; cut on a note boundary when possible.
+	if len(joined) > 96000 {
+		joined = joined[len(joined)-96000:]
+		if i := strings.IndexByte(joined, '\n'); i >= 0 {
+			joined = joined[i+1:]
+		}
+	}
+	if c.supervisor != nil {
+		sctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		digest, err := c.supervisor.Complete(sctx,
+			"You compress task-run context for an agent whose prompt overflowed "+
+				"its context window. The notes accumulate across execution rounds: "+
+				"delegated-child results, sibling-board posts, supervisor follow-ups. "+
+				"Write one brief the agent can continue from: keep decisions, file "+
+				"paths, results still awaited, and open questions; drop dead-ends "+
+				"already resolved. Under 300 words. Output only the brief.",
+			"<notes>\n"+joined+"\n</notes>")
+		cancel()
+		if err == nil {
+			if d := strings.TrimSpace(digest); d != "" {
+				return []string{"[earlier run context, compressed]\n" + d}
+			}
+		}
+		if c.logger != nil {
+			c.logger.Warn("context-overflow note compression failed, truncating", "err", err)
+		}
+	}
+	// No model to compress with: keep the newest notes inside a hard cap —
+	// the freshest context is the most likely to still matter.
+	const keepBytes = 12000
+	out := notes
+	for total := 0; ; {
+		total = 0
+		for _, n := range out {
+			total += len(n)
+		}
+		if total <= keepBytes || len(out) <= 1 {
+			return out
+		}
+		out = out[1:]
+	}
+}
 
 // outputLangName renders a locale as the language name an agent recognizes
 // ("English", "简体中文"…), in the instruction language zh or en.
@@ -182,9 +245,13 @@ Execution contract:
 // skills (design §8.5) — and returns the skills that were actually loaded, so
 // the caller can record their use. Skill matching keys off the short title,
 // not the full intent, so a long instruction does not over-match on common
-// words. The assembly stays under agentPromptBudget by degrading skills to
-// index lines when the budget is tight.
-func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i18n.Locale) (string, []*skills.Skill) {
+// words. The assembly stays under promptBudget (agentPromptBudget when it is
+// not positive) by degrading skills to index lines when the budget is tight;
+// a context-overflow retry passes the shrunken overflowPromptBudget.
+func buildAgentPrompt(c *Core, intent, project, title, workDir string, promptBudget int, loc ...i18n.Locale) (string, []*skills.Skill) {
+	if promptBudget <= 0 {
+		promptBudget = agentPromptBudget
+	}
 	promptLang := i18n.ChineseSimp
 	outputLang := i18n.ChineseSimp
 	if len(loc) == 1 && loc[0] != "" {
@@ -228,7 +295,7 @@ func buildAgentPrompt(c *Core, intent, project, title, workDir string, loc ...i1
 	// The intent, the manifest and the output rider are non-negotiable; only
 	// the skills section degrades. A negative remainder (a huge intent) still
 	// runs — withSkills treats it as "no room for skill bodies".
-	budget := agentPromptBudget - len(intent) - len(manifest) - len(rider) - frame.Len()
+	budget := promptBudget - len(intent) - len(manifest) - len(rider) - frame.Len()
 	prompt, used := withSkills(c, intent, project, title, budget, promptLang)
 	if manifest != "" {
 		prompt = manifest + "\n\n" + prompt

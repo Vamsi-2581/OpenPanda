@@ -82,15 +82,34 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 	if len(requires) == 0 {
 		requires = defaultBoardRequires
 	}
+	// The parallel-mode fields carry the same contract the CLI flags do:
+	// they only mean something with a project to scope, and scope lanes and
+	// the private copy are mutually exclusive (the copy ignores paths
+	// entirely). Reject rather than silently degrade — a submitted lane the
+	// row never honors is the worse failure.
+	trimmedPaths := req.ScopePaths[:0]
+	for _, p := range req.ScopePaths {
+		if p = strings.TrimSpace(p); p != "" {
+			trimmedPaths = append(trimmedPaths, p)
+		}
+	}
+	if (len(trimmedPaths) > 0 || req.Isolate) && strings.TrimSpace(req.Project) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("scope_paths/isolate require a project"))
+		return
+	}
+	if len(trimmedPaths) > 0 && req.Isolate {
+		writeErr(w, http.StatusBadRequest, errors.New("scope_paths and isolate are mutually exclusive"))
+		return
+	}
 
 	in := core.TaskInput{
 		Title:         req.Title,
-		Project:       req.Project,
+		Project:       strings.TrimSpace(req.Project),
 		Intent:        req.Prompt,
 		Requires:      requires,
 		Authorized:    req.Authorize,
 		PreferredNode: req.Node,
-		Paths:         req.ScopePaths,
+		Paths:         trimmedPaths,
 		Isolate:       req.Isolate,
 	}
 	q := core.DefaultQueueSpec()

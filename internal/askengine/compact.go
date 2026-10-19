@@ -22,6 +22,18 @@ import (
 // REPL/TUI prompt loop.
 const compactTimeout = 60 * time.Second
 
+// ContextWindow returns the serving model's advertised context window in
+// tokens, or 0 when it is unknown (no reachable client, or a model the
+// catalogue does not size). Callers scale prompt-side budgets — like the
+// history replay window — to it.
+func (e *Engine) ContextWindow() int {
+	client, _ := e.healthyClient()
+	if client == nil {
+		return 0
+	}
+	return client.ContextWindow()
+}
+
 // SummarizeTurns compresses evicted history into a running digest. evicted
 // may begin with the previous digest's synthetic turn; the model is asked
 // to fold it forward so the result replaces it, not appends to it. Returns

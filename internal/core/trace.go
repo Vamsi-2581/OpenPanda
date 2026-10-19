@@ -30,7 +30,7 @@ const (
 	EvPlanStageChanged = "plan_stage_changed" // plan stage unlock/start/complete → plan_id/stage_id/transition
 	EvArtifactTransfer = "artifact_transfer"  // artifact fetch → from/to/hash/size/ok/elapsed
 	EvAgentUsage       = "agent_usage"        // adapter's structured token breakdown → agent/input/output/cache_*
-	EvContextOverflow  = "context_overflow"   // agent failed on its context window → parked in review, retry cannot help
+	EvContextOverflow  = "context_overflow"   // agent failed on its context window → action=compact_retry re-runs on a shrunken prompt + fresh session; action=parked means even that could not fit → review
 	EvSubagentEvent    = "subagent_event"     // agent spawned a sub-agent (Claude Task tool) → note
 	// EvAgentEvent records one structured activity block the adapter
 	// streamed back ({"type":"event"} NDJSON): assistant text, thinking,

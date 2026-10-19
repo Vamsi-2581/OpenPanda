@@ -582,7 +582,8 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// so replaying the persisted copy too would send two consecutive user
 	// messages — a 400 from strict providers.
 	var history []entry.Turn
-	if updated, err := h.sessions.CompactHistory(r.Context(), sess.ID, sessions.DefaultHistoryBudget,
+	budget := sessions.ReplayBudget(eng.ContextWindow())
+	if updated, err := h.sessions.CompactHistory(r.Context(), sess.ID, budget,
 		func(ctx context.Context, evicted []sessions.Turn) (string, error) {
 			turns := make([]entry.Turn, 0, len(evicted))
 			for _, t := range evicted {
@@ -598,7 +599,7 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// The replay stays budget-bounded even when compaction could not run
 	// (summarize failed or thread fits): the stored thread keeps every turn,
 	// only the model's view is trimmed to the tail that fits.
-	_, kept := sessions.SplitForBudget(sess.Turns, sessions.DefaultHistoryBudget)
+	_, kept := sessions.SplitForBudget(sess.Turns, budget)
 	for _, t := range kept {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}

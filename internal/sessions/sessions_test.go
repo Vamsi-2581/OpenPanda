@@ -574,3 +574,28 @@ func TestInvalidIDsRejected(t *testing.T) {
 		t.Fatalf("traversal delete removed a file outside the store root: %v", err)
 	}
 }
+
+// TestReplayBudget pins the derivation: the window scales the replay budget
+// with a conservative chars-per-token estimate, floors so a couple of
+// exchanges always fit, caps so a huge advertised window cannot buy an
+// unbounded replay, and falls back to the historical default when the model
+// says nothing.
+func TestReplayBudget(t *testing.T) {
+	for _, tc := range []struct {
+		window int
+		want   int
+	}{
+		{0, DefaultHistoryBudget},
+		{-1, DefaultHistoryBudget},
+		{8192, minReplayBudget},  // tiny window: floor still applies
+		{32000, minReplayBudget}, // 6000 derived → floor
+		{64000, 12000},
+		{128000, DefaultHistoryBudget}, // 128K lands exactly on the old default
+		{200000, 37500},
+		{1048576, maxReplayBudget}, // 1M window: capped
+	} {
+		if got := ReplayBudget(tc.window); got != tc.want {
+			t.Errorf("ReplayBudget(%d) = %d, want %d", tc.window, got, tc.want)
+		}
+	}
+}

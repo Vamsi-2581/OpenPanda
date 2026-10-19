@@ -245,6 +245,38 @@ func TestCreateTaskEnqueuesWithSession(t *testing.T) {
 	}
 }
 
+// TestCreateTaskScopeValidation locks the parallel-mode contract on the board's
+// create path: scope lanes and the isolated copy need a project to mean
+// anything, and they are mutually exclusive — the same rules the CLI flags
+// enforce. The API must refuse rather than let a declared lane silently
+// degrade into a whole-project claim.
+func TestCreateTaskScopeValidation(t *testing.T) {
+	engine := newQueueEngine(t)
+	store := newTestStore(t)
+	h := New(Deps{Store: store, Engine: engine, StaticDir: t.TempDir(), Token: testToken})
+
+	post := func(body string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, authedReq(http.MethodPost, "/api/tasks", strings.NewReader(body)))
+		return rr
+	}
+	if rr := post(`{"title":"t","scope_paths":["internal/api"]}`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("scope without project: %d", rr.Code)
+	}
+	if rr := post(`{"title":"t","isolate":true}`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("isolate without project: %d", rr.Code)
+	}
+	if rr := post(`{"title":"t","project":"p","scope_paths":["a"],"isolate":true}`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("scope+isolate: %d", rr.Code)
+	}
+	// A scoped task with a project is accepted and the declaration lands on
+	// the row (blank entries are trimmed away, not counted).
+	rr := post(`{"title":"t","project":"p","scope_paths":[" a "," "]}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("scoped task: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 // TestPatchTaskPriority verifies quick priority setting from the board card.
 func TestPatchTaskPriority(t *testing.T) {
 	store := newTestStore(t)

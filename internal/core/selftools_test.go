@@ -25,7 +25,7 @@ func TestAgentPromptSelfToolsHint(t *testing.T) {
 
 	// No router at all: nothing to hint at.
 	c := &Core{}
-	prompt, _ := buildAgentPrompt(c, "do it", "", "t", "", i18n.English)
+	prompt, _ := buildAgentPrompt(c, "do it", "", "t", "", 0, i18n.English)
 	if strings.Contains(prompt, marker) {
 		t.Fatalf("router-less core must not emit the self-tools hint")
 	}
@@ -43,7 +43,7 @@ func TestAgentPromptSelfToolsHint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := &Core{router: extendedRouter(tc.routing)}
-		prompt, _ := buildAgentPrompt(c, "do it", "", "t", "", i18n.English)
+		prompt, _ := buildAgentPrompt(c, "do it", "", "t", "", 0, i18n.English)
 		if got := strings.Contains(prompt, marker); got != tc.want {
 			t.Fatalf("%s: hint presence = %v, want %v", tc.name, got, tc.want)
 		}
