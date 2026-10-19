@@ -35,13 +35,6 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/sessions"
 )
 
-// maxConvoChars is the replay budget for the bare-mode conversation:
-// roughly the payload the entry prompt can carry without crowding out
-// the device list and memory wall. ~24k chars ≈ 12–20k tokens depending
-// on script mix — a couple dozen short exchanges or a handful of long
-// task reports.
-const maxConvoChars = 24000
-
 // sanitizeProjectName replaces characters that are unsafe in filenames while
 // preserving Unicode (e.g. CJK project names).
 func sanitizeProjectName(name string) string {
@@ -134,7 +127,7 @@ func loadConvo() []entry.Turn {
 	if json.Unmarshal(data, &f) != nil {
 		return nil
 	}
-	return trimConvo(f.Turns)
+	return trimConvo(f.Turns, convoBudget(nil))
 }
 
 // saveConvo persists the conversation (atomic-enough for CLI state: one
@@ -167,14 +160,29 @@ func clearConvo() {
 // defines for session threads.
 const convoSummaryMarker = sessions.SummaryMarker
 
+// convoBudget is the character budget the conversation window is managed
+// to: derived from the serving model's advertised context window when one
+// is known (sessions.ReplayBudget), DefaultHistoryBudget otherwise. Without
+// an engine the raw model config resolves it — catalogue lookup only, so a
+// node mid-startup (client not yet built) sizes the same way.
+func convoBudget(engine *askengine.Engine) int {
+	if engine != nil {
+		return sessions.ReplayBudget(engine.ContextWindow())
+	}
+	if cfg, err := config.Load(cliConfigPath); err == nil && cfg != nil {
+		return sessions.ReplayBudget(entry.ResolveContextWindow(cfg.Model))
+	}
+	return sessions.DefaultHistoryBudget
+}
+
 // trimConvo evicts whole exchanges from the head while the total size
 // exceeds the character budget. The newest exchange always survives.
-func trimConvo(turns []entry.Turn) []entry.Turn {
+func trimConvo(turns []entry.Turn, budget int) []entry.Turn {
 	total := 0
 	for _, t := range turns {
 		total += len(t.Content)
 	}
-	for total > maxConvoChars && len(turns) > 2 {
+	for total > budget && len(turns) > 2 {
 		drop := 2 // one user+assistant exchange
 		if len(turns)%2 == 1 {
 			drop = 1 // defensive: odd tail never happens, but stay aligned
@@ -193,19 +201,20 @@ func trimConvo(turns []entry.Turn) []entry.Turn {
 // turn. When the engine is nil or summarization fails it degrades to the
 // same hard trim as before — context is lost, never correctness.
 func compactConvo(turns []entry.Turn, engine *askengine.Engine) []entry.Turn {
+	budget := convoBudget(engine)
 	total := 0
 	for _, t := range turns {
 		total += len(t.Content)
 	}
-	if total <= maxConvoChars || len(turns) <= 2 {
+	if total <= budget || len(turns) <= 2 {
 		return turns
 	}
 	if engine == nil {
-		return trimConvo(turns)
+		return trimConvo(turns, budget)
 	}
 	var evicted []entry.Turn
 	kept := turns
-	for total > maxConvoChars && len(kept) > 2 {
+	for total > budget && len(kept) > 2 {
 		drop := 2
 		if len(kept)%2 == 1 {
 			drop = 1
@@ -218,7 +227,7 @@ func compactConvo(turns []entry.Turn, engine *askengine.Engine) []entry.Turn {
 	}
 	digest, err := engine.SummarizeTurns(context.Background(), evicted)
 	if err != nil || strings.TrimSpace(digest) == "" {
-		return trimConvo(turns)
+		return trimConvo(turns, budget)
 	}
 	head := entry.Turn{Role: "user", Content: convoSummaryMarker + "\n" + strings.TrimSpace(digest)}
 	return append([]entry.Turn{head}, kept...)
@@ -268,8 +277,9 @@ func summarizeSessionTurns(engine *askengine.Engine) func(context.Context, []ses
 // summarizer failed) the stored thread stays whole but only the tail that
 // fits is replayed — the same degradation the bare convo applies.
 func sessionHistory(ctx context.Context, store *sessions.Store, sess *sessions.Session, engine *askengine.Engine) (*sessions.Session, []entry.Turn) {
+	budget := convoBudget(engine)
 	if engine != nil {
-		if updated, err := store.CompactHistory(ctx, sess.ID, sessions.DefaultHistoryBudget, summarizeSessionTurns(engine)); err == nil {
+		if updated, err := store.CompactHistory(ctx, sess.ID, budget, summarizeSessionTurns(engine)); err == nil {
 			sess = updated
 		}
 	}
@@ -277,7 +287,7 @@ func sessionHistory(ctx context.Context, store *sessions.Store, sess *sessions.S
 	if sess.Summary != "" {
 		history = append(history, entry.Turn{Role: "user", Content: sessions.SummaryMarker + "\n" + sess.Summary})
 	}
-	_, kept := sessions.SplitForBudget(sess.Turns, sessions.DefaultHistoryBudget)
+	_, kept := sessions.SplitForBudget(sess.Turns, budget)
 	for _, t := range kept {
 		history = append(history, entry.Turn{Role: t.Role, Content: t.Text})
 	}

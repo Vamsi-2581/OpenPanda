@@ -941,14 +941,33 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		maxRounds = c.superviseRounds
 	}
 
-	currentIntent := intent + taskSpecEnvelope(task.SpecJSON)
+	baseIntent := intent + taskSpecEnvelope(task.SpecJSON)
 	if shadowConflicts != nil {
 		// The winner's bytes won on these paths: tell the resumed agent
 		// exactly which of its preempted edits died so it re-applies them
 		// deliberately instead of assuming the shadow restored everything.
-		currentIntent += "\n\n[system] this task was preempted and resumed from a shadow work copy; " +
+		baseIntent += "\n\n[system] this task was preempted and resumed from a shadow work copy; " +
 			"the files it edited that the preempting task also changed kept the OTHER version — " +
 			"re-apply your intended edits to: " + strings.Join(shadowConflicts, ", ")
+	}
+	// intentSteers/intentNotes accumulate what the rounds fold into the
+	// prompt on top of the task definition — a user directive leads (ahead
+	// of the spec), runtime notes trail in arrival order. They stay
+	// separate from baseIntent so a context-overflow retry can compress
+	// the accretion (compactRunNotes) without touching the spec itself.
+	var intentSteers, intentNotes []string
+	fullIntent := func() string {
+		var b strings.Builder
+		for _, s := range intentSteers {
+			b.WriteString(s)
+			b.WriteString("\n\n")
+		}
+		b.WriteString(baseIntent)
+		for _, n := range intentNotes {
+			b.WriteString("\n\n")
+			b.WriteString(n)
+		}
+		return b.String()
 	}
 	var res commander.Result
 	var usedSkills []*skills.Skill
@@ -1042,20 +1061,20 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// meaning "the answer was lost".
 		if len(pendingChildren) > 0 {
 			for _, note := range c.foldLateChildren(execCtx, &pendingChildren) {
-				currentIntent += "\n\n[delegated child result arrived]\n" + note
+				intentNotes = append(intentNotes, "[delegated child result arrived]\n"+note)
 			}
 		}
 		// Sibling board: posts from same-scope tasks (plan stages, a parent's
 		// children) land between rounds the same way late child results do —
 		// the agent reads them next round rather than blocking on them.
 		if lines := c.drainTaskMessages(execCtx, task, boardSeen); len(lines) > 0 {
-			currentIntent += "\n\n[sibling board]\n" + strings.Join(lines, "\n")
+			intentNotes = append(intentNotes, "[sibling board]\n"+strings.Join(lines, "\n"))
 		}
 		// User inject (steer.go): a message sent in "inject" mode leads this
 		// round's intent — ahead of the task spec and any folded notes — so
 		// the user's directive sets the course instead of reading as context.
 		if steer := c.takeSteer(execCtx, taskID, boardSeen); steer != "" {
-			currentIntent = "[user directive]\n" + steer + "\n\n" + currentIntent
+			intentSteers = append([]string{"[user directive]\n" + steer}, intentSteers...)
 		}
 		// The agent can spawn children itself (a CLI `task add
 		// --parent-id $PANDA_TASK_ID`), which the episode's opening snapshot
@@ -1156,35 +1175,42 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		promptLang := policy.RecommendedPromptLang()
 		outputLang := policy.RecommendedOutputLang()
 
-		prompt, skillsUsed := buildAgentPrompt(c, currentIntent, task.Project, task.Title, workDir, promptLang, outputLang)
-		usedSkills = skillsUsed
-		// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
-		// left learns the marker format — a task at delegation.max_depth
-		// gets no rope it cannot use.
-		if canSpawn {
-			prompt += i18n.T(promptLang, "prompt.delegate.hint")
+		// assemblePrompt builds this round's prompt; a context-overflow retry
+		// rebuilds it under the shrunken overflowPromptBudget so every matched
+		// skill degrades to its index line.
+		assemblePrompt := func(promptBudget int) string {
+			p, used := buildAgentPrompt(c, fullIntent(), task.Project, task.Title, workDir, promptBudget, promptLang, outputLang)
+			usedSkills = used
+			// §4.2 Sub-MainAgent protocol hint: only a task with depth budget
+			// left learns the marker format — a task at delegation.max_depth
+			// gets no rope it cannot use.
+			if canSpawn {
+				p += i18n.T(promptLang, "prompt.delegate.hint")
+			}
+			// The sibling-board protocol hint rides only when the task actually
+			// shares a scope — a standalone task has nobody to post to, so the
+			// hint would be prompt noise. A parent with live children is the
+			// exception: it hosts their task:<self> board and can address
+			// "children", so orchestrating parents learn the protocol too.
+			if messageScope(task) != "" || len(pendingChildren) > 0 {
+				p += i18n.T(promptLang, "prompt.msgboard.hint")
+			}
+			// A scoped task must hear the lane it claims at the prompt level —
+			// the lock table only keeps OTHER tasks out; nothing inside the run
+			// tells the agent which subtree is its own. Delegate children carry
+			// this in their intent already (skip them); a manually queued
+			// `task add --paths` row does not, and neither do reruns whose intent
+			// was rewritten.
+			if !task.Isolate && len(task.ScopePaths) > 0 && !strings.Contains(task.Intent, "[scope]") {
+				p += "\n\n[scope] you own paths: " + strings.Join(task.ScopePaths, ", ") +
+					" — write only inside your own scope; sibling tasks may own other paths in this tree."
+			}
+			if task.Isolate && task.Project != "" && !strings.Contains(task.Intent, "[isolated]") {
+				p += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
+			}
+			return p
 		}
-		// The sibling-board protocol hint rides only when the task actually
-		// shares a scope — a standalone task has nobody to post to, so the
-		// hint would be prompt noise. A parent with live children is the
-		// exception: it hosts their task:<self> board and can address
-		// "children", so orchestrating parents learn the protocol too.
-		if messageScope(task) != "" || len(pendingChildren) > 0 {
-			prompt += i18n.T(promptLang, "prompt.msgboard.hint")
-		}
-		// A scoped task must hear the lane it claims at the prompt level —
-		// the lock table only keeps OTHER tasks out; nothing inside the run
-		// tells the agent which subtree is its own. Delegate children carry
-		// this in their intent already (skip them); a manually queued
-		// `task add --paths` row does not, and neither do reruns whose intent
-		// was rewritten.
-		if !task.Isolate && len(task.ScopePaths) > 0 && !strings.Contains(task.Intent, "[scope]") {
-			prompt += "\n\n[scope] you own paths: " + strings.Join(task.ScopePaths, ", ") +
-				" — write only inside your own scope; sibling tasks may own other paths in this tree."
-		}
-		if task.Isolate && task.Project != "" && !strings.Contains(task.Intent, "[isolated]") {
-			prompt += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
-		}
+		prompt := assemblePrompt(0)
 
 		// A task stamped remote at intake carries off-node intent: commander
 		// holds its agent run to the restricted tool face unless the origin's
@@ -1213,57 +1239,104 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			"workdir":    workDir,
 		})
 
-		runCtx := execCtx
-		// Attach the resume hint whenever this task carries one. Which
-		// attempt may actually use it is decided one level down, per
-		// attempt, by buildAdapterRequest's adapter affinity: the minting
-		// adapter gets the handle, a foreign one ignores it. The gate must
-		// not run here on plan.Adapter — when the plan's CLI is unavailable
-		// and the fallback chain lands on the adapter that minted the
-		// session, that attempt IS the conversation's owner, and a
-		// round-level drop cold-starts the very checkpoint a timeout retry
-		// exists to resume.
-		if sessionID != "" {
-			runCtx = commander.WithResume(execCtx, sessionID, sessionAdapter)
-		}
-		if remoteOrigin {
-			runCtx = commander.WithRemoteTask(runCtx)
-		}
-		// Structured result contract: a schema-capable adapter (registry
-		// SupportsStructuredOutput) gets the protocol schema, so the result
-		// arrives parsed — status/question/delegate_requests — instead of
-		// relying on text markers alone. Marker parsing below stays as the
-		// fallback for every adapter without the flag. The schema carries
-		// this node's declared ability ids (a hallucinated child request
-		// cannot route) and, for a read-only session, the instruction to ask
-		// the user for authorization instead of delegating for it.
-		if plan.Kind == "agent" {
-			if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
-				runCtx = commander.WithResultSchema(runCtx, agentResultSchemaFor(c.abilityIDs(), restricted, delegLimits.MaxChildren))
-			}
-		}
-		// The round runs under its own cancel so a user inject (steer.go) can
-		// abort the in-flight agent turn: the kill drops the live session
-		// (its result envelope would desync the next turn) and the loop
-		// re-runs carrying the steer as the leading directive. execCtx
-		// cancellation (task cancel) rides through unchanged. Past the steer
-		// budget the round is not steerable: an inject then waits for the
-		// natural boundary (delivered at the next round, or as a durable
-		// note if the task ends first).
-		roundCtx := runCtx
-		var roundCancel context.CancelFunc
-		steerable := steerRounds < maxSteerRounds
-		if steerable {
-			roundCtx, roundCancel = context.WithCancel(runCtx)
-			c.registerInterrupt(taskID, roundCancel)
-		}
-		res = router.Execute(roundCtx, *plan, prompt, workDir, task.Authorized)
+		// The agent runs inside an inner attempt loop so a context-window
+		// overflow can retry once in the same round instead of parking
+		// outright: the prompt is ours to shrink and the resumed agent
+		// session — its transcript replayed into the window — ours to drop.
 		interrupted := false
-		if steerable {
-			c.clearInterrupt(taskID)
-			interrupted = roundCtx.Err() != nil && c.steerUnseen(execCtx, taskID, boardSeen)
-			roundCancel()
+		overflowRetried := false
+		var extraTokens int
+		var extraCost float64
+		for {
+			runCtx := execCtx
+			// Attach the resume hint whenever this task carries one. Which
+			// attempt may actually use it is decided one level down, per
+			// attempt, by buildAdapterRequest's adapter affinity: the minting
+			// adapter gets the handle, a foreign one ignores it. The gate must
+			// not run here on plan.Adapter — when the plan's CLI is unavailable
+			// and the fallback chain lands on the adapter that minted the
+			// session, that attempt IS the conversation's owner, and a
+			// round-level drop cold-starts the very checkpoint a timeout retry
+			// exists to resume.
+			if sessionID != "" {
+				runCtx = commander.WithResume(execCtx, sessionID, sessionAdapter)
+			}
+			if remoteOrigin {
+				runCtx = commander.WithRemoteTask(runCtx)
+			}
+			// Structured result contract: a schema-capable adapter (registry
+			// SupportsStructuredOutput) gets the protocol schema, so the result
+			// arrives parsed — status/question/delegate_requests — instead of
+			// relying on text markers alone. Marker parsing below stays as the
+			// fallback for every adapter without the flag. The schema carries
+			// this node's declared ability ids (a hallucinated child request
+			// cannot route) and, for a read-only session, the instruction to ask
+			// the user for authorization instead of delegating for it.
+			if plan.Kind == "agent" {
+				if k, ok := agents.Lookup(plan.Agent, plan.Adapter); ok && k.Capabilities.SupportsStructuredOutput {
+					runCtx = commander.WithResultSchema(runCtx, agentResultSchemaFor(c.abilityIDs(), restricted, delegLimits.MaxChildren))
+				}
+			}
+			// The round runs under its own cancel so a user inject (steer.go) can
+			// abort the in-flight agent turn: the kill drops the live session
+			// (its result envelope would desync the next turn) and the loop
+			// re-runs carrying the steer as the leading directive. execCtx
+			// cancellation (task cancel) rides through unchanged. Past the steer
+			// budget the round is not steerable: an inject then waits for the
+			// natural boundary (delivered at the next round, or as a durable
+			// note if the task ends first).
+			roundCtx := runCtx
+			var roundCancel context.CancelFunc
+			steerable := steerRounds < maxSteerRounds
+			if steerable {
+				roundCtx, roundCancel = context.WithCancel(runCtx)
+				c.registerInterrupt(taskID, roundCancel)
+			}
+			res = router.Execute(roundCtx, *plan, prompt, workDir, task.Authorized)
+			if steerable {
+				c.clearInterrupt(taskID)
+				interrupted = roundCtx.Err() != nil && c.steerUnseen(execCtx, taskID, boardSeen)
+				roundCancel()
+			}
+			if interrupted {
+				break
+			}
+			// A context-window overflow cannot be retried verbatim, but the
+			// prompt is ours to shrink: compress the folded run notes, drop
+			// the resumed session (its replayed transcript is the usual bulk),
+			// and re-run once under the tight budget. A second overflow — or
+			// any non-overflow failure — lands on the park path below as
+			// before.
+			if plan.Kind == "agent" && !res.OK && !overflowRetried &&
+				commander.ContextOverflow(res.Stderr) {
+				overflowRetried = true
+				extraTokens += res.Tokens
+				extraCost += res.Cost
+				c.EvTrace(execCtx, taskID, EvContextOverflow, map[string]any{
+					"agent": res.Agent, "round": round, "detail": res.Stderr,
+					"action": "compact_retry",
+				})
+				sessionID = ""
+				sessionAdapter = ""
+				// A session-mode adapter also keeps the overflowed
+				// conversation alive in this task's pool — evict it or the
+				// retry lands on the same transcript. One-shot adapters lose
+				// nothing; the cleared resume handle already starts them cold.
+				commander.DropAgentSession(execCtx, res.Agent, res.Adapter)
+				// The persisted checkpoint pointed at the session that just
+				// overflowed; leaving it would resume the same transcript on
+				// the next interruption and fail identically.
+				_ = c.store.SetAgentSession(context.WithoutCancel(execCtx), taskID, "", "", "")
+				intentNotes = c.compactRunNotes(execCtx, intentNotes)
+				prompt = assemblePrompt(overflowPromptBudget)
+				continue
+			}
+			break
 		}
+		// Bill the failed overflow attempt too: the provider spent those
+		// tokens even though the round's surviving result is the retry's.
+		res.Tokens += extraTokens
+		res.Cost += extraCost
 		if interrupted {
 			steerRounds++
 			maxRounds++ // the steer round is on the house — it must not eat the task's budget
@@ -1329,7 +1402,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			if len(mreqs) > 0 {
 				res.Stdout = stdoutAfterMsgs
 				for _, note := range c.sendAgentMessages(execCtx, task, mreqs, &msgsSent, c.msgBudget()) {
-					currentIntent += "\n\n[message board] " + note
+					intentNotes = append(intentNotes, "[message board] "+note)
 				}
 			}
 			drs, cleaned := parseDelegateRequests(res.Stdout)
@@ -1347,7 +1420,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					// but a schema-emitted delegate_requests (or a marker it
 					// saw in a sibling's board post) still parses — answer
 					// with the same refusal vocabulary the budget path uses.
-					currentIntent += "\n\n[system] delegation depth limit reached — this task may not spawn sub-agents; finish with local resources and report."
+					intentNotes = append(intentNotes, "[system] delegation depth limit reached — this task may not spawn sub-agents; finish with local resources and report.")
 				} else if delegations < maxDelegations {
 					take := maxDelegations - delegations
 					if take > len(drs) {
@@ -1357,13 +1430,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					notes := c.delegateChildren(execCtx, task, drs[:take], &pendingChildren)
 					for i, note := range notes {
 						if len(notes) == 1 {
-							currentIntent += "\n\n[delegated child result]\n" + note
+							intentNotes = append(intentNotes, "[delegated child result]\n"+note)
 						} else {
-							currentIntent += fmt.Sprintf("\n\n[delegated child result %d/%d]\n%s", i+1, len(notes), note)
+							intentNotes = append(intentNotes, fmt.Sprintf("[delegated child result %d/%d]\n%s", i+1, len(notes), note))
 						}
 					}
 					if take < len(drs) {
-						currentIntent += "\n\n[system] delegation budget for this task is exhausted; remaining requests were not dispatched — finish with local resources and report."
+						intentNotes = append(intentNotes, "[system] delegation budget for this task is exhausted; remaining requests were not dispatched — finish with local resources and report.")
 					}
 					// Only a delegation that actually happened re-drives the
 					// round; an exhausted budget falls through to the judge so
@@ -1371,7 +1444,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 					round--
 					continue
 				} else {
-					currentIntent += "\n\n[system] delegation budget for this task is exhausted; finish with local resources and report."
+					intentNotes = append(intentNotes, "[system] delegation budget for this task is exhausted; finish with local resources and report.")
 				}
 			}
 		}
@@ -1677,12 +1750,15 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 
 		if !res.OK {
 			// A context-window overflow is deterministic: the same prompt will
-			// not fit on retry, so park the task for a human to compress/split
-			// it rather than burning rounds on a re-run that cannot succeed.
+			// not fit on retry. The in-round compact retry above already got
+			// its one shot — surviving here means the intent/manifest alone
+			// exceeds the agent's window, so park the task for a human to
+			// compress/split it rather than burning another round.
 			if plan.Kind == "agent" && commander.ContextOverflow(res.Stderr) {
 				msg := "agent context window overflow: " + res.Stderr
 				c.EvTrace(context.WithoutCancel(ctx), taskID, EvContextOverflow, map[string]any{
 					"agent": res.Agent, "round": round, "detail": res.Stderr,
+					"action": "parked",
 				})
 				wCtx, cancel := c.storeWriteCtx(ctx)
 				defer cancel()
@@ -1800,7 +1876,7 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// scoped to. Using ctx here meant a dropped peer link aborted the judge
 		// mid-call, parking work for review that a live judge would have
 		// accepted (or rejected with a real verdict).
-		v, serr := entry.Supervise(execCtx, c.supervisor, currentIntent, judgeResult)
+		v, serr := entry.Supervise(execCtx, c.supervisor, fullIntent(), judgeResult)
 		c.recordEntryUsage(context.WithoutCancel(ctx), taskID, c.supervisor, usageBefore,
 			v.Status == entry.VerdictDone, time.Since(judgeStart))
 		if serr != nil {
@@ -1885,9 +1961,9 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		lastStderr = res.Stderr
 
 		if strings.TrimSpace(v.Followup) == "" {
-			currentIntent = currentIntent + "\n\n上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。"
+			intentNotes = append(intentNotes, "上一轮未能完整完成，请继续完成剩余工作，并汇报最终结果。")
 		} else {
-			currentIntent = currentIntent + "\n\n[上级补充指令]\n" + v.Followup
+			intentNotes = append(intentNotes, "[上级补充指令]\n"+v.Followup)
 		}
 	}
 	// §4.2 final fold: a run must not report a verdict while children it

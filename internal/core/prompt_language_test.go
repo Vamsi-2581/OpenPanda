@@ -101,7 +101,7 @@ func TestBuildAgentPrompt_MultiLanguage(t *testing.T) {
 	c := &Core{}
 
 	// 1. English
-	promptEn, _ := buildAgentPrompt(c, "Run diagnostics", "", "diag", "", i18n.English)
+	promptEn, _ := buildAgentPrompt(c, "Run diagnostics", "", "diag", "", 0, i18n.English)
 	if strings.Contains(promptEn, "执行约定") || strings.Contains(promptEn, "中文") {
 		t.Errorf("English agent prompt contains Chinese instructions:\n%s", promptEn)
 	}
@@ -110,13 +110,13 @@ func TestBuildAgentPrompt_MultiLanguage(t *testing.T) {
 	}
 
 	// 2. Chinese
-	promptZh, _ := buildAgentPrompt(c, "运行诊断", "", "diag", "", i18n.ChineseSimp)
+	promptZh, _ := buildAgentPrompt(c, "运行诊断", "", "diag", "", 0, i18n.ChineseSimp)
 	if !strings.Contains(promptZh, "执行约定") || !strings.Contains(promptZh, "最终回复用简体中文") {
 		t.Errorf("Chinese agent prompt missing expected Chinese rider:\n%s", promptZh)
 	}
 
 	// 3. Scenario B: Chinese User + Global Model (English prompt instructions, Chinese report output)
-	promptB, _ := buildAgentPrompt(c, "排查错误", "", "debug", "", i18n.English, i18n.ChineseSimp)
+	promptB, _ := buildAgentPrompt(c, "排查错误", "", "debug", "", 0, i18n.English, i18n.ChineseSimp)
 	if !strings.Contains(promptB, "Execution contract") {
 		t.Errorf("Scenario B prompt instructions should be English:\n%s", promptB)
 	}
@@ -125,7 +125,7 @@ func TestBuildAgentPrompt_MultiLanguage(t *testing.T) {
 	}
 
 	// 4. Scenario C: English User + China Model (Chinese prompt instructions, English report output)
-	promptC, _ := buildAgentPrompt(c, "Debug error", "", "debug", "", i18n.ChineseSimp, i18n.English)
+	promptC, _ := buildAgentPrompt(c, "Debug error", "", "debug", "", 0, i18n.ChineseSimp, i18n.English)
 	if !strings.Contains(promptC, "执行约定") {
 		t.Errorf("Scenario C prompt instructions should be Chinese:\n%s", promptC)
 	}

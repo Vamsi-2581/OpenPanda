@@ -42,6 +42,30 @@ func startModelServer(t *testing.T, text string) *Client {
 	return client
 }
 
+// TestResolveContextWindow pins the resolution chain: a declared
+// context_window wins over the catalogue, a per-model spec row beats the
+// provider-level value, and an unknown config resolves to 0.
+func TestResolveContextWindow(t *testing.T) {
+	if got := ResolveContextWindow(config.ModelConfig{ContextWindow: 4242}); got != 4242 {
+		t.Errorf("declared window = %d, want 4242", got)
+	}
+	// deepseek has no per-model row for its default: the provider-level
+	// window (1M) applies.
+	if got := ResolveContextWindow(config.ModelConfig{Provider: "deepseek"}); got != 1048576 {
+		t.Errorf("deepseek default = %d, want 1048576", got)
+	}
+	// A per-model spec row beats the provider row (claude-sonnet-4 = 200K,
+	// provider = 1M).
+	if got := ResolveContextWindow(config.ModelConfig{Provider: "claude", Model: "claude-sonnet-4"}); got != 200000 {
+		t.Errorf("claude-sonnet-4 = %d, want 200000", got)
+	}
+	// A bare custom endpoint nobody knows: detected by neither provider nor
+	// model name → 0.
+	if got := ResolveContextWindow(config.ModelConfig{BaseURL: "https://example.invalid/v1", Model: "mystery-1"}); got != 0 {
+		t.Errorf("unknown endpoint = %d, want 0", got)
+	}
+}
+
 func TestClassifyTask(t *testing.T) {
 	task := TaskSpec{
 		Title:       "改导航栏",

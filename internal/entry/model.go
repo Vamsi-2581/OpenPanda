@@ -141,6 +141,40 @@ type Client struct {
 	extraHeaders map[string]string
 }
 
+// ResolveContextWindow resolves the advertised context window (tokens) a
+// model config lands on: the declared context_window wins, then the
+// provider/detected catalogue row — the same chain NewClient applies at
+// build time. Exported so callers that never construct a client (replay
+// budget sizing) can still scale to the model. 0 when nothing knows.
+func ResolveContextWindow(model config.ModelConfig) int {
+	if model.ContextWindow > 0 {
+		return model.ContextWindow
+	}
+	p, hasProvider := providers.Lookup(model.Provider)
+	base := model.BaseURL
+	if base == "" && hasProvider {
+		base = p.BaseURL
+	}
+	name := model.Model
+	if name == "" {
+		if hasProvider && p.DefaultModel != "" {
+			name = p.DefaultModel
+		} else {
+			name = defaultModel
+		}
+	}
+	tuning, hasTuning := p, hasProvider
+	if !hasTuning || tuning.ID == "custom" {
+		if d, ok := providers.Detect(base, name); ok && d.ID != "custom" {
+			tuning, hasTuning = d, true
+		}
+	}
+	if !hasTuning {
+		return 0
+	}
+	return tuning.ContextFor(name)
+}
+
 // NewClient builds a client from the model config. An empty baseURL falls
 // back to the named provider's catalogue endpoint; with neither provider nor
 // base_url the config is unconfigured and NewClient fails with ErrNoModel —
@@ -181,10 +215,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	}
 	// Per-model specs beat the provider row (a vendor's models may carry
 	// different windows and ceilings); zeros fall back down the chain.
-	contextWindow := model.ContextWindow
-	if contextWindow <= 0 && hasTuning {
-		contextWindow = tuning.ContextFor(name)
-	}
+	contextWindow := ResolveContextWindow(model)
 	maxTokensCap := 0
 	maxTokens := model.MaxTokens
 	{

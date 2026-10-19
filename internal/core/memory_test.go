@@ -35,7 +35,7 @@ func TestAgentPromptOmitsProjectMemory(t *testing.T) {
 	// (nor Hermes memory), only the intent itself.
 	c := &Core{logger: testLogger()}
 	c.memory = memory.NewInjector(hermes, projects)
-	got, used := buildAgentPrompt(c, intent, "panda", "refactor", "")
+	got, used := buildAgentPrompt(c, intent, "panda", "refactor", "", 0)
 	if strings.Contains(got, "PROJECT-MEM") {
 		t.Errorf("agent prompt must no longer contain project memory, got %q", got)
 	}
@@ -65,7 +65,7 @@ func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
 	c := &Core{logger: testLogger()}
 	c.memory = memory.NewInjector(hermes, projects)
 
-	got, _ := buildAgentPrompt(c, "fix the build", "", "fix build", "")
+	got, _ := buildAgentPrompt(c, "fix the build", "", "fix build", "", 0)
 	if !strings.Contains(got, "记忆文件清单") || !strings.Contains(got, "MEMORY.md") {
 		t.Errorf("manifest missing from non-project prompt: %q", got)
 	}
@@ -81,7 +81,7 @@ func TestAgentPromptCarriesMemoryManifest(t *testing.T) {
 	// not appear — but the project gets a manifest of its own now. A project task
 	// used to receive strictly less context than a loose one, which is what left a
 	// delegated project task unable to tell what it was working on.
-	got, _ = buildAgentPrompt(c, "fix the build", "panda", "fix build", "/tmp/panda-tree")
+	got, _ = buildAgentPrompt(c, "fix the build", "panda", "fix build", "/tmp/panda-tree", 0)
 	if strings.Contains(got, "记忆文件清单") {
 		t.Errorf("project prompt must not carry the personal-memory manifest: %q", got)
 	}
@@ -207,7 +207,7 @@ func TestBuildAgentPromptBudgetAccommodatesLargeChineseIntent(t *testing.T) {
 
 	// Large Chinese intent: ~30,000 bytes
 	chineseIntent := strings.Repeat("请按照生产环境发布规范严格执行部署流程，确保零停机时间与监控告警正常。", 300)
-	prompt, used := buildAgentPrompt(c, chineseIntent, "", "k8s-deploy", "")
+	prompt, used := buildAgentPrompt(c, chineseIntent, "", "k8s-deploy", "", 0)
 	if len(used) != 1 {
 		t.Fatalf("used = %d, want 1", len(used))
 	}

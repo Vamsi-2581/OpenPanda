@@ -36,6 +36,37 @@ const SummaryMarker = "[earlier conversation, summarized]"
 // the same entry prompt, so the constraint is prompt size, not storage.
 const DefaultHistoryBudget = 24000
 
+// minReplayBudget/maxReplayBudget bound ReplayBudget's derivation. Below the
+// floor a couple of exchanges would not fit at all; the ceiling keeps a huge
+// advertised window from buying an unbounded replay — whatever falls out of
+// the window is the input the compaction call itself must read.
+const (
+	minReplayBudget = 8000
+	maxReplayBudget = 160000
+)
+
+// ReplayBudget derives the replay window (characters) for a thread from the
+// serving model's advertised context window (tokens). History is one section
+// of the entry prompt — alongside the device list, memory wall and tool
+// specs — so it claims at most an eighth of the window. The character
+// estimate stays conservative on purpose (CJK text is ~1 char/token, the
+// mixed-script average nearer 2): 3/16 of the window lands exactly on
+// DefaultHistoryBudget for a 128K model, the setting this replaces. An
+// unknown window keeps the historical default.
+func ReplayBudget(contextWindowTokens int) int {
+	if contextWindowTokens <= 0 {
+		return DefaultHistoryBudget
+	}
+	budget := contextWindowTokens * 3 / 16
+	if budget < minReplayBudget {
+		return minReplayBudget
+	}
+	if budget > maxReplayBudget {
+		return maxReplayBudget
+	}
+	return budget
+}
+
 // Turn is one stored conversation message.
 type Turn struct {
 	Role string `json:"role"` // "user" | "assistant"

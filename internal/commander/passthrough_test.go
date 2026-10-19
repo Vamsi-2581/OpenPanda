@@ -15,8 +15,9 @@ import (
 )
 
 // TestContextOverflowPatterns pins the classification: provider window
-// overflow qualifies, real task failures do not. A retry of an overflowed
-// prompt cannot fit, so the upper layer must park, not re-run.
+// overflow qualifies, real task failures do not. An overflowed prompt gets
+// one compressed retry and then parks, so over-matching costs a wasted
+// attempt — while missing a real overflow parks work a retry could finish.
 func TestContextOverflowPatterns(t *testing.T) {
 	yes := []string{
 		"API Error: 400 prompt is too long: 210000 tokens > 200000 maximum",
@@ -24,6 +25,9 @@ func TestContextOverflowPatterns(t *testing.T) {
 		"This model's maximum context length is 128000 tokens",
 		"Request exceeds the context window",
 		"Please reduce the length of your input",
+		"maximum number of tokens in context",
+		"input token count exceeds the context limit",
+		"400 request too large for model",
 	}
 	no := []string{
 		"command not found",

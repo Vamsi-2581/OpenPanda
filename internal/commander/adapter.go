@@ -1348,18 +1348,20 @@ func transientAgentFailure(ar AgentResult) bool {
 }
 
 // contextOverflowPatterns are the provider-side ways of saying "the prompt
-// plus history no longer fits the model's window". Such a failure is
-// deterministic: retrying the same prompt cannot fit it, so the upper layer
-// parks for a human (compress / split / reduce scope) instead of re-running.
+// plus history no longer fits the model's window". The upper layer retries
+// once on a compressed prompt (a verbatim retry cannot fit), then parks for
+// a human when even the shrunken run overflows.
 var contextOverflowPatterns = []string{
 	"context length", "context_length_exceeded", "maximum context",
 	"context window", "prompt is too long", "too many tokens",
-	"reduce the length",
+	"reduce the length", "context limit", "maximum number of tokens",
+	"token count", "input too long", "request too large", "context size",
+	"exceeds the model", "input_length",
 }
 
 // ContextOverflow reports whether a failure text looks like the agent's
 // context window overflowing. Exported for the orchestration layer, which
-// parks such failures in review rather than retrying them.
+// gives such failures one compressed retry and then parks them in review.
 func ContextOverflow(text string) bool {
 	if text == "" {
 		return false
@@ -1415,6 +1417,29 @@ func WithSessionPool(ctx context.Context) (context.Context, *AgentSessions) {
 func sessionPoolOf(ctx context.Context) *AgentSessions {
 	p, _ := ctx.Value(sessionPoolKey{}).(*AgentSessions)
 	return p
+}
+
+// DropAgentSession evicts the live session-mode process an agent's pool
+// may hold for (agent, adapter): the next turn then spawns a fresh
+// conversation instead of reusing the evicted one's transcript. The
+// context-overflow recovery uses this — a pooled session replays the very
+// transcript that just overflowed. No-op without a pool or live session.
+func DropAgentSession(ctx context.Context, agent, adapter string) {
+	if p := sessionPoolOf(ctx); p != nil {
+		p.drop(agent + "|" + adapter)
+	}
+}
+
+// drop removes the keyed session and kills its process. The kill happens
+// outside the lock so a slow teardown cannot stall another agent's turn.
+func (p *AgentSessions) drop(key string) {
+	p.mu.Lock()
+	s := p.live[key]
+	delete(p.live, key)
+	p.mu.Unlock()
+	if s != nil {
+		s.kill()
+	}
 }
 
 // CloseAll kills every live session. Idempotent; called when the task's

@@ -168,7 +168,7 @@ func (h *handler) failureReason(ctx context.Context, taskID string) string {
 // to expand ("背景含渐变天空、…" under a task that had in fact finished).
 // Nothing here needs the cap: the transcript is local storage and AppendTurn
 // only appends, so the one real budget is the replay window, which
-// sessions.DefaultHistoryBudget already enforces when the thread is compacted.
+// sessions.ReplayBudget already enforces when the thread is compacted.
 // The bounds that keep a pathological task from writing an unbounded row sit
 // upstream, on the process output itself: executil's capture cap (8 MiB) and
 // the bus clamp for remote results (512 KiB per field).
