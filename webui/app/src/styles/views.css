@@ -1992,6 +1992,76 @@
   flex: none;
 }
 
+/* The parallel-execution strip: one chip per task running right now, with
+   its lane mark. `.active` (2+ running) turns the strip accent — that is
+   the moment the board is genuinely executing agents in parallel. */
+.parallel-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-inset);
+}
+
+.parallel-strip.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.parallel-count {
+  font-size: var(--fs-sub);
+  font-weight: var(--fw-semibold);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.parallel-strip.active .parallel-count {
+  color: var(--accent);
+}
+
+.parallel-lane {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--bg-card, var(--bg));
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  max-width: 360px;
+}
+
+.parallel-lane:hover {
+  border-color: var(--accent);
+}
+
+.parallel-lane-mark {
+  flex: none;
+}
+
+.parallel-lane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sub);
+}
+
+.parallel-lane-scope {
+  flex: none;
+  font-size: var(--fs-xs, 11px);
+  color: var(--text-dim);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kanban-title {
   font-size: var(--fs-sub);
   font-weight: var(--fw-semibold);

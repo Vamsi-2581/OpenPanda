@@ -151,6 +151,14 @@ export function QueueView({
     }
   }
 
+  // The parallel-execution strip: every task actually running right now,
+  // with the lane it holds in the shared tree (◫ scoped paths, ⧉ isolated
+  // private copy, ▣ the default whole-tree claim). Two or more rows IS the
+  // parallel interface — the board otherwise only shows them scattered
+  // across columns, which reads as "several tasks" rather than "N agents
+  // running at once".
+  const running = (tasks ?? []).filter((task) => task.state === 'running')
+
   return (
     <section class="queue-section">
       <h1 class="page-title">{t('nav.queue')}</h1>
@@ -164,6 +172,35 @@ export function QueueView({
           </button>
         )}
       </div>
+
+      {running.length > 0 && (
+        <div class={`parallel-strip${running.length > 1 ? ' active' : ''}`}>
+          <span class="parallel-count">
+            {running.length > 1
+              ? t('queue.parallelStrip.n', { n: String(running.length) })
+              : t('queue.parallelStrip.one')}
+          </span>
+          {running.map((task) => (
+            <button
+              key={task.id}
+              type="button"
+              class="parallel-lane"
+              onClick={() => onOpen(task.id)}
+              title={task.title}
+            >
+              <span class="parallel-lane-mark">
+                {task.isolate ? '⧉' : task.scope_paths && task.scope_paths.length > 0 ? '◫' : '▣'}
+              </span>
+              <span class="parallel-lane-title">{task.title || task.id}</span>
+              {task.isolate ? (
+                <span class="parallel-lane-scope">{t('queue.parallelStrip.isolated')}</span>
+              ) : task.scope_paths && task.scope_paths.length > 0 ? (
+                <span class="parallel-lane-scope">{task.scope_paths.join(', ')}</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div class="filters">
         <select
