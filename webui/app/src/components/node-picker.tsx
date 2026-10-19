@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import type { NodeInfo } from '../api/client'
 import { t } from '../i18n'
+import { layerAboveOwnsEscape } from './card-dismiss'
 import { Icon } from './icons'
 
 /** Where this turn runs, as a button that opens a card.
@@ -28,33 +29,33 @@ export function NodePicker(props: {
   onManage(): void
   /** Fired when the card opens or closes, so the pane can make room. */
   onOpenChange?(open: boolean): void
+  /** Controlled open state. The pane owns it because the node card and the
+   *  orchestration card hang off the same corner and must not both be up;
+   *  omitted, the card manages its own like it always did. */
+  open?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const box = useRef<HTMLDivElement>(null)
+  const [selfOpen, setSelfOpen] = useState(false)
+  const open = props.open ?? selfOpen
+  const setOpen = (v: boolean) => {
+    if (props.open === undefined) setSelfOpen(v)
+    props.onOpenChange?.(v)
+  }
   const picked = props.nodes.find((n) => n.id === props.value)
   const current = picked ? picked.name || picked.id : t('sessions.nodeAuto')
 
-  useEffect(() => {
-    props.onOpenChange?.(open)
-  }, [open])
-
-  // Outside click and Escape close the card — the same two ways every other
-  // popover in the console closes, and Escape stops here so it cannot also
-  // reach the thread drawer behind it.
+  // Escape closes the card, and it stops here so it cannot also reach the
+  // thread drawer behind it. That and the trigger are the only two ways out:
+  // no outside click — a click in the transcript is you reading the answer
+  // behind the card, not asking for the card to go away (see `card-dismiss`).
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
-    }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || layerAboveOwnsEscape()) return
       e.stopPropagation()
       setOpen(false)
     }
-    document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey, true)
     return () => {
-      document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey, true)
     }
   }, [open])
@@ -65,20 +66,21 @@ export function NodePicker(props: {
   }
 
   return (
-    <div class="node-picker" ref={box}>
+    <div class="node-picker">
       <button
         type="button"
         class={`icon-btn tip-down node-pick-btn${open ? ' open' : ''}${props.value ? ' pinned' : ''}`}
-        /* The tip names the current choice, since the header no longer spells
-           it out. It goes away while the card is open — the card is the same
-           answer, said properly, and a tip on top of it is noise. */
-        data-tip={open ? undefined : current}
-        aria-label={t('sessions.nodePick')}
+        /* The tip is the control's name, not the current choice: the choice is
+           already spelled out by the card behind it, and a header tooltip that
+           changes with the selection reads as a status line rather than a
+           label. The selection is still announced to assistive tech below. */
+        data-tip={open ? undefined : t('sessions.nodeBtn')}
+        aria-label={`${t('sessions.nodePick')}: ${current}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
       >
-        <Icon name="network" size={19} />
+        <Icon name="git-fork" size={19} />
       </button>
       {open && (
         <div class="node-panel" role="dialog" aria-label={t('sessions.nodePick')}>

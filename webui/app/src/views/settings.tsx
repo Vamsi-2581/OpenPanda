@@ -16,6 +16,8 @@ import { locale, localeNames, locales, setLocale } from '../i18n'
 import { notifyModelSaved } from './onboarding'
 import { TermsModal } from '../components/terms'
 import { onThemeChange, setTheme, theme } from '../theme'
+import { MemoryView } from './memory'
+import { SkillsView } from './skills'
 import { RemindersView } from './reminders'
 import { SystemView } from './system'
 import { ModelsSection } from './models'
@@ -33,6 +35,8 @@ export type Section =
   | 'policy'
   | 'agents'
   | 'mcp'
+  | 'memory'
+  | 'skills'
   | 'reminders'
   | 'system'
 
@@ -42,6 +46,8 @@ const SECTIONS: Array<{ id: Section; label: string; icon: IconName }> = [
   { id: 'policy', label: 'settings.policy', icon: 'shield' },
   { id: 'agents', label: 'settings.group.agents', icon: 'bot' },
   { id: 'mcp', label: 'settings.mcp', icon: 'plug' },
+  { id: 'memory', label: 'nav.memory', icon: 'orbit' },
+  { id: 'skills', label: 'nav.skills', icon: 'sparkles' },
   { id: 'reminders', label: 'nav.reminders', icon: 'bell' },
   { id: 'system', label: 'nav.system', icon: 'activity' },
 ]
@@ -50,7 +56,9 @@ function normalizeSection(raw?: string): Section {
   if (!raw) return 'general'
   if (raw === 'config' || raw === 'model') return 'models'
   // Promoted views keep working when an old settings deep-link arrives.
-  if (raw === 'nodes' || raw === 'devices' || raw === 'memory' || raw === 'skills') {
+  // (nodes/devices moved to the fleet rail; memory/skills used to be
+  // redirected here and are now real tabs of this page.)
+  if (raw === 'nodes' || raw === 'devices') {
     return 'general'
   }
   const valid: Section[] = [
@@ -59,15 +67,19 @@ function normalizeSection(raw?: string): Section {
     'policy',
     'agents',
     'mcp',
+    'memory',
+    'skills',
     'reminders',
     'system',
   ]
   return valid.includes(raw as Section) ? (raw as Section) : 'general'
 }
 
-/** The unified settings & management center: everything relating to device
- *  clustering, memory, skills, automated reminders, system governance, and
- *  model configurations lives here as controlled tabs. */
+/** The unified settings & management centre: memory, skills, automated
+ *  reminders, system governance, and model configurations all live here as
+ *  controlled tabs. The rail keeps only the destinations you work in — the
+ *  boards and the thread — while everything about how the node and its agents
+ *  are configured or what they remember sits behind this one page. */
 export function SettingsView(props: {
   initialSection?: string
   onSelectTab?: (tab: Section) => void
@@ -136,6 +148,8 @@ export function SettingsView(props: {
           {section === 'policy' && <PolicySection />}
           {section === 'agents' && <AgentsSection />}
           {section === 'mcp' && <MCPSection />}
+          {section === 'memory' && <MemoryView />}
+          {section === 'skills' && <SkillsView />}
           {section === 'reminders' && <RemindersView />}
           {section === 'system' && <SystemView />}
         </div>

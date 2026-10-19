@@ -17,9 +17,14 @@ import { DirPicker } from '../components/dir-picker'
 // CLI alike — so the view is a row per project with those three facts and the
 // verbs that change them.
 export function ProjectsView({
+  head = true,
   onOpenProject,
   onOpenQueue,
 }: {
+  /** Paint the page title/subtitle. False when 总控 hosts the board: the
+   *  merged page owns the heading, and two titles for one board read as a
+   *  duplicate. Everything below the heading is untouched either way. */
+  head?: boolean
   onOpenProject(name: string): void
   onOpenQueue(project: string): void
 }) {
@@ -66,6 +71,7 @@ export function ProjectsView({
   if (error)
     return (
       <ErrorState
+        head={head}
         title={t('nav.projects')}
         sub={t('projects.subtitle')}
         error={error}
@@ -91,7 +97,7 @@ export function ProjectsView({
 
   return (
     <section>
-      <PageHeader title={t('nav.projects')} sub={t('projects.subtitle')} />
+      {head && <PageHeader title={t('nav.projects')} sub={t('projects.subtitle')} />}
 
       <form class="card project-create-card" onSubmit={create}>
         <div class="project-create-row dir-selection">

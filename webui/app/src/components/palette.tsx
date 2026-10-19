@@ -183,21 +183,33 @@ export function PaletteHost({ onLogout }: { onLogout(): void }) {
  *  appearance/language hints show what is currently selected. */
 export function buildCommands(onLogout: () => void): Command[] {
   const go = t('palette.group.go')
+  // Keyed by view, not by the board it opens: 总控 hosts two boards under one
+  // destination, so the keywords split per tab (`queue …` still finds the
+  // kanban, `plans …` still finds the pipelines) instead of piling onto one
+  // row and matching every query twice.
   const goAliases: Record<string, string> = {
     sessions: 'chat sessions threads conversation',
-    queue: 'queue tasks board kanban approvals review',
-    plans: 'plans pipeline stages',
-    projects: 'projects workspaces repos',
+    control: 'control queue tasks board kanban approvals review',
+    'control:plans': 'control plans pipeline stages',
+    'control:projects': 'control projects workspaces repos directories',
+    workspace: 'workspace map topology devices graph network fleet wiring',
     fleet: 'fleet nodes devices cluster hardware',
-    memory: 'memory knowledge graph store brain',
-    skills: 'skills capabilities plugins tools',
     settings: 'settings preferences config',
+  }
+  // The rows 总控 absorbed still answer to their old names. The alias above is
+  // English-only by convention; without this a zh/ja/es/de user who types
+  // 任务队列 (or its translation) gets no hit, because the row is now labelled
+  // 总控. Search, not display: the label stays the merged name.
+  const formerName: Record<string, string> = {
+    control: t('nav.queue'),
+    'control:plans': t('nav.plans'),
+    'control:projects': t('nav.projects'),
   }
   const cmds: Command[] = navViews.map(([view, key]) => ({
     id: `go:${view}`,
     group: go,
     label: t(key),
-    alias: goAliases[view] ?? view,
+    alias: [goAliases[view] ?? view, formerName[view] ?? ''].filter(Boolean).join(' '),
     run: () => navigateView(view),
   }))
 
@@ -206,6 +218,8 @@ export function buildCommands(onLogout: () => void): Command[] {
     { tab: 'policy', key: 'settings.policy', alias: 'policy security rules permissions' },
     { tab: 'agents', key: 'settings.group.agents', alias: 'agents subagents roles' },
     { tab: 'mcp', key: 'settings.mcp', alias: 'mcp tools servers integrations' },
+    { tab: 'memory', key: 'nav.memory', alias: 'memory knowledge graph store brain dreams topics daily projects' },
+    { tab: 'skills', key: 'nav.skills', alias: 'skills capabilities plugins tools hub import' },
     { tab: 'reminders', key: 'nav.reminders', alias: 'reminders cron schedule timer jobs' },
     { tab: 'system', key: 'nav.system', alias: 'system status health audit metrics telemetry' },
   ]

@@ -628,6 +628,15 @@ input[type='checkbox'].check,
   z-index: 200;
   pointer-events: none;
 }
+/* Hover-below variant. A tip above the element is wrong for anything that
+   rides high on the screen — a header chip or a floating pill — where the
+   space above is either the bar the control lives in (so the tip paints over
+   the very thing it explains) or off the top of the viewport entirely. */
+[data-tip].tip-down:hover::after,
+[data-tip].tip-down:focus-visible::after {
+  bottom: auto;
+  top: calc(100% + 6px);
+}
 
 /* ---- Details / raw blocks ---------------------------------------------------------------- */
 

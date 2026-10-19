@@ -42,6 +42,13 @@ export interface DecisionOrbitProps {
   onOpenPlan?: (planId?: string) => void
   onOpenTrail?: (taskId?: string) => void
   defaultOpen?: boolean
+  /** Controlled expansion. Left undefined the orbit keeps its own state (the
+   *  task detail page just mounts it open); the orchestration card passes it
+   *  so it can fold the steps back into the bar when a task's detail pane
+   *  opens underneath — both panes describe the same task, and the detail
+   *  needs the room. */
+  open?: boolean
+  onOpenChange?(open: boolean): void
 }
 
 export default function DecisionOrbit(props: DecisionOrbitProps) {
@@ -71,9 +78,14 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
   const traces = tracesProp ?? liveTraces
 
   const phase = orbitPhaseFromTraces(traces, task?.state)
-  const [open, setOpen] = useState<boolean>(() =>
+  const [selfOpen, setSelfOpen] = useState<boolean>(() =>
     props.defaultOpen ?? (traces?.length ?? 0) > 0,
   )
+  const open = props.open ?? selfOpen
+  const setOpen = (next: boolean) => {
+    if (props.open === undefined) setSelfOpen(next)
+    props.onOpenChange?.(next)
+  }
 
   const singleNode = typeof onlineNodeCount === 'number' && onlineNodeCount <= 1
 
@@ -207,7 +219,7 @@ export default function DecisionOrbit(props: DecisionOrbitProps) {
         <button
           type="button"
           class="orbit-head-btn"
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => setOpen(!open)}
           aria-expanded={open}
         >
           <Icon name="orbit" class="orbit-brand-ico" />
@@ -524,8 +536,8 @@ function ActionRail(props: {
   const isPlan = Boolean(task?.plan_meta?.plan_id)
   // Deep links default to hash navigation so the rail stays functional in
   // every host (chat bubble, detail page); embedders can still override.
-  const openQueue = onOpenQueue ?? (() => navigate({ view: 'queue' }))
-  const openPlan = onOpenPlan ?? (() => navigate({ view: 'plans' }))
+  const openQueue = onOpenQueue ?? (() => navigate({ view: 'control', tab: 'queue' }))
+  const openPlan = onOpenPlan ?? (() => navigate({ view: 'control', tab: 'plans' }))
   const openTrail = onOpenTrail ?? ((id?: string) => { if (id) navigate({ view: 'detail', id }) })
   return (
     <div class="orbit-action-rail" role="toolbar" aria-label={t('orbit.actions')}>

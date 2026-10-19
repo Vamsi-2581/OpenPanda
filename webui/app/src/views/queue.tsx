@@ -56,12 +56,17 @@ function sortTasks(tasks: Task[]): Task[] {
 }
 
 export function QueueView({
+  head = true,
   focusReview,
   project,
   onOpen,
   onOpenSession,
 }: {
-  /** Deep-link filter (#/queue?project=x) — seeds the board's project
+  /** Paint the page title/subtitle. False when 总控 hosts the board: the
+   *  merged page owns the heading, and two titles for one board read as a
+   *  duplicate. Everything below the heading is untouched either way. */
+  head?: boolean
+  /** Deep-link filter (#/control?project=x) — seeds the board's project
    *  filter so a link from a project card lands on that project's work. */
   project?: string | null
   focusReview?: boolean
@@ -133,6 +138,7 @@ export function QueueView({
   if (error)
     return (
       <ErrorState
+        head={head}
         title={t('nav.queue')}
         sub={t('queue.subtitle')}
         error={error}
@@ -161,9 +167,12 @@ export function QueueView({
 
   return (
     <section class="queue-section">
-      <h1 class="page-title">{t('nav.queue')}</h1>
-      <p class="page-sub">{t('queue.subtitle')}</p>
-
+      {head && (
+        <>
+          <h1 class="page-title">{t('nav.queue')}</h1>
+          <p class="page-sub">{t('queue.subtitle')}</p>
+        </>
+      )}
       <div class="queue-toolbar">
         <NewTaskForm projects={projects} onCreated={bump} />
         {(tasks?.length ?? 0) > 0 && (
@@ -222,8 +231,8 @@ export function QueueView({
       ) : (
         // The board always renders its four columns — an empty board should
         // still show the shape (todo → doing → review → done), not a blank
-        // page with a hint. In focus-review mode (#/queue?review=1, reached via
-        // the nav badge) it collapses to the approval column alone.
+        // page with a hint. In focus-review mode (#/control?review=1, reached
+        // via the nav badge) it collapses to the approval column alone.
         <div class={`kanban${focusReview ? ' focus-review' : ''}`}>
           {(focusReview ? COLUMNS.filter((c) => c.key === 'review') : COLUMNS).map((col) => (
             <KanbanColumn
@@ -240,7 +249,7 @@ export function QueueView({
       )}
       {focusReview && (
         <p class="dim queue-focus-note">
-          <a href="#/queue">{t('queue.showBoard')}</a>
+          <a href="#/control">{t('queue.showBoard')}</a>
         </p>
       )}
     </section>
@@ -512,25 +521,25 @@ function KanbanColumn({
           colKey === 'done' && expanded ? ' kanban-list--dense' : ''
         }`}
       >
-        {shown.length === 0 ? (
-          <p class="kanban-empty dim">{t('queue.colEmpty')}</p>
-        ) : (
-          shown.map((task, i) => (
-            <KanbanCard
-              key={task.id}
-              task={task}
-              index={i}
-              childCount={subagents.get(task.id) ?? 0}
-              dropBefore={drag != null && drag.dragID !== task.id && drag.overIndex === i}
-              onOpen={onOpen}
-              onOpenSession={onOpenSession}
-              onMutated={onMutated}
-              onDragStart={(id) => setDrag({ dragID: id, overIndex: i })}
-              onDragOver={(index) => setDrag((d) => (d ? { ...d, overIndex: index } : d))}
-              onDragEnd={() => setDrag(null)}
-            />
-          ))
-        )}
+        {/* An empty column is just its own tinted panel — no "nothing here"
+            placeholder. The board is already four labelled lanes, so a dashed
+            box inside an empty lane said the same thing twice and, stacked
+            under the column's own surface, read as two nested layers. */}
+        {shown.map((task, i) => (
+          <KanbanCard
+            key={task.id}
+            task={task}
+            index={i}
+            childCount={subagents.get(task.id) ?? 0}
+            dropBefore={drag != null && drag.dragID !== task.id && drag.overIndex === i}
+            onOpen={onOpen}
+            onOpenSession={onOpenSession}
+            onMutated={onMutated}
+            onDragStart={(id) => setDrag({ dragID: id, overIndex: i })}
+            onDragOver={(index) => setDrag((d) => (d ? { ...d, overIndex: index } : d))}
+            onDragEnd={() => setDrag(null)}
+          />
+        ))}
       </div>
       {(hidden > 0 || (expanded && shown.length > DONE_COLUMN_LIMIT)) && (
         <button
@@ -636,7 +645,7 @@ function KanbanCard({
 
   return (
     <div
-      class={`kanban-card${finished ? ' finished' : ''}${dropBefore ? ' drop-before' : ''}`}
+      class={`kanban-card${finished ? ' finished' : ''}${dropBefore ? ' drop-before' : ''}${deletable ? ' has-del' : ''}`}
       data-state={task.state}
       role="button"
       tabIndex={0}
@@ -793,6 +802,25 @@ function KanbanCard({
         </div>
       )}
       {error && <p class="gate-error kanban-error">{error}</p>}
+      {/* Per-card delete, pinned to the card's bottom-right corner. It used to
+          sit in the title row and fade in on hover; on a board where the only
+          way to get rid of a finished task is this glyph, hiding it until the
+          pointer found it made the card look inert. Always visible now, and
+          out of the title's way so a long title keeps its full width. */}
+      {deletable && (
+        <button
+          class="kanban-del"
+          title={t('queue.deleteTask')}
+          aria-label={t('queue.deleteTask')}
+          disabled={busy}
+          onClick={(e) => {
+            e.stopPropagation()
+            void remove()
+          }}
+        >
+          ×
+        </button>
+      )}
     </div>
   )
 }

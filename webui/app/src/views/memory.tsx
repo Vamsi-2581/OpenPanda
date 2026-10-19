@@ -882,18 +882,12 @@ function GraphTab({ onOpenTab }: { onOpenTab(tab: Tab): void }) {
   const { data: graph, error } = useAsync(() => api.memoryGraph(), [], change)
 
   function openNode(n: MemoryGraphNode) {
-    if (n.kind === 'topic') {
-      onOpenTab('topics')
-      navigate({ view: 'memory', tab: 'topics' })
-    } else if (n.kind === 'project') {
-      onOpenTab('projects')
-      navigate({ view: 'memory', tab: 'projects' })
-    } else if (n.kind === 'daily') {
-      onOpenTab('daily')
-      navigate({ view: 'memory', tab: 'daily' })
-    } else if (n.kind === 'skill') {
-      navigate({ view: 'skills' })
-    }
+    // Topics / projects / daily are tabs of this very page, so they switch
+    // locally. A skill node is a different section, so it routes there.
+    if (n.kind === 'topic') onOpenTab('topics')
+    else if (n.kind === 'project') onOpenTab('projects')
+    else if (n.kind === 'daily') onOpenTab('daily')
+    else if (n.kind === 'skill') navigate({ view: 'settings', tab: 'skills' })
   }
 
   if (error) return <ErrorState title={t('memory.graphTitle')} sub="" error={error} onRetry={() => {}} />

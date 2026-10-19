@@ -108,7 +108,12 @@ export function onUnauthorized(fn: () => void): () => void {
   return () => unauthorizedListeners.delete(fn)
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  opts?: { timeoutMs?: number },
+): Promise<T> {
   const headers: Record<string, string> = {}
   const token = currentToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -116,6 +121,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   const isGet = method.toUpperCase() === 'GET'
   const maxAttempts = isGet ? 3 : 1
+  // 0 (or a negative) means "no deadline": a modal OS window is open on the
+  // other end and the answer arrives when the user makes up their mind.
+  const timeoutMs = opts?.timeoutMs ?? 60_000
   let lastErr: unknown
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -124,7 +132,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(60_000),
+        signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
       })
       if (!res.ok) {
         if (res.status === 401) {
@@ -483,6 +491,10 @@ export interface ChooseDirectoryResult {
   canceled?: boolean
   /** Older panels emit the British spelling; accept either. */
   cancelled?: boolean
+  /** This request cannot be served by a native chooser — the panel is being
+   *  viewed from another device, or the host has no desktop shell. The
+   *  console opens its own in-page browser instead of waiting. */
+  unsupported?: boolean
   error?: string
 }
 
@@ -557,6 +569,17 @@ export interface NodeInfo {
   /** Trust-zone tier pinned on the row (experimental): absent/"mesh" is the
    *  default fleet-wide trust; guarded/open mark a zoned peer. */
   trust?: string
+  /** Machine facts advertised by the node itself (v50): the system it runs
+   *  ("darwin"/"windows"/"linux") and its form factor ("laptop"/"desktop"/
+   *  "mini"/"server"/"vm"). Empty on a peer that predates the fields. */
+  os?: string
+  form_factor?: string
+  /** Link-state advertisement: the peer ids this row holds a live connection
+   *  to, plus the measured RTT / transport for those edges. The workspace
+   *  topology draws one edge per entry. */
+  neighbors?: string[]
+  link_metrics?: Record<string, number>
+  link_kinds?: Record<string, string>
 }
 
 /** GET /api/self — this machine's device profile (+ its ledger card),
@@ -575,10 +598,45 @@ export interface SelfInfo {
   node_kind?: 'physical' | 'vm' | string
   node_identity?: string
   node_running: boolean
+  /** This machine's form factor as the node probed it ("laptop"/"desktop"/
+   *  "mini"/"server"/"vm"); empty when no probe answered. */
+  form_factor?: string
   node?: NodeInfo
   version: string
   codename?: string
   update?: UpdateStatus
+  /** Release line's ship date ("2026-10-15"), empty on ad-hoc builds. */
+  release_date?: string
+}
+
+/** One day of activity from GET /api/stats. Days with no activity are not
+ *  sent at all; `models` splits that day's tokens by model and is absent on
+ *  days whose calls reported no usage. */
+export interface StatsDay {
+  date: string
+  sessions: number
+  messages: number
+  tasks: number
+  tokens: number
+  models?: Record<string, number>
+}
+
+/** GET /api/stats — the profile page's usage rollup. `daily` is chronological
+ *  and sparse (active days only). */
+export interface StatsInfo {
+  sessions: number
+  messages: number
+  tasks: number
+  tokens: number
+  active_days: number
+  total_days: number
+  /** Busiest hour of the day, 0–23; null on a node that has never worked. */
+  peak_hour: number | null
+  /** All-time top model by tokens, falling back to the configured model. */
+  favorite_model?: string
+  first_day?: string
+  last_day?: string
+  daily: StatsDay[]
 }
 
 /** — Capability card (stage 6): GET /api/card's parsed form mirrors
@@ -782,10 +840,14 @@ export const api = {
     return request('GET', '/api/healthz')
   },
 
-  tasks(params?: { state?: string; project?: string }): Promise<Task[]> {
+  tasks(params?: { state?: string; project?: string; session?: string }): Promise<Task[]> {
     const q = new URLSearchParams()
     if (params?.state) q.set('state', params.state)
     if (params?.project) q.set('project', params.project)
+    // One conversation's tasks — the chat header's orchestration card. Server
+    // side this is a different read (by session_id, uncapped) than the board's
+    // state listing, so it must not be emulated by filtering a board response.
+    if (params?.session) q.set('session', params.session)
     const suffix = q.size > 0 ? `?${q}` : ''
     return request('GET', `/api/tasks${suffix}`)
   },
@@ -1082,6 +1144,13 @@ export const api = {
     return request('GET', '/api/self')
   },
 
+  /** Usage rollup behind the profile page's calendar: per-day activity plus
+   *  the six headline numbers. Only days with activity are returned — the
+   *  console owns the 26-week grid and paints the quiet days itself. */
+  stats(): Promise<StatsInfo> {
+    return request('GET', '/api/stats')
+  },
+
   // ---- First-run onboarding wizard ----
 
   getOnboarding(): Promise<OnboardingState> {
@@ -1179,8 +1248,16 @@ export const api = {
     return request('DELETE', `/api/sessions/${encodeURIComponent(id)}/approval`)
   },
 
-  chooseDirectory(default_path?: string): Promise<ChooseDirectoryResult> {
-    return request('POST', '/api/dialog/choose-directory', default_path ? { default_path } : {})
+  /** Raise the host's own folder chooser and answer with the folder picked.
+   *  `defaultPath` is where it opens; `title` is the dialog's caption, which
+   *  the caller localizes because the panel does not know the UI language.
+   *  No timeout: the OS window stays up until the user decides, and cutting
+   *  the request at a minute would discard a choice about to be made. */
+  chooseDirectory(defaultPath?: string, title?: string): Promise<ChooseDirectoryResult> {
+    const body: Record<string, string> = {}
+    if (defaultPath) body.default_path = defaultPath
+    if (title) body.title = title
+    return request('POST', '/api/dialog/choose-directory', body, { timeoutMs: 0 })
   },
 
   listDirectories(path?: string): Promise<DirectoryListing> {
@@ -1793,6 +1870,11 @@ export interface SessionTurn {
    *  Absent on user turns and on transcripts written before the field
    *  existed; the console then has no duration to show. */
   duration_ms?: number
+  /** The entry model that wrote the reply, filed with the turn so the console
+   *  can name it beside the copy button — including after a reload, where the
+   *  live `result` object no longer exists. Absent on user turns, on task
+   *  turns (their card names the executor) and on older transcripts. */
+  model?: string
 }
 
 export interface SessionOperation {

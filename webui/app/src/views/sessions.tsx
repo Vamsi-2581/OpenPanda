@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   api,
   ApiError,
@@ -23,7 +23,7 @@ import {
 import { Icon } from '../components/icons'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval, busSubscribeChange } from '../hooks'
 import { t } from '../i18n'
-import { navigateView } from '../nav'
+import { navigate, navigateView } from '../nav'
 import { Markdown } from '../md/render'
 import { toast, toastError } from '../components/toast'
 import { confirmDialog } from '../components/confirm'
@@ -34,9 +34,13 @@ import { mergeTailTurn, patchStreaming, slashQuery } from '../components/chatsta
 import { atQuery, expandFileRefs, exportMarkdown, exportFilename, isImageFile, withAttachments } from '../components/attach'
 import { isLiveSession } from '../components/session-guard'
 import { sortSessions, turnsChanged } from '../components/session-list'
-import DecisionOrbit from '../components/orbit'
 import { ScopeSelect } from '../components/scope-select'
 import { NodePicker } from '../components/node-picker'
+import { ComposerPanda } from '../components/composer-panda'
+import { OrchestrateCard } from '../components/orchestrate'
+import { DirButton } from '../components/dir-picker'
+import { ModelSelect } from '../components/model-select'
+import { suggestProjectName } from '../components/dir-utils'
 import { EventTimeline } from '../components/event-timeline'
 import { acquireKeepAlive } from '../utils/keepalive'
 
@@ -55,7 +59,7 @@ const COMPOSER_MAX_PX = 240
  *  Enter into a nested block and double the newlines when read back. Ask for
  *  <br> once per document instead. */
 let paragraphSeparatorSet = false
-function useBrParagraphSeparator(): void {
+export function useBrParagraphSeparator(): void {
   if (paragraphSeparatorSet || typeof document === 'undefined') return
   try {
     document.execCommand('defaultParagraphSeparator', false, 'br')
@@ -65,7 +69,7 @@ function useBrParagraphSeparator(): void {
   }
 }
 
-function autoGrow(el: HTMLElement): void {
+export function autoGrow(el: HTMLElement): void {
   el.style.height = 'auto'
   el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`
 }
@@ -89,7 +93,7 @@ function editorText(node: Node): string {
 /** The text as the user sees it typed, with nothing but a newline counting as
  *  empty — deleting everything leaves a <br> behind, and the placeholder has to
  *  show through that. */
-function editorPlain(text: string): string {
+export function editorPlain(text: string): string {
   return text.trim()
 }
 
@@ -99,7 +103,7 @@ function editorPlain(text: string): string {
  *  nodes, so it under-reads by the <br> and block newlines editorText
  *  synthesizes and over-reads by the pill names it skips. Both adjustments
  *  land here so caret and `input` stay in the same space. */
-function editorCaretOffset(el: HTMLElement): number {
+export function editorCaretOffset(el: HTMLElement): number {
   const sel = el.ownerDocument.getSelection()
   if (!sel || sel.rangeCount === 0) return editorTextOf(el).length
   const range = sel.getRangeAt(0)
@@ -116,7 +120,7 @@ function editorCaretOffset(el: HTMLElement): number {
   return len
 }
 
-function editorTextOf(el: HTMLElement): string {
+export function editorTextOf(el: HTMLElement): string {
   let out = ''
   for (const child of el.childNodes) out += editorText(child)
   return out
@@ -208,11 +212,11 @@ function makeChipNode(p: PendingAttachment): HTMLElement {
 }
 
 /** Keep the pill from welding to the text after it. */
-function range_or_append(after: Node, node: Node): void {
+export function range_or_append(after: Node, node: Node): void {
   if (after.parentNode) after.parentNode.insertBefore(node, after.nextSibling)
 }
 
-function editorClear(el: HTMLElement | null): void {
+export function editorClear(el: HTMLElement | null): void {
   if (!el) return
   el.textContent = ''
   // 'auto' under a min-height floor resolves to that floor, but the inline
@@ -374,6 +378,29 @@ function promptLabel(text: string): string {
   return line.length > 60 ? `${line.slice(0, 60)}…` : line
 }
 
+/** Bind a working directory to a project name.
+ *
+ *  A session cannot carry a directory of its own: the panel derives the work
+ *  dir from the thread's project row and falls back to the node's work path
+ *  (see the ask handler), so a directory picked for a new chat has to become a
+ *  project before it can mean anything. An existing project pointing there is
+ *  reused — that is the directory's own group in the rail — and a new
+ *  directory gets one named after the folder, so the thread files under it
+ *  exactly like every other thread does. */
+async function projectForDir(dir: string): Promise<string> {
+  const pl = await api.projects()
+  const norm = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase()
+  const want = norm(dir)
+  const hit = (pl.detail ?? []).find((d) => d.work_dir && norm(d.work_dir) === want)
+  if (hit) return hit.name
+  const taken = new Set(pl.projects ?? [])
+  const base = suggestProjectName(dir) || 'project'
+  let name = base
+  for (let i = 2; taken.has(name); i++) name = `${base}-${i}`
+  const created = await api.createProject({ name, work_dir: dir })
+  return created.name
+}
+
 /** The sessions view: a thread rail on the left (codex / claude code style)
  * and one worktree-isolated conversation on the right, streaming over SSE. */
 export function SessionsView({
@@ -419,15 +446,36 @@ export function SessionsView({
   // The composer's environment pick: empty = let the scheduler route by
   // capability; a node id pins this turn's spawned task to that executor.
   const [nodePref, setNodePref] = useState('')
-  // True while the node card is open. The pane reserves a lane for it on the
-  // right (`.chat-pane.node-open`), which is what moves the transcript, the
-  // composer and the jump arrow left as one block instead of letting the card
-  // cover the last reply's line ends.
-  const [nodeOpen, setNodeOpen] = useState(false)
+  // Which header card is up: '' | 'node' | 'orch'. One slot, two cards — they
+  // hang off the same corner of the bar, so the pane keeps the state for both
+  // instead of letting each card decide (two `open` cards would stack).
+  // While a card is up the pane reserves one lane for it on the right
+  // (`.chat-pane.panel-open`), which is what moves the transcript, the composer
+  // and the jump arrow left as one block instead of letting the card cover the
+  // last reply's line ends. The lane is the same for both cards on purpose:
+  // switching from one to the other is a swap in place, not a re-layout.
+  const [panel, setPanel] = useState<'' | 'node' | 'orch'>('')
+  // A card belongs to the thread it was opened in. Switching threads closes
+  // it: the cards are remounted per session, so a lane kept reserved by the
+  // parent would outlive the card that asked for it.
+  useEffect(() => {
+    setPanel('')
+  }, [activeId])
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [selectedProject, setSelectedProject] = useState(project || '')
-  const activeProject = project || selectedProject || ''
+  // The directory a brand-new thread will run in, as the composer's footer
+  // shows it. It starts as the scope's own work dir and only becomes a real
+  // choice once the user picks one (`dirTouched`): a send then binds the
+  // thread to that directory instead of to the scope's.
+  const [pickedDir, setPickedDir] = useState('')
+  const [dirTouched, setDirTouched] = useState(false)
+  // The project a picked directory resolved to. It outranks the route's
+  // project, so a directory chosen on the new-chat page really is where the
+  // thread it creates runs; it steps aside the moment the pane shows a
+  // thread belonging to another project.
+  const [dirProject, setDirProject] = useState('')
+  const activeProject = dirProject || project || selectedProject || ''
   // True only while a thread's transcript is in flight, so the pane can show
   // its shape instead of an empty box (or worse, the "new chat" hero).
   const [loading, setLoading] = useState(false)
@@ -600,6 +648,35 @@ export function SessionsView({
     }
   }, [activeProject, session, activeId])
 
+  // The footer's directory readout. A new chat runs in the scope's directory
+  // until the user says otherwise, so the pick has to start there rather than
+  // empty — the readout is a statement first and a control second. Re-seeding
+  // on every new chat is also what drops the previous thread's pick.
+  useEffect(() => {
+    if (activeId) return
+    let live = true
+    api
+      .projects()
+      .then((pl) => {
+        if (!live) return
+        const name = project || selectedProject || pl.active || ''
+        const hit = (pl.detail ?? []).find((d) => d.name === name)
+        setPickedDir(hit?.work_dir ?? '')
+        setDirTouched(false)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [activeId, project, selectedProject])
+
+  // A thread opened from the rail answers for its own project: once the pane
+  // shows a thread of another project the pick's override has done its job
+  // and must not keep the rail scoped to a directory nobody is looking at.
+  useEffect(() => {
+    if (dirProject && session?.project && session.project !== dirProject) setDirProject('')
+  }, [dirProject, session?.project])
+
   // Live node directory + change signal → re-fetch on SSE changes so the
   // fleet card and single-node orbit collapse both always show current net.
   const nodeTick = useChangeSignal()
@@ -688,6 +765,63 @@ export function SessionsView({
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }, [activeId])
+
+  // A turn can be started from a surface that renders no transcript — the
+  // workspace dispatcher, another tab, the TUI. It persists its operation on
+  // the session before there is any reply to show, so opening the thread
+  // mid-flight used to render only the user's own bubble until the answer
+  // landed tens of seconds later, which reads as "nothing happened". Mirror
+  // that live operation as a streaming placeholder (the same thinking
+  // affordance a local send gets) and follow it until it terminalizes.
+  useEffect(() => {
+    if (!activeId || !session || session.id !== activeId) return
+    const op = session.operation
+    if (!op || op.status !== 'running') return
+    // A local ask already owns the tail: its own placeholder is there and the
+    // poll below would fight the stream for the transcript.
+    if (inflight.current && inflightSid.current === activeId) return
+    const key = `op-${op.id}`
+    setMsgs((ms) =>
+      ms.some((m) => m.k === key)
+        ? ms
+        : [...ms, { role: 'assistant', text: '', streaming: true, k: key }],
+    )
+    // The clock belongs to the turn, not to when this pane opened it.
+    const startedAt = Date.parse(op.updated_at)
+    if (Number.isFinite(startedAt) && startedAt > 0) setLiveFrom(startedAt)
+    let cancelled = false
+    // A killed process leaves its operation at "running" forever (the row is
+    // only cleared when the ask returns). Following such a ghost would pin a
+    // thinking bubble to the transcript indefinitely, so stop after a budget
+    // that comfortably covers a slow classify/answer and fall back to the
+    // persisted transcript.
+    const deadline = startedAt > 0 ? startedAt + 10*60*1000 : Date.now() + 10*60*1000
+    const poll = async () => {
+      while (!cancelled) {
+        await new Promise((r) => setTimeout(r, 2000))
+        if (cancelled) return
+        if (Date.now() > deadline) {
+          setMsgs((ms) => ms.filter((m) => m.k !== key))
+          return
+        }
+        try {
+          const s = await api.session(activeId)
+          if (cancelled) return
+          if (s.operation?.id === op.id && s.operation.status === 'running') continue
+          setSession(s)
+          setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+          return
+        } catch {
+          // A transient read failure is not the end of the turn; keep
+          // following it rather than leaving the placeholder stranded.
+        }
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+    }
+  }, [activeId, session?.id, session?.operation?.id, session?.operation?.status])
 
   // A file dropped anywhere but the composer would otherwise be opened by the
   // browser, throwing the whole console away mid-turn. The composer's own
@@ -926,15 +1060,43 @@ export function SessionsView({
      *  somewhere to render instead of needing a toast. */
     let announced = false
     try {
+      // Where this thread runs. A directory picked in the composer's footer is
+      // resolved before anything else: the panel reads a session's work dir
+      // from its project row, so a directory no project points at would be
+      // silently ignored.
+      let threadProject = project || selectedProject || undefined
+      if (dirTouched && pickedDir) {
+        try {
+          threadProject = await projectForDir(pickedDir)
+          setSelectedProject(threadProject)
+          setDirProject(threadProject)
+        } catch (err) {
+          // The send matters more than the pick: report the failure and fall
+          // back to the scope's directory rather than dropping the turn.
+          toastError(err)
+        }
+      }
+      // The thread landed outside the project this pane was opened in. The
+      // URL still says otherwise, and the pane's boundary guard compares the
+      // two — so the scope has to be dropped, or the thread it just opened is
+      // unselected on the next render and lost on reload.
+      const dropScope = !!project && !!threadProject && threadProject !== project
+      /** Open the thread that was just created: through the route when it
+       *  stays inside this pane's scope, and by a project-less hash when it
+       *  does not. */
+      const openThread = (sid: string) => {
+        if (dropScope) navigate({ view: 'sessions', id: sid })
+        else onOpenSession(sid)
+      }
       // Uploads land in the session's own uploads directory, so a brand-new
       // chat with attachments needs its thread up front — the same create the
       // send below would have made anyway, one step earlier.
       if (tray.length > 0 && !id) {
-        const s = await api.createSession((raw || tray[0]?.name || '').slice(0, 48), project || selectedProject || undefined)
+        const s = await api.createSession((raw || tray[0]?.name || '').slice(0, 48), threadProject)
         id = s.id
         setSession(s)
         setSessions((ls) => [s, ...ls])
-        onOpenSession(s.id)
+        openThread(s.id)
         activeIdRef.current = s.id
         // Name the thread this ask belongs to *before* the awaits below hand
         // control back. The transcript loader's guard is `inflightSid ===
@@ -971,11 +1133,11 @@ export function SessionsView({
       ]
       // No thread yet: create one titled after the first prompt.
       if (!id) {
-        const s = await api.createSession(prompt.slice(0, 48), project || selectedProject || undefined)
+        const s = await api.createSession(prompt.slice(0, 48), threadProject)
         id = s.id
         setSession(s)
         setSessions((ls) => [s, ...ls])
-        onOpenSession(s.id)
+        openThread(s.id)
         // The prop mirror lags this synchronous flow by one render; catch it
         // up so the guards below recognize the freshly created thread.
         activeIdRef.current = s.id
@@ -1182,8 +1344,8 @@ export function SessionsView({
       { id: 'cmd:context', group: grp, label: '/context', hint: t('sessions.cmdContext'), run: go('settings:system') },
       { id: 'cmd:doctor', group: grp, label: '/doctor', hint: t('sessions.cmdDoctor'), run: go('settings:system') },
       { id: 'cmd:model', group: grp, label: '/model', hint: t('sessions.cmdModel'), run: go('settings:models') },
-      { id: 'cmd:tasks', group: grp, label: '/tasks', hint: t('sessions.cmdTasks'), run: go('queue') },
-      { id: 'cmd:plans', group: grp, label: '/plans', hint: t('sessions.cmdPlans'), run: go('plans') },
+      { id: 'cmd:tasks', group: grp, label: '/tasks', hint: t('sessions.cmdTasks'), run: go('control') },
+      { id: 'cmd:plans', group: grp, label: '/plans', hint: t('sessions.cmdPlans'), run: go('control:plans') },
       {
         id: 'cmd:read',
         group: grp,
@@ -1487,11 +1649,16 @@ export function SessionsView({
     return false
   }
 
+  // The new-chat page: nothing open, nothing to read. The footer's directory
+  // pick and the keyboard legend are that page's furniture only — a thread
+  // that exists already knows where it runs, and the legend has been read.
+  const newChatPage = !activeId && msgs.length === 0 && !loading
+
   return (
     <section class="chat">
 
 
-      <div class={`chat-pane${nodeOpen ? ' node-open' : ''}`}>
+      <div class={`chat-pane${panel ? ' panel-open' : ''}`}>
         {/* The header is unconditional so the drawer toggle is reachable even
             on a brand-new, empty thread — that is exactly when a phone user
             needs to get back to the thread list. */}
@@ -1559,13 +1726,14 @@ export function SessionsView({
             </button>
           )}
           {/* Last, and pushed to the far edge: the header reads title → tools →
-              execution target. Both are ghost icon buttons at the top of the
-              size scale — the two things here you reach for before sending,
-              and the only two that open something (a download, a card). The
-              node choice lost its spelled-out `<select>`: the glyph plus the
-              card behind it says more (which machine is local, which is
-              offline, which one the scheduler would pick) in a quarter of the
-              width, and the card is what the pane makes room for. */}
+              execution target. All three are ghost icon buttons at the top of
+              the size scale — what you reach for before sending, in the order
+              you reach for it: take the reply out, choose *where* the turn
+              runs, choose *how* it is split into steps. The node choice lost
+              its spelled-out `<select>`: the glyph plus the card behind it says
+              more (which machine is local, which is offline, which one the
+              scheduler would pick) in a quarter of the width, and the card is
+              what the pane makes room for. */}
           <div class="chat-head-tools">
             {session && msgs.length > 0 && (
               <button
@@ -1580,13 +1748,29 @@ export function SessionsView({
             <NodePicker
               /* Remounted per thread: the card belongs to the pane you opened
                  it in, and a stale `open` would keep the transcript's lane
-                 reserved after switching threads with nothing in it. */
-              key={session?.id ?? 'none'}
+                 reserved after switching threads with nothing in it. The
+                 prefix keeps the key distinct from the orchestration card's —
+                 two siblings keyed the same id made Preact warn on every
+                 render of this bar. */
+              key={`node-${session?.id ?? 'none'}`}
               nodes={nodes}
               value={nodePref}
               onPick={setNodePref}
               onManage={() => navigateView('fleet')}
-              onOpenChange={setNodeOpen}
+              open={panel === 'node'}
+              onOpenChange={(open) => setPanel(open ? 'node' : '')}
+            />
+            {/* Orchestration, to the right of the node pick: the node answers
+                *where* a turn runs, this one answers *what the thread has
+                become* — its tasks, moving or waiting on you. Both cards hang
+                off the same corner, so `panel` keeps exactly one of them up. */}
+            <OrchestrateCard
+              key={`orch-${session?.id ?? 'none'}`}
+              sessionId={session?.id ?? null}
+              open={panel === 'orch'}
+              onOpenChange={(open) => setPanel(open ? 'orch' : '')}
+              onlineNodeCount={onlineNodeCount}
+              selfNodeId={selfNodeId}
             />
           </div>
         </header>
@@ -1676,8 +1860,6 @@ export function SessionsView({
               elapsedMs={turnMs[i] ?? m.duration_ms}
               liveFrom={liveFrom}
               onOpenTask={onOpenTask}
-              onlineNodeCount={onlineNodeCount}
-              selfNodeId={selfNodeId}
             />
           ))}
         </div>
@@ -2016,6 +2198,11 @@ export function SessionsView({
                   )}
                 </span>
               )}
+              {/* The model switch, immediately left of Send — the row's right
+                  edge is where you reach for before sending, and "which model"
+                  is the one more thing that decision wants asked. WorkBuddy's
+                  composer puts its model selector in the same slot. */}
+              <ModelSelect disabled={busy} />
               {busy ? (
                 // While a reply streams, the primary action is stopping it —
                 // a disabled "Thinking…" button leaves no way out of a bad ask.
@@ -2029,11 +2216,35 @@ export function SessionsView({
                 </button>
               )}
             </div>
+            {/* The pet stands beside the box, not above it: parked over the
+                box it cost a whole row of vertical space on the one page where
+                the empty canvas is the point, and it read as a status line for
+                a thread that has not started. Anchored to the box's right edge
+                it stays with the control it belongs to — the box moves when a
+                header card opens, and the pet moves with it. */}
+            <ComposerPanda working={busy} />
           </div>
-          {/* Below the box, not inside the action row: it is a standing
-              reference, and the row it used to share now holds the context
-              picks plus the authorize toggle. */}
-          <p class="composer-shortcut-hint">{t('sessions.sendShortcut')}</p>
+          {/* Below the box, on one line: where the thread will run, then the
+              keyboard legend. The legend used to hold the left edge alone;
+              the directory pick takes that spot and the legend steps right,
+              so the two read as one line of small print instead of a control
+              bolted on beside a sentence. Both are new-chat furniture — a
+              thread that exists already knows its directory (the header's
+              mark) and nobody re-reads the legend mid-conversation. */}
+          {newChatPage ? (
+            <div class="composer-foot">
+              <DirButton
+                value={pickedDir}
+                onChange={(path) => {
+                  setPickedDir(path)
+                  setDirTouched(true)
+                }}
+                label={t('sessions.chooseDir')}
+                disabled={busy}
+              />
+              <p class="composer-shortcut-hint">{t('sessions.sendShortcut')}</p>
+            </div>
+          ) : null}
         </form>
         {loadError && <p class="gate-error composer-error">{loadError}</p>}
       </div>
@@ -2402,8 +2613,6 @@ function parentPath(p: string): string {
 function ChatBubble(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
-  onlineNodeCount?: number
-  selfNodeId?: string
   /** How long the turn behind this reply took, once it is done. The local
    *  measurement comes from `turnMs` (it is the only one that exists between
    *  the reply landing and the transcript being re-fetched); `duration_ms`
@@ -2414,7 +2623,7 @@ function ChatBubble(props: {
    *  fixed number. */
   liveFrom?: number
 }) {
-  const { msg, onOpenTask, onlineNodeCount, selfNodeId, elapsedMs, liveFrom = 0 } = props
+  const { msg, onOpenTask, elapsedMs, liveFrom = 0 } = props
   const [chainOpen, setChainOpen] = useState(false)
 
   if (msg.role === 'user') {
@@ -2459,27 +2668,23 @@ function ChatBubble(props: {
   const isTaskKind = msg.kind === 'task' && Boolean(msg.ref)
   const hasTaskStatus = Boolean(msg.streaming && msg.status)
   const hasThinking = Boolean(msg.streaming && !msg.text && !msg.status)
+  // Which model wrote this reply. The live stream carries it on the result;
+  // the stored turn carries it after a reload (see `Turn.Model`).
+  const replyModel = msg.result?.entry_model || msg.model || ''
+  // Whether the meta lane under the reply has anything to say: a task card, a
+  // gate, a remembered denial, an engine advisory. A plain answer has none of
+  // those, and the empty row still cost the column's 8px gap at the foot of
+  // every reply.
+  const hasMeta =
+    isTaskKind ||
+    Boolean(msg.result?.needs_approval) ||
+    Boolean(msg.result?.denied) ||
+    Boolean(msg.result?.consent_scope) ||
+    Boolean(msg.result?.warning)
 
   return (
     <div class="msg panda">
       <div class="msg-body bubble role-panda">
-        {/* — slot-title: orbit strip for task-class messages (collapsed by
-              default). The live status no longer rides here — it moved to the
-              foot of the bubble (slot-status). */}
-        <div class="bubble-slot-row slot-title">
-          {isTaskKind ? (
-            <div class="u-flex-1">
-              <TaskOrbit
-                taskId={msg.ref!}
-                onlineNodeCount={onlineNodeCount}
-                selfNodeId={selfNodeId}
-              />
-            </div>
-          ) : (
-            <div class="u-flex-1" />
-          )}
-        </div>
-
         {/* — slot-elapsed: how long the turn took, above the reply it measured
               rather than at its foot. It is a caption for what follows — the
               first thing you read after your own question — and a hairline
@@ -2500,16 +2705,6 @@ function ChatBubble(props: {
             </span>
           </div>
         ) : null}
-
-        {/* — slot-thought: chain-of-thought, above the answer the way a
-              reasoning model produces it. It starts open while thinking is all
-              that is happening and folds once prose arrives, so the reply is
-              not pushed down by the working that produced it. */}
-        {msg.thought && (
-          <div class="bubble-slot-row slot-thought u-w-100">
-            <ThoughtBlock text={msg.thought} live={hasThinking} />
-          </div>
-        )}
 
         {/* — slot-chat: primary copy (markdown / literal error / empty). */}
         <div class="bubble-slot-row slot-chat u-w-100">
@@ -2535,10 +2730,22 @@ function ChatBubble(props: {
               written in, the way `/copy` does in the TUI — the rendered text
               would lose its structure the moment it is pasted anywhere. It
               stays away while the turn is still streaming: half an answer is
-              not the message. */}
+              not the message.
+
+              The model that wrote the reply rides beside the icon, on the same
+              row: both are footnotes to the answer, and the model belongs next
+              to the thing it produced rather than in a lane of its own under
+              the task chrome. The name fades in with the icon on the same
+              hover — one footnote, one beat — and both keep their boxes while
+              hidden (opacity, not display), so revealing them never pushes the
+              prose or the name sideways. */}
         {msg.text && !msg.streaming && (
           <div class="bubble-slot-row slot-actions">
             <MessageCopyButton text={msg.text} markdown={msg.kind !== 'error'} />
+            {/* A task's own card already carries agent (model) @ node in its
+                exec-by line; this is the plain-answer case. The live stream
+                has it on the result, a reloaded thread on the turn itself. */}
+            {!isTaskKind && replyModel && <span class="slot-model">{replyModel}</span>}
           </div>
         )}
 
@@ -2554,14 +2761,10 @@ function ChatBubble(props: {
 
         {/* — slot-meta: task card (link + chain) stays below the copy, inside
               the meta lane so its chrome reads like context, not a separate
-              card. */}
+              card. The row only exists when it has something to say: an empty
+              one still costs the column's gap under every plain answer. */}
+        {hasMeta && (
         <div class="bubble-slot-row slot-meta">
-          {/* The model that wrote the reply rides the meta lane too — for a
-              task the exec-by line inside the card already says it, so this
-              only shows on plain answers. */}
-          {!isTaskKind && msg.result?.entry_model && (
-            <span class="dim exec-by">{msg.result.entry_model}</span>
-          )}
           {isTaskKind && msg.ref && (
             <div class="task-card u-flex-1 u-min-w-0">
               {/* A task that needs consent must be decidable where the user is
@@ -2621,6 +2824,7 @@ function ChatBubble(props: {
             <span class="badge yellow">{msg.result.warning}</span>
           )}
         </div>
+        )}
 
         {/* — slot-status: the live thinking / task status, at the foot of the
               bubble and left-aligned. While a reply is still forming it reads
@@ -2733,30 +2937,6 @@ function TaskApproval({ taskId, preselect }: { taskId: string; preselect?: Appro
   )
 }
 
-/** Mounts DecisionOrbit for a single task id. Loads the task once for its
- *  Task.traces / plan_meta / delegation_chain (the initial hydrate), and
- *  leaves SSE tailing to DecisionOrbit → useTraceForTask inside. */
-function TaskOrbit(props: {
-  taskId: string
-  onlineNodeCount?: number
-  selfNodeId?: string
-}) {
-  const change = useChangeSignal()
-  const { data: task } = useAsync<Task>(
-    () => api.task(props.taskId).catch(() => null as any),
-    [props.taskId],
-    change,
-  )
-  return (
-    <DecisionOrbit
-      task={task ?? undefined}
-      onlineNodeCount={props.onlineNodeCount}
-      selfNodeId={props.selfNodeId}
-      defaultOpen={false}
-    />
-  )
-}
-
 /** TaskQuickSend delivers a message into the task straight from its card in
  *  the thread — the same two modes the detail view and TUI expose: queue
  *  (the agent reads it at its next round) or inject (a steer that leads the
@@ -2854,84 +3034,6 @@ function TaskChain({ taskId }: { taskId: string }) {
   const events = data?.events ?? []
   if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
   return <EventTimeline events={events} className="task-chain-timeline" />
-}
-
-/** Chain-of-thought, shown apart from the answer.
- *
- *  Reasoning arrives on its own stream and is display-only (D14).
- *  User-controlled toggle state ensures user's expansion choice is preserved
- *  across stream deltas without snapping shut. */
-function ThoughtBlock({ text, live }: { text: string; live: boolean }) {
-  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
-  const [copied, setCopied] = useState(false)
-
-  const lines = useMemo(() => text.trim().split('\n'), [text])
-  const summary = useMemo(() => {
-    const first = lines.find((l) => l.trim().length > 0) || ''
-    return first.length > 70 ? first.slice(0, 70) + '…' : first
-  }, [lines])
-
-  const isOpen = userExpanded !== null ? userExpanded : live
-
-  const toggle = (e: Event) => {
-    e.preventDefault()
-    setUserExpanded(!isOpen)
-  }
-
-  const copy = (e: Event) => {
-    e.stopPropagation()
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }
-
-  return (
-    <div class={`thought-card ${isOpen ? 'open' : 'closed'}`}>
-      <div
-        class="thought-head"
-        onClick={toggle}
-        role="button"
-        tabIndex={0}
-        aria-expanded={isOpen}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') toggle(e)
-        }}
-      >
-        <span class="thought-badge">
-          {live ? <span class="spinner spinner-inline" aria-hidden="true" /> : <span class="thought-sparkle">✻</span>}
-          <span class="thought-label">
-            {live ? t('sessions.thinking') : t('sessions.thought')}
-          </span>
-        </span>
-        {!isOpen && summary && (
-          <span class="thought-summary-preview dim mono" title={summary}>
-            {summary}
-          </span>
-        )}
-        <span class="grow" />
-        <span class="thought-meta dim">
-          {lines.length} {t('common.lines')}
-        </span>
-        <button
-          type="button"
-          class="thought-copy-btn"
-          onClick={copy}
-          title={t('sessions.copyThought')}
-        >
-          {copied ? '✓' : '⧉'}
-        </button>
-        <span class={`thought-chevron ${isOpen ? 'open' : ''}`} aria-hidden="true">
-          {isOpen ? '▴' : '▾'}
-        </span>
-      </div>
-      {isOpen && (
-        <div class="thought-body mono">
-          {text}
-        </div>
-      )}
-    </div>
-  )
 }
 
 /** DiffViewer renders git patch lines with syntax coloring for added/deleted lines and hunks. */

@@ -1,0 +1,489 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+
+/* Profile page: the identity chip's destination. A masthead across the top,
+   then two columns — the activity calendar in the working column and one
+   tall card on the right for the build itself.
+
+   The calendar keeps the reference's geometry at any width: 26 fixed columns
+   of square cells with a 3px gutter, so the squares grow with the column
+   instead of the grid gaining columns. The page is capped at 980px and the
+   right column is a fixed 320px, which leaves the calendar ~578px on a
+   1280-wide window — close to the reference's day-square size. Letting the
+   calendar take the full page width was tried and is too coarse: 26 columns
+   stretched to 1000px read as tiles, not as a calendar. */
+
+/* The pane centres the page: `.main` is the scroll container, so the block is
+   centred with auto margins (not `justify-content`, which would clip the top
+   of a page taller than the pane). Auto margins take the spare width and
+   height while the page is shorter than the pane — equal whitespace on
+   left/right and top/bottom — and collapse to 0 when it is taller, so a short
+   window still scrolls from the masthead instead of hiding it. */
+.main:has(> .profile) {
+  display: flex;
+  flex-direction: column;
+}
+
+.profile {
+  width: 100%;
+  max-width: 980px;
+  margin: auto;
+}
+
+.profile-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  /* No page header on this page — the identity card is the masthead, so the
+     grid starts flush with .main's own padding. */
+  margin-top: 0;
+  align-items: stretch;
+}
+
+.profile-main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* ---- Identity ------------------------------------------------------------ */
+
+/* The masthead owns the whole first row, so its facts read as one spec strip
+   instead of a narrow column of rows. */
+.profile-identity {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  padding: 20px 22px;
+}
+
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.profile-avatar {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-alpha-md);
+  border: 1px solid var(--border-soft);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+
+.profile-id {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.profile-name {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-host {
+  font-size: var(--text-md);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-state {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-sm);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.profile-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.profile-state.on {
+  color: var(--text);
+}
+
+.profile-state.on .profile-state-dot {
+  background: var(--good);
+  box-shadow: 0 0 6px var(--good);
+}
+
+/* Facts read as a spec strip across the masthead: label above value, items
+   wrapping when the window narrows. A row-per-fact list (the shape this card
+   had when it was a narrow column) would leave the right half empty. */
+.profile-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 44px;
+  margin: 0;
+  min-width: 0;
+}
+
+.profile-facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.profile-facts dt {
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--text-tertiary);
+}
+
+.profile-facts dd {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+  /* CPU model names are long and the card is not getting wider for them:
+     wrap onto a second line rather than truncating "…i9-12900H…". */
+  overflow-wrap: anywhere;
+}
+
+.profile-facts .profile-node-id {
+  font-size: var(--text-sm);
+}
+
+/* ---- Version ------------------------------------------------------------- */
+
+.profile-version {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px 22px;
+}
+
+.ver-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ver-num {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.ver-code {
+  padding: 4px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-alpha-md);
+  border: 1px solid var(--border-soft);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.ver-date {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--text-tertiary);
+}
+
+.ver-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+}
+
+.ver-state-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--good);
+}
+
+.ver-state.has-update {
+  color: var(--text);
+}
+
+.ver-state.has-update .ver-state-dot {
+  background: var(--info);
+  box-shadow: 0 0 6px var(--info);
+}
+
+/* Release notes arrive from GitHub with their own line breaks; three lines is
+   enough to say what changed without turning the card into a scroll box. */
+.ver-notes {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--text-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ver-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* The footer sits at the card's bottom edge, so the height the card borrows
+   from the column beside it reads as air rather than as a hole. */
+.ver-about {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ver-about-label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.ver-about-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ver-about-links {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+.ver-about-links a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.ver-about-links a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* ---- Usage / calendar ---------------------------------------------------- */
+
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* No margin-top: the grid's own 20px gap already separates this card from
+     the identity row above it. The extra 20px this card used to carry made
+     the left column start 20px below the version card beside it — the one
+     place on the page where left and right did not line up. */
+  padding: 20px 22px 22px;
+}
+
+.usage-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.usage-title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.usage-range {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--surface-alpha-sm);
+  border: 1px solid var(--border-soft);
+  width: auto;
+  overflow: visible;
+}
+
+/* The app's page-level segmented control is a joined strip with a solid white
+   active cell — right for Settings' section tabs, far too loud inside a card
+   header. The calendar's range chip is the reference's quieter shape: a
+   recessed track with a raised pill on the current range. */
+.usage-range .seg {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.usage-range .seg + .seg {
+  border-left: 0;
+}
+
+.usage-range .seg:hover {
+  color: var(--text);
+}
+
+.usage-range .seg.on {
+  background: var(--surface-alpha-lg);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.usage-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.usage-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  height: 60px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: var(--surface-alpha-md);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.usage-stat-label {
+  font-size: var(--text-sm);
+  line-height: 16px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-stat-value {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A model name is text, not a number: it gets the footnote size so a long
+   alias ("glm-5.3-flash") still fits the cell. */
+.usage-stat-value.small {
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.heat {
+  display: flex;
+  gap: 3px;
+  width: 100%;
+}
+
+.heat-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.heat-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: var(--surface-alpha-md);
+}
+
+/* Days that have not happened yet are gaps, not empty squares — the week
+   containing today keeps its shape without pretending the rest of it is
+   already accounted for. */
+.heat-cell.future {
+  background: transparent;
+}
+
+/* Pinned to the card's bottom edge the way the version card pins its footer:
+   when the card beside it is taller, the row stretches this one and the slack
+   lands between the grid and its caption instead of trailing empty space. */
+.usage-caption {
+  margin: auto 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.usage-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--warn);
+}
+
+/* Below this width the two-column split starves the calendar (a 320px rail
+   out of a 700px page leaves ~11px day squares). One column instead, with the
+   calendar capped so its squares do not inflate back into tiles. */
+@media (max-width: 1140px) {
+  .profile-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .usage-card {
+    max-width: 640px;
+    /* The masthead above takes the full column width; the capped calendar card
+       keeps its 640px and takes the slack on both sides. `width` has to be
+       explicit: an auto-margin grid item shrinks to fit-content, and the card
+       would collapse to its content instead of holding the reference geometry. */
+    width: 100%;
+    margin-inline: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .usage-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
