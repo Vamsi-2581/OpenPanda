@@ -402,62 +402,318 @@ func (m tuiModel) onboardingView() string {
 	}
 }
 
-// onboardingTermsView renders the rich terms of service & license agreement card.
-func (m tuiModel) onboardingTermsView(w, h int) string {
-	boxWidth := min(max(50, w-4), 86)
-
-	var lines []string
-
-	// License-change banner: upgrades from the MIT era see the card again with
-	// a one-line explanation rather than an unexplained repeat.
-	if m.termsReconsent {
-		lines = append(lines, m.th.warn.Render(i18n.T(m.loc, "tui.onboard.termsUpdated")))
-		lines = append(lines, "")
+// termsBoxWidth is the terms card's outer width: never narrower than 50 columns
+// so the clauses stay readable, never wider than 86 so the lines do not run away
+// on a wide terminal. The frame adds a border and a padding column on each side,
+// so it renders 2 columns wider than the value returned here — the last clamp
+// keeps it on screen when the terminal is narrower than the 50-column floor.
+func termsBoxWidth(w int) int {
+	if w <= 0 {
+		w = 80
 	}
+	return min(min(86, max(50, w-4)), max(24, w-2))
+}
 
-	tt := termsCardText(m.loc)
+// termsCard lays the terms card out as three row groups: everything above the
+// clause body, the clause body itself, and everything below it (the prevails
+// note, the answer row, the key hints). Rendering windows the body to the frame
+// and the scroll handlers page by a screenful of it, so both go through here
+// instead of each deriving the geometry.
+//
+// scrollNote is the trailing "PgUp/PgDn  18/80" position line. It occupies a row
+// of its own whether or not the document overflows, so the card's geometry never
+// depends on the position it reports; callers that only need the row counts pass
+// "".
+func (m tuiModel) termsCard(tt termsText, boxWidth int, scrollNote string) (head, body, foot []string) {
+	// lipgloss counts a style's Width as padding plus content, so the frame's
+	// one-column padding on each side comes off it; clause prose sits in a
+	// three-column gutter, which comes off again.
+	inner := boxWidth - 2
+	const gutter = 3
+	rule := m.th.muted.Render(strings.Repeat("─", inner))
 
-	lines = append(lines, m.th.heading.Render(tt.heading))
-	lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
-	lines = append(lines, "")
+	// Every fixed row is wrapped here rather than left to the frame: the frame
+	// wraps whatever overflows, and a row that silently becomes two would make
+	// the card taller than the window it was sized for.
+	if m.termsReconsent {
+		// The license-change banner leads the card so an upgrade from the MIT
+		// era explains itself rather than looking like a repeat.
+		for _, line := range wrapTermsText(i18n.T(m.loc, "tui.onboard.termsUpdated"), inner) {
+			head = append(head, m.th.warn.Render(line))
+		}
+		head = append(head, "")
+	}
+	for _, line := range wrapTermsText(tt.heading, inner) {
+		head = append(head, m.th.heading.Render(line))
+	}
+	head = append(head, rule, "")
+
 	for i, sec := range tt.sections {
 		if i > 0 {
-			lines = append(lines, "")
+			body = append(body, "")
 		}
-		lines = append(lines, m.th.accent.Bold(true).Render(sec.title))
-		for _, body := range sec.body {
-			lines = append(lines, "   "+body)
+		for _, line := range wrapTermsText(sec.title, inner) {
+			body = append(body, m.th.accent.Bold(true).Render(line))
+		}
+		for _, line := range wrapTermsText(sec.body, inner-gutter) {
+			body = append(body, strings.Repeat(" ", gutter)+line)
 		}
 	}
-	lines = append(lines, "")
-	lines = append(lines, m.th.muted.Render(tt.prevails))
-	lines = append(lines, "")
-	lines = append(lines, m.th.muted.Render(strings.Repeat("─", boxWidth-4)))
 
-	// Options
-	var optAgree, optDecline string
+	// Answer row: the cursor decides which option is highlighted and marked, so
+	// the styling happens here; answerStacks only picks the layout.
+	optAgree := m.th.muted.Render("  " + tt.agree)
+	optDecline := m.th.muted.Render("  " + tt.decline)
 	if m.termsCursor == 0 {
 		optAgree = m.th.accent.Bold(true).Render("> " + tt.agree)
-		optDecline = m.th.muted.Render("  " + tt.decline)
 	} else {
-		optAgree = m.th.muted.Render("  " + tt.agree)
 		optDecline = m.th.warn.Bold(true).Render("> " + tt.decline)
 	}
-	lines = append(lines, fmt.Sprintf("  %s      %s", optAgree, optDecline))
-	lines = append(lines, "")
-	lines = append(lines, m.th.muted.Render("  "+tt.hints))
 
-	cardContent := strings.Join(lines, "\n")
-	boxed := m.th.listBox.Width(boxWidth).Render(cardContent)
+	// Everything below the clause window. The prevails note is built apart from
+	// the rest because it is the one row the card gives up on a terminal too
+	// short to hold it: it restates the pointer to LICENSE and TERMS.md that
+	// clause one already ends with, so the clauses are what must survive.
+	var prevails []string
+	for _, line := range wrapTermsText(tt.prevails, inner) {
+		prevails = append(prevails, m.th.muted.Render(line))
+	}
+
+	tail := []string{"", rule}
+	if tt.answerStacks(inner) {
+		tail = append(tail, "  "+optAgree, "  "+optDecline)
+	} else {
+		tail = append(tail, fmt.Sprintf("  %s      %s", optAgree, optDecline))
+	}
+	tail = append(tail, "")
+	for _, line := range wrapTermsText("  "+tt.hints, inner) {
+		tail = append(tail, m.th.muted.Render(line))
+	}
+	tail = append(tail, m.th.muted.Render(scrollNote))
+
+	foot = tail
+	if m.termsBodyRows(len(head), len(tail)+len(prevails)+1) >= minTermsClauseRows {
+		foot = append(append([]string{""}, prevails...), tail...)
+	}
+	return head, body, foot
+}
+
+// minTermsClauseRows is how many clause rows the card insists on before it
+// spends rows on the prevails note instead. Below this the note is dropped and
+// the window takes the space.
+const minTermsClauseRows = 3
+
+// termsBodyRows is how many clause rows the frame leaves for the body at the
+// current terminal size, once its fixed head, foot and two border rows are
+// accounted for. It floors at one row rather than at a comfortable number: a
+// short terminal has to give something up, and giving up clause rows is what
+// the scroll window is for — overflowing the frame is not.
+func (m tuiModel) termsBodyRows(headRows, footRows int) int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	return max(1, h-headRows-footRows-2)
+}
+
+// termsPageRows is one screenful of the terms card's clause window — the step
+// PgUp and PgDn move by.
+func (m tuiModel) termsPageRows() int {
+	head, _, foot := m.termsCard(termsCardText(m.loc), termsBoxWidth(m.width), "")
+	return m.termsBodyRows(len(head), len(foot))
+}
+
+// scrollTerms moves the terms card's clause window by delta rows, clamped to the
+// document.
+func (m *tuiModel) scrollTerms(delta int) {
+	head, body, foot := m.termsCard(termsCardText(m.loc), termsBoxWidth(m.width), "")
+	rows := m.termsBodyRows(len(head), len(foot))
+	m.termsScroll = min(max(0, m.termsScroll+delta), max(0, len(body)-rows))
+}
+
+// onboardingTermsView renders the terms of service & license agreement card.
+//
+// The ten clauses are long prose in five languages — seventy-odd wrapped rows
+// against the twenty-four a default terminal offers — so the clause body is
+// windowed to the frame and scrolled with PgUp/PgDn, Home/End or the wheel. The
+// answer row sits below the window, outside it: wherever the user has scrolled
+// to, agree and decline are on screen.
+func (m tuiModel) onboardingTermsView(w, h int) string {
+	boxWidth := termsBoxWidth(w)
+	tt := termsCardText(m.loc)
+	head, body, foot := m.termsCard(tt, boxWidth, "")
+
+	rows := m.termsBodyRows(len(head), len(foot))
+	scroll := min(max(0, m.termsScroll), max(0, len(body)-rows))
+	end := min(len(body), scroll+rows)
+
+	if len(body) > rows {
+		// Lay out again with the position line. It holds a row of its own either
+		// way, so the geometry computed above still stands.
+		_, _, foot = m.termsCard(tt, boxWidth, fmt.Sprintf("  PgUp/PgDn   %d/%d", end, len(body)))
+	}
+
+	lines := append([]string{}, head...)
+	lines = append(lines, body[scroll:end]...)
+	lines = append(lines, foot...)
+
+	boxed := m.th.listBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, boxed)
 }
 
-// termsSection is one numbered clause of the onboarding terms card; body is
-// pre-wrapped to the card width.
+// Line-breaking prohibitions the card honours. Chinese and Japanese typography
+// does not let a line end on an opening bracket or open on a closing one, and a
+// Latin token embedded in CJK prose is one word: a hard break inside it reads as
+// a typo rather than as a wrap.
+const (
+	noLineStart = "）】》」』〉〕］｝、。，．；：！？…·”’)]}>,.;:!?%‰℃"
+	noLineEnd   = "（【《「『〈〔［｛“‘([{<"
+)
+
+// asciiWordRune reports whether r belongs to a Latin or numeric token. Only
+// ASCII is considered: CJK letters are word runes to unicode.IsLetter, and
+// treating them as tokens would pull every break back to the start of the
+// sentence.
+func asciiWordRune(r rune) bool {
+	switch {
+	case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		return true
+	case r == '-', r == '_', r == '.', r == '+', r == '@', r == '/':
+		return true
+	}
+	return false
+}
+
+// pullBackBreak walks a hard break back while either side of it breaks one of
+// those rules, so the line before never ends on an opening bracket and the line
+// after never opens on a closing one or on half a Latin token. cur is the line
+// being filled and next is the rune that overflowed it; at is where the break
+// currently sits, and the rune following the break is next when at is the end of
+// cur.
+func pullBackBreak(cur []rune, next rune, at int) int {
+	start := at
+	for at > 0 {
+		first := next
+		if at < len(cur) {
+			first = cur[at]
+		}
+		last := cur[at-1]
+		switch {
+		case strings.ContainsRune(noLineStart, first), strings.ContainsRune(noLineEnd, last):
+			at--
+		case asciiWordRune(first) && asciiWordRune(last):
+			// Protecting the token must not push the break past its start: a
+			// token too long for one line has to be split somewhere, and moving
+			// it whole onto the next line only moves the wall.
+			if tokenStartsLine(cur, at-1) {
+				return at
+			}
+			at--
+		default:
+			return at
+		}
+	}
+	// A pathological run — a whole line of closing punctuation — must still
+	// break somewhere rather than be carried forward wholesale.
+	return start
+}
+
+// tokenStartsLine reports whether the word run ending at index i also begins the
+// line, i.e. the token has nothing in front of it to break after.
+func tokenStartsLine(cur []rune, i int) bool {
+	for i > 0 && asciiWordRune(cur[i-1]) {
+		i--
+	}
+	return i == 0
+}
+
+// wrapTermsText greedily wraps s to width display columns.
+//
+// lipgloss's own wrapper breaks on spaces, which is right for Latin prose but
+// leaves a short line whenever a long unbroken CJK run follows one: the whole
+// run moves to the next line and is then broken per rune. The clauses are prose
+// in five languages, so the card wraps here instead.
+//
+// A space is preferred as the break point so Latin words survive, but only when
+// it does not waste much of the line. In CJK prose the rare spaces usually
+// follow an embedded Latin token and sit far back — honouring one there would
+// leave a ragged column and push the text onto many more rows than it needs.
+// Whatever break wins is then walked back past the prohibitions above.
+func wrapTermsText(s string, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+	var (
+		out            []string
+		cur            []rune
+		curWidth       int
+		lastSpace      = -1
+		lastSpaceWidth int
+	)
+	flush := func() {
+		// An empty line can only come from a break pulled all the way back;
+		// dropping it keeps the caller's row count honest.
+		if line := strings.TrimRight(string(cur), " "); line != "" {
+			out = append(out, line)
+		}
+		cur, curWidth, lastSpace, lastSpaceWidth = cur[:0], 0, -1, 0
+	}
+	for _, r := range s {
+		if r == '\n' {
+			flush()
+			continue
+		}
+		if r == ' ' {
+			// A line never opens with a space, and a space that would itself
+			// overflow simply ends the line.
+			if len(cur) == 0 {
+				continue
+			}
+			if curWidth+1 > width {
+				flush()
+				continue
+			}
+			lastSpace, lastSpaceWidth = len(cur), curWidth
+			cur = append(cur, r)
+			curWidth++
+			continue
+		}
+		rw := cliui.RuneWidth(r)
+		if curWidth+rw > width && len(cur) > 0 {
+			at := len(cur)
+			if lastSpace >= 0 && curWidth-lastSpaceWidth <= width/4 {
+				at = lastSpace
+			}
+			at = pullBackBreak(cur, r, at)
+			// Carry what falls past the break onto the new line, dropping the
+			// space the break consumed.
+			carry := append([]rune(nil), cur[at:]...)
+			cur = cur[:at]
+			flush()
+			for _, c := range carry {
+				if c == ' ' && len(cur) == 0 {
+					continue
+				}
+				cur = append(cur, c)
+				curWidth += cliui.RuneWidth(c)
+			}
+		}
+		cur = append(cur, r)
+		curWidth += rw
+	}
+	if len(cur) > 0 {
+		flush()
+	}
+	return out
+}
+
+// termsSection is one numbered clause of the onboarding terms card. body is a
+// single paragraph: the card wraps it to its own width at render time, so the
+// text does not have to be hand-broken per language.
 type termsSection struct {
 	title string
-	body  []string
+	body  string
 }
 
 // termsText is everything the terms card renders in the user's language.
@@ -470,34 +726,36 @@ type termsText struct {
 	hints    string
 }
 
-// termsCardText localizes the condensed license/terms card. The web console
-// ships the full ten-clause document; this card is the four-clause summary and
-// defers to the LICENSE file, which the `prevails` line states.
+// answerStacks reports whether the two answer options have to go one per line:
+// they do not fit side by side in German or Spanish on a narrow terminal.
+// Keeping the row's line count exact matters, because the card sizes its clause
+// window from the number of fixed rows around it.
+func (tt termsText) answerStacks(inner int) bool {
+	// The row renders as "  " + marker(2) + agree + gap(6) + marker(2) + decline.
+	// Both markers are 2 columns whether or not the option is the cursor's.
+	return cliui.DisplayWidth(tt.agree)+cliui.DisplayWidth(tt.decline)+12 > inner
+}
+
+// termsCardText localizes the license/terms card. It carries the same ten
+// clauses the web console shows in its onboarding wizard — the two surfaces are
+// the same notice and must not drift — with the clause prose left unwrapped so
+// the card can reflow it to whatever width the terminal gives it.
 func termsCardText(loc i18n.Locale) termsText {
 	switch loc {
 	case i18n.ChineseSimp:
 		return termsText{
 			heading: "⚖️  OpenPanda 开源许可与服务条款协议",
 			sections: []termsSection{
-				{"1. AGPL 开源许可证声明 (AGPL-3.0 Open Source License)", []string{
-					"OpenPanda 遵循 AGPL-3.0-or-later 开源发布。您可自由运行、修改、",
-					"分发本软件（含商业用途）；衍生作品须同样以 AGPL 发布，通过网络",
-					"提供修改版须同步公开源代码。闭源使用可联系购买商业授权。",
-				}},
-				{"2. 本地优先与数据自治原则 (Local-First & Privacy Autonomy)", []string{
-					"开发者的隐私与数据主权是我们的根本基石。OpenPanda 恪守本地优先原则，",
-					"您的源代码、工作区文件、对话历史与 API 密钥均严格保存于本地设备。",
-					"绝无任何未经授权的遥测、用户追踪或窃取私有资产的代码逻辑。",
-				}},
-				{"3. AI 生成内容免责声明 (AI Generation Disclaimer)", []string{
-					"大语言模型生成的所有代码变更、终端命令及分析均基于概率生成，",
-					"可能包含逻辑缺陷、幻觉或安全隐患。在应用于生产环境或关键系统前，",
-					"请务必进行充分的人工审查与测试验证。运行生成结果的一切风险由使用者承担。",
-				}},
-				{"4. 命令执行与系统安全须知 (Execution & System Safety)", []string{
-					"OpenPanda 具备通过终端执行系统命令及修改磁盘文件的能力。虽然系统提供",
-					"多层级确认机制，在执行不可逆的破坏性命令或修改前，请务必审慎核验。",
-				}},
+				{`1. 开源许可（AGPL-3.0）`, `OpenPanda 是基于 GNU Affero 通用公共许可证 3.0 或更高版本（AGPL-3.0-or-later）发布的自由开源软件。你可以运行、研究、修改和再分发（包括商业用途），但衍生作品必须同样以 AGPL 发布；若将修改版通过网络提供给他人使用，必须同时提供其源代码。闭源集成或托管用途可购买商业授权（见 COMMERCIAL.md）。完整许可与条款见随附的 LICENSE 与 TERMS.zh-CN.md 文件，如与本摘要不一致，以二者为准。`},
+				{`2. 自托管软件，而非托管服务`, `OpenPanda 是你自行安装、配置并在自己的硬件上运行的软件。作者不提供托管服务、服务水平承诺、正常运行时间保证、支持义务或数据保管。安装、运行、维护、访问控制、监控及部署环境的安全姿态全部由你自行负责。`},
+				{`3. 本地优先与隐私自主`, `你的源代码、工作区文件、对话记录、记忆库与 API 凭据默认保留在你自己的设备上。软件不含遥测、跟踪或私人数据收集。仅在你主动配置模型服务方或对等节点接收时数据才会离开本机——一旦离开，适用接收方的隐私实践而非 OpenPanda 的。`},
+				{`4. 第三方模型服务`, `AI 功能使用你自行提供的凭据接入你选择的模型服务商（云端 API 或本地端点）。发送给服务商的提示词、工作区上下文与文件仅受该服务商的条款、隐私政策、数据留存与计费规则约束。OpenPanda 与任何服务商均无隶属、背书或责任关系；相关争议、超额费用与数据处理属于你和服务商之间的事项。`},
+				{`5. 点对点委派与网络信任`, `OpenPanda 可以在经配对授权的设备之间委派任务。任务负载、能力卡片、文件与结果经由认证信道在节点间传输——其中可能包括你与之配对的他人设备，其行为不受作者控制。请只与信任的机器配对，并将节点监听端口与 Web 控制台视为私有端点：暴露给不受信网络的风险完全由你自行承担。`},
+				{`6. AI 生成内容`, `模型生成的代码、命令、分析及其他输出具有概率性，可能存在缺陷、幻觉、安全隐患、无法运行，或受第三方权利约束——且不构成任何形式的专业建议（包括法律、医疗、金融或安全建议）。使用前请自行审阅、核查许可并测试；依据生成输出采取的行动风险由你独自承担。`},
+				{`7. 执行与系统安全`, `OpenPanda 可以执行 shell 命令、修改文件并改变系统状态，包括在远端节点上。审批分级、沙箱与审计日志是缓解措施而非保证：软件缺陷、误配置、提示注入或被入侵的对等节点仍可能造成损害。批准破坏性、不可逆操作前务必核实，并为重要数据保留独立备份。`},
+				{`8. 合规与可接受使用`, `你有责任以合法方式使用 OpenPanda，并遵守适用于你的全部义务——数据保护法规、出口管制与制裁规定、所在单位的设备与网络政策，以及你通过本软件接触的任何服务、仓库或网络的条款。不得将其用于侵犯他人权利、未经授权访问系统，或处理你无权处理的数据。本条不改变亦不转移你的责任。`},
+				{`9. 无担保与责任限制`, `本软件按"现状"及"可用性"提供，不附带任何明示、默示或法定的担保——包括适销性、特定用途适用性、安全性及不侵权担保。在法律允许的最大范围内，作者与贡献者不对因本软件、其输出或其使用引起的任何直接、间接、附带、特殊、后果性或惩罚性损害负责——包括数据丢失、利润损失、停机、替代服务成本或第三方索赔——即使已被告知存在此类可能性。在法律不允许完全排除责任的情形下，责任以法律要求的最低限度为限。`},
+				{`10. 赔偿、条款变更与可分割性`, `因你使用本软件、你的配置、你下达的任务与委派，或你违反本条款、违反法律或第三方权利而引起的索赔、损害与费用（包括律师费），你同意为作者与贡献者抗辩、使其免受损害并予以赔偿。条款可能随软件版本更新，以你所运行版本附带的条款为准。如任何条款被认定不可执行，其余条款仍然完全有效。`},
 			},
 			prevails: "本卡为摘要；权威文本为随附 LICENSE 与 TERMS.zh-CN.md 文件，如有出入以二者为准。",
 			agree:    "[Y] 同意并继续 (Agree and Continue)",
@@ -508,26 +766,16 @@ func termsCardText(loc i18n.Locale) termsText {
 		return termsText{
 			heading: "⚖️  OpenPanda 利用規約とライセンス",
 			sections: []termsSection{
-				{"1. オープンソースライセンス（AGPL-3.0）", []string{
-					"OpenPanda は AGPL-3.0-or-later で公開されるフリーソフトウェアです。",
-					"商用を含め実行・改変・再配布が可能ですが、派生作品も AGPL で公開が必要で、",
-					"改変版をネットワーク越しに提供する場合はソースも提供しなければなりません。",
-					"クローズドソース利用には商用ライセンスをご用意しています。",
-				}},
-				{"2. ローカルファーストとプライバシー自治", []string{
-					"プライバシーとデータ主権は基盤です。ソースコード、ワークスペース、",
-					"会話履歴、API キーはすべてローカルに保存され、無許可のテレメトリや",
-					"追跡・外部送信のコードは存在しません。",
-				}},
-				{"3. AI 生成物に関する免責", []string{
-					"コード変更・コマンド・分析は確率的に生成され、誤りやバグを含む場合が",
-					"あります。本番適用前に必ずレビューとテストを行ってください。実行結果の",
-					"責任は利用者にあります。",
-				}},
-				{"4. コマンド実行とシステム安全", []string{
-					"OpenPanda は端末コマンドの実行とファイル変更が可能です。多段階の確認",
-					"機構はありますが、破壊的操作の前には必ず内容を確認してください。",
-				}},
+				{`1. オープンソースライセンス（AGPL-3.0）`, `OpenPanda は GNU Affero General Public License v3.0 以降（AGPL-3.0-or-later）の下で公開されているフリーかつオープンソースのソフトウェアです。商用を含め、実行・研究・改変・再配布が可能ですが、派生作品は同じ AGPL 条件で公開する必要があり、改変版をネットワーク越しにユーザーへ提供する場合はそのソースコードも提供しなければなりません。クローズドソース利用には商用ライセンスをご利用ください（COMMERCIAL.md 参照）。完全なライセンス文と利用規約は同梱の LICENSE と TERMS.md に記載されており、本要約と矛盾する場合はそちらが優先されます。`},
+				{`2. セルフホスト型ソフトウェア（マネージドサービスではありません）`, `OpenPanda は利用者自身のハードウェアにインストール・設定・運用するソフトウェアです。作者はホスティング、サービスレベル、稼働率の約束、サポート義務、データ管理を一切提供しません。インストール、運用、保守、アクセス制御、監視、デプロイ環境のセキュリティはすべて利用者の責任です。`},
+				{`3. ローカルファーストとプライバシー自治`, `ソースコード、ワークスペースのファイル、会話履歴、メモリストア、API 認証情報は既定で利用者のデバイス上に保持されます。テレメトリ、トラッキング、個人データの収集はありません。データがノード外へ出るのは、利用者がモデルプロバイダーまたはピアを明示的に設定した場合のみです。送信後は OpenPanda ではなく受信者側の運用方針が適用されます。`},
+				{`4. サードパーティのモデルプロバイダー`, `AI 機能は、利用者が選択したプロバイダー（ホスト型 API またはローカルエンドポイント）の認証情報で動作します。プロバイダーへ送信されるプロンプト、ワークスペースコンテキスト、ファイルは、当該プロバイダーの規約・プライバシーポリシー・保存方針・料金のみに従います。OpenPanda はいかなるプロバイダーとも提携・推薦関係になく、責任も負いません。紛争、超過料金、データ取扱いは利用者とプロバイダー間の問題です。`},
+				{`5. P2P 委譲とネットワークの信頼`, `OpenPanda は、ペアリングで承認されたデバイス間でタスクを委譲できます。ペイロード、能力カード、ファイル、結果は認証済みチャネル経由でノード間を移動します——ペアリング相手が他人の運営するノードである場合を含み、その行為は作者の管理外です。信頼できるマシンのみとペアリングし、ノードリスナーと Web コンソールは非公開エンドポイントとして扱ってください。信頼できないネットワークへの公開リスクはすべて利用者にあります。`},
+				{`6. AI 生成物`, `モデルが生成するコード、コマンド、分析などの出力は確率的です。欠陥、ハルシネーション、セキュリティ上の問題、動作不良、第三者の権利に抵触する内容を含む可能性があり、法律・医療・金融・セキュリティなどの専門的助言を構成しません。使用前に必ずレビュー、ライセンス確認、テストを行ってください。生成物に基づく行動のリスクは利用者が単独で負います。`},
+				{`7. 実行とシステム安全`, `OpenPanda はシェルコマンドの実行、ファイル変更、システム状態の変更を行えます（リモートノードを含む）。承認階層、サンドボックス、監査ログは緩和策であり保証ではありません。不具合、設定ミス、プロンプトインジェクション、侵害されたピアによって損害が生じる可能性があります。破壊的・不可逆な操作は承認前に必ず確認し、重要なデータは独立したバックアップを保持してください。`},
+				{`8. コンプライアンスと利用規範`, `OpenPanda の利用を適法に行い、適用されるすべての義務——データ保護法、輸出・制裁規制、所属組織のデバイス・ネットワークポリシー、および本ソフトウェア経由でアクセスするサービス・リポジトリ・ネットワークの規約——を遵守する責任は利用者にのみあります。権利侵害、権限のないシステムへのアクセス、処理権限のないデータの取扱いには使用しないでください。本条はその責任を移転しません。`},
+				{`9. 無保証と責任の制限`, `本ソフトウェアは「現状のまま」かつ「提供可能な範囲で」提供され、明示・黙示・法定を問わず、商品性、特定目的適合性、安全性、非侵害を含め一切の保証を伴いません。法律で認められる最大限の範囲において、作者および貢献者は、本ソフトウェア、その出力、またはその使用に起因する直接的・間接的・付随的・特別・結果的・懲罰的損害——データ損失、逸失利益、ダウンタイム、代替サービスの費用、第三者からの請求を含む——について、可能性を知らされていた場合でも責任を負いません。責任の完全な免責が認められない場合、法律が求める最小限度に限定されます。`},
+				{`10. 免責・補償、変更および分離条項`, `本ソフトウェアの利用、設定、発行したタスクや委譲、本規約・法律・第三者の権利への違反に起因する請求、損害、費用（弁護士費用を含む）について、利用者は作者および貢献者を防御し、免責し、補償することに同意します。本規約はソフトウェアとともに更新されることがあり、実行中のビルドに同梱される規約が適用されます。いずれかの条項が執行不能と判断された場合でも、残りの条項は完全に有効です。`},
 			},
 			prevails: "本カードは要約です。正式文書は LICENSE と TERMS.md にあり、食い違いはそちらが優先されます。",
 			agree:    "[Y] 同意して続行",
@@ -538,28 +786,16 @@ func termsCardText(loc i18n.Locale) termsText {
 		return termsText{
 			heading: "⚖️  Términos de servicio y licencia de OpenPanda",
 			sections: []termsSection{
-				{"1. Licencia de código abierto (AGPL-3.0)", []string{
-					"OpenPanda es software libre bajo la GNU AGPL v3.0 o posterior. Puedes",
-					"ejecutarlo, modificarlo y redistribuirlo —incluso con fines comerciales—",
-					"siempre que las obras derivadas sigan bajo AGPL y toda versión modificada",
-					"ofrecida por red ofrezca también su código fuente. Hay licencia comercial",
-					"para uso en código cerrado.",
-				}},
-				{"2. Local-first y autonomía de privacidad", []string{
-					"Tu privacidad y tus datos son fundamentales. Tu código, archivos,",
-					"historial de conversación y claves de API permanecen en tu dispositivo:",
-					"sin telemetría, rastreo ni exfiltración no autorizados.",
-				}},
-				{"3. Aviso sobre contenido generado por IA", []string{
-					"El código, los comandos y los análisis generados son probabilísticos y",
-					"pueden contener errores o fallos de seguridad. Revísalos y pruébalos antes",
-					"de producción. Ejecutarlos es bajo tu propia responsabilidad.",
-				}},
-				{"4. Ejecución de comandos y seguridad del sistema", []string{
-					"OpenPanda puede ejecutar comandos de terminal y modificar archivos.",
-					"Existen confirmaciones por niveles, pero verifica siempre las operaciones",
-					"destructivas irreversibles antes de aprobarlas.",
-				}},
+				{`1. Licencia de código abierto (AGPL-3.0)`, `OpenPanda es software libre y de código abierto publicado bajo la GNU Affero General Public License v3.0 o posterior (AGPL-3.0-or-later). Puedes ejecutarlo, estudiarlo, modificarlo y redistribuirlo —incluido el uso comercial— siempre que las obras derivadas permanezcan bajo la AGPL y cualquier versión modificada ofrecida a usuarios a través de una red les ofrezca también su código fuente. Existe una licencia comercial para uso en código cerrado; consulta COMMERCIAL.md. La licencia y los términos completos se encuentran en los archivos LICENSE y TERMS.md y prevalecen sobre este resumen.`},
+				{`2. Software autoalojado, no un servicio gestionado`, `OpenPanda es software que instalas, configuras y operas en tu propio hardware. Los autores no ofrecen alojamiento, niveles de servicio, compromisos de disponibilidad, obligaciones de soporte ni custodia de datos. Tú eres el único responsable de la instalación, operación, mantenimiento, control de acceso, monitorización y seguridad de tu despliegue.`},
+				{`3. Local-first y autonomía de privacidad`, `Tu código fuente, archivos de trabajo, historial de conversaciones, memorias y credenciales de API permanecen en tus dispositivos de forma predeterminada. El software no incluye telemetría, rastreo ni recopilación de datos privados. Los datos solo salen de un nodo cuando configuras explícitamente un proveedor de modelos o un par para recibirlos — y una vez fuera, rigen las prácticas del destinatario, no las de OpenPanda.`},
+				{`4. Proveedores de modelos de terceros`, `Las funciones de IA usan credenciales que tú aportas del proveedor que elijas (API alojadas o endpoints locales). Los prompts, el contexto del espacio de trabajo y los archivos enviados a un proveedor se rigen exclusivamente por sus términos, política de privacidad, retención y precios. OpenPanda no está afiliado a ningún proveedor ni responde por él; disputas, cargos por exceso y tratamiento de datos son asuntos estrictamente entre tú y el proveedor.`},
+				{`5. Delegación P2P y confianza de red`, `OpenPanda puede delegar tareas entre dispositivos autorizados mediante emparejamiento. Las cargas, tarjetas de capacidad, archivos y resultados viajan entre nodos por canales autenticados — incluidos nodos operados por otras personas con quienes te emparejes, cuyas acciones escapan al control de los autores. Empareja solo con máquinas de confianza y trata el listener del nodo y la consola web como endpoints privados: exponerlos a redes no confiables es riesgo exclusivamente tuyo.`},
+				{`6. Resultados generados por IA`, `El código, los comandos, los análisis y demás salidas del modelo son probabilísticos. Pueden contener defectos, alucinaciones, inseguridad, fallos de funcionamiento o material sujeto a derechos de terceros — y no constituyen asesoramiento profesional de ningún tipo (legal, médico, financiero ni de seguridad). Revisa, verifica licencias y prueba todo antes de usarlo; actuar sobre los resultados generados es bajo tu exclusiva responsabilidad.`},
+				{`7. Ejecución y seguridad del sistema`, `OpenPanda puede ejecutar comandos de shell, modificar archivos y alterar el estado del sistema, incluso en nodos remotos. Los niveles de aprobación, el sandboxing y los registros de auditoría son mitigaciones, no garantías: errores, configuraciones incorrectas, inyección de prompts o un par comprometido pueden causar daños. Verifica las acciones destructivas o irreversibles antes de aprobarlas y conserva copias de seguridad independientes de lo importante.`},
+				{`8. Cumplimiento y uso aceptable`, `Eres el único responsable de usar OpenPanda legalmente y conforme a todas las obligaciones que te aplican: legislación de protección de datos, controles de exportación y sanciones, políticas de dispositivos y redes de tu organización, y los términos de cualquier servicio, repositorio o red a los que accedas a través de él. No lo uses para infringir derechos, acceder a sistemas sin autorización ni procesar datos que no tienes derecho a tratar. Nada de esto transfiere esa responsabilidad.`},
+				{`9. Sin garantía y limitación de responsabilidad`, `El software se proporciona "tal cual" y "según disponibilidad", sin garantía alguna, expresa, implícita o legal — incluidas comerciabilidad, idoneidad para un fin, seguridad y no infracción. En la máxima medida permitida por la ley, los autores y contribuidores no responden por daños directos, indirectos, incidentales, especiales, consecuentes o punitivos — incluida pérdida de datos, lucro cesante, tiempo de inactividad, coste de servicios sustitutos o reclamaciones de terceros — derivados del software, sus salidas o su uso, aun advirtiendo la posibilidad. Donde la responsabilidad no pueda excluirse por completo, queda limitada al mínimo que la ley exija.`},
+				{`10. Indemnización, cambios y divisibilidad`, `Aceptas indemnizar, defender y mantener indemnes a los autores y contribuidores frente a reclamaciones, daños y gastos (incluidos honorarios legales) derivados de tu uso del software, tu configuración, las tareas y delegaciones que emites, o tu infracción de estos términos, de la ley o de derechos de terceros. Los términos pueden actualizarse junto con el software; se aplican los incluidos en la compilación que ejecutas. Si alguna disposición resulta inaplicable, el resto permanece en pleno vigor.`},
 			},
 			prevails: "Esta tarjeta es un resumen; los textos completos y vinculantes son LICENSE y TERMS.md, que prevalecen ante cualquier discrepancia.",
 			agree:    "[Y] Aceptar y continuar",
@@ -570,29 +806,16 @@ func termsCardText(loc i18n.Locale) termsText {
 		return termsText{
 			heading: "⚖️  OpenPanda Nutzungsbedingungen & Lizenz",
 			sections: []termsSection{
-				{"1. Open-Source-Lizenz (AGPL-3.0)", []string{
-					"OpenPanda ist freie Software unter der GNU AGPL v3.0 oder später. Du",
-					"darfst sie ausführen, ändern und weiterverbreiten — auch kommerziell —,",
-					"solange abgeleitete Werke unter der AGPL bleiben und über ein Netzwerk",
-					"angebotene geänderte Versionen ihren Quellcode anbieten. Für geschlossene",
-					"Nutzung ist eine kommerzielle Lizenz erhältlich.",
-				}},
-				{"2. Local-First & Datensouveränität", []string{
-					"Deine Privatsphäre und Datenhoheit sind fundamental. Quellcode,",
-					"Arbeitsdateien, Verlauf und API-Schlüssel bleiben auf deinem Gerät —",
-					"keine unerlaubte Telemetrie, kein Tracking, keine Exfiltration.",
-				}},
-				{"3. Haftungsausschluss für KI-generierte Inhalte", []string{
-					"Generierte Code-Änderungen, Befehle und Analysen sind probabilistisch",
-					"und können Fehler oder Sicherheitslücken enthalten. Vor produktivem",
-					"Einsatz immer prüfen und testen. Die Ausführung liegt in deiner",
-					"Verantwortung.",
-				}},
-				{"4. Befehlsausführung & Systemsicherheit", []string{
-					"OpenPanda kann Terminalbefehle ausführen und Dateien verändern.",
-					"Es gibt mehrstufige Bestätigungen, aber prüfe irreversible",
-					"destruktive Aktionen immer sorgfältig.",
-				}},
+				{`1. Open-Source-Lizenz (AGPL-3.0)`, `OpenPanda ist freie quelloffene Software unter der GNU Affero General Public License v3.0 oder später (AGPL-3.0-or-later). Du darfst sie ausführen, untersuchen, ändern und weiterverbreiten — auch kommerziell —, solange abgeleitete Werke unter der AGPL bleiben und jede über ein Netzwerk angebotene geänderte Version den Nutzern ihren Quellcode anbietet. Für die Nutzung in geschlossenem Code ist eine kommerzielle Lizenz erhältlich (siehe COMMERCIAL.md). Der vollständige Lizenztext und die Nutzungsbedingungen liegen in den Dateien LICENSE und TERMS.md bei und gehen dieser Zusammenfassung vor.`},
+				{`2. Selbst gehostete Software, kein Managed Service`, `OpenPanda ist Software, die du auf eigener Hardware installierst, konfigurierst und betreibst. Die Autoren bieten kein Hosting, keine Servicelevels, keine Verfügbarkeitszusagen, keine Supportpflichten und keine Datenverwahrung. Installation, Betrieb, Wartung, Zugriffskontrolle, Monitoring und die Sicherheit deiner Bereitstellung liegen allein in deiner Verantwortung.`},
+				{`3. Local-First & Datensouveränität`, `Quellcode, Arbeitsdateien, Gesprächsverläufe, Gedächtnisspeicher und API-Zugangsdaten verbleiben standardmäßig auf deinen Geräten. Die Software enthält keine Telemetrie, kein Tracking und keine Erhebung privater Daten. Daten verlassen einen Knoten nur dort, wo du ausdrücklich einen Modellanbieter oder Peer dafür konfigurierst — und ab dann gelten die Praktiken des Empfängers, nicht die von OpenPanda.`},
+				{`4. Modellanbieter von Drittanbietern`, `KI-Funktionen laufen über Zugangsdaten, die du für einen selbst gewählten Anbieter bereitstellst (gehostete APIs oder lokale Endpunkte). Prompts, Arbeitskontext und Dateien, die an einen Anbieter gesendet werden, unterliegen ausschließlich dessen Bedingungen, Datenschutzrichtlinie, Aufbewahrung und Preisen. OpenPanda steht mit keinem Anbieter in Verbindung, wird von keinem unterstützt und übernimmt keine Verantwortung; Streitigkeiten, Mehrkosten und Datenverarbeitung sind ausschließlich Sache zwischen dir und dem Anbieter.`},
+				{`5. P2P-Delegation & Netzwerkvertrauen`, `OpenPanda kann Aufgaben an durch Kopplung autorisierte Geräte delegieren. Payloads, Fähigkeitskarten, Dateien und Ergebnisse wandern über authentifizierte Kanäle zwischen Knoten — einschließlich Knoten, die von anderen Personen betrieben werden, mit denen du dich koppelst und deren Handlungen außerhalb der Kontrolle der Autoren liegen. Kopple nur mit vertrauenswürdigen Maschinen und behandle Node-Listener und Web-Konsole als private Endpunkte: Sie gegenüber nicht vertrauenswürdigen Netzen offenzulegen geschieht ausschließlich auf dein eigenes Risiko.`},
+				{`6. KI-generierte Ausgaben`, `Code, Befehle, Analysen und andere Modellausgaben sind probabilistisch. Sie können fehlerhaft, halluziniert, unsicher, nicht funktionsfähig oder durch Rechte Dritter belastet sein — und stellen keine professionelle Beratung dar (weder rechtlich, medizinisch, finanziell noch in Sicherheitsfragen). Prüfe jede Ausgabe auf Inhalt und Lizenz und teste sie vor der Verwendung; Handlungen auf Grundlage generierter Ausgaben erfolgen auf dein alleiniges Risiko.`},
+				{`7. Ausführung & Systemsicherheit`, `OpenPanda kann Shell-Befehle ausführen, Dateien verändern und den Systemzustand ändern, auch auf entfernten Knoten. Genehmigungsstufen, Sandboxing und Audit-Logs sind Risikominderung, keine Garantie: Fehler, Fehlkonfigurationen, Prompt-Injection oder ein kompromittierter Peer können weiterhin Schaden anrichten. Prüfe destruktive oder irreversible Aktionen vor der Freigabe und halte unabhängige Backups wichtiger Daten vor.`},
+				{`8. Compliance & zulässige Nutzung`, `Du bist allein dafür verantwortlich, OpenPanda rechtmäßig und im Einklang mit allen für dich geltenden Pflichten zu nutzen — Datenschutzrecht, Export- und Sanktionskontrollen, Geräte- und Netzwerkrichtlinien deiner Organisation sowie die Bedingungen jeglicher Dienste, Repositories oder Netze, die du darüber erreichst. Nutze die Software nicht zur Rechtsverletzung, zum unbefugten Zugriff auf Systeme oder zur Verarbeitung von Daten, zu deren Handhabung du nicht berechtigt bist. Nichts hiervon überträgt diese Verantwortung.`},
+				{`9. Gewährleistungsausschluss & Haftungsbeschränkung`, `Die Software wird „wie besehen" und „wie verfügbar" ohne jegliche ausdrückliche, stillschweigende oder gesetzliche Gewährleistung bereitgestellt — einschließlich Marktgängigkeit, Eignung für einen bestimmten Zweck, Sicherheit und Nichtverletzung. Soweit gesetzlich zulässig, haften die Autoren und Mitwirkenden nicht für direkte, indirekte, zufällige, besondere, Folge- oder Strafschäden — einschließlich Datenverlust, entgangener Gewinne, Ausfallzeiten, Kosten für Ersatzdienste oder Ansprüche Dritter — die aus der Software, ihren Ausgaben oder ihrer Nutzung entstehen, selbst wenn auf die Möglichkeit hingewiesen wurde. Wo eine Haftung nicht vollständig ausgeschlossen werden kann, ist sie auf das gesetzlich geforderte Mindestmaß beschränkt.`},
+				{`10. Freistellung, Änderungen & salvatorische Klausel`, `Du stimmst zu, die Autoren und Mitwirkenden zu verteidigen, schadlos zu halten und von Ansprüchen, Schäden und Aufwendungen (einschließlich Anwaltskosten) freizustellen, die aus deiner Nutzung der Software, deiner Konfiguration, den von dir ausgelösten Aufgaben und Delegationen oder deinem Verstoß gegen diese Bedingungen, gegen Gesetze oder Rechte Dritter entstehen. Die Bedingungen können zusammen mit der Software aktualisiert werden; es gelten die Bedingungen des Builds, den du ausführst. Sollte eine Bestimmung undurchsetzbar sein, bleiben die übrigen uneingeschränkt wirksam.`},
 			},
 			prevails: "Diese Karte ist eine Zusammenfassung; maßgeblich sind die vollständigen Texte in den Dateien LICENSE und TERMS.md.",
 			agree:    "[Y] Zustimmen und fortfahren",
@@ -603,30 +826,16 @@ func termsCardText(loc i18n.Locale) termsText {
 		return termsText{
 			heading: "⚖️  OpenPanda Terms of Service & License Agreement",
 			sections: []termsSection{
-				{"1. AGPL Open Source License", []string{
-					"OpenPanda is free software under the GNU Affero GPL v3.0 or later.",
-					"You may run, modify and redistribute it — including commercially —",
-					"provided derivatives stay under the AGPL and modified versions",
-					"offered over a network also offer their source. Commercial licensing",
-					"is available for closed-source use.",
-				}},
-				{"2. Local-First Architecture & Privacy Autonomy", []string{
-					"Your privacy and source code confidentiality are foundational. OpenPanda",
-					"operates strictly locally. Your source code, workspace contexts, chat",
-					"history, and API credentials remain on your device with no unauthorized",
-					"telemetry or data exfiltration.",
-				}},
-				{"3. AI Generation Advisory & Risk Disclaimer", []string{
-					"All code edits, shell commands, and suggestions are probabilistically",
-					"generated by AI models and may contain hallucinations, bugs, or flaws.",
-					"Always inspect and test generated actions before running them in",
-					"production. You assume full responsibility for running AI suggestions.",
-				}},
-				{"4. System Execution & Operational Safety", []string{
-					"OpenPanda has capabilities to execute terminal commands and modify files.",
-					"While approval guardrails are provided, always exercise discretion and",
-					"review destructive operations (such as file deletion or system calls).",
-				}},
+				{`1. Open-Source License (AGPL-3.0)`, `OpenPanda is free and open-source software released under the GNU Affero General Public License v3.0 or later. You may run, study, modify and redistribute it — including commercially — provided derivative works remain under the AGPL, and any modified version offered to users over a network also offers them its source code. A commercial license is available for closed-source use; see COMMERCIAL.md. The complete license and terms ship in the LICENSE and TERMS.md files and prevail over this summary.`},
+				{`2. Self-Hosted Software, Not a Managed Service`, `OpenPanda is software you install, configure and operate on your own hardware. The authors provide no hosting, service levels, uptime commitments, support obligations or data stewardship. You alone are responsible for the installation, operation, maintenance, access control, monitoring and security posture of your deployment.`},
+				{`3. Local-First & Privacy Autonomy`, `Your source code, workspace files, conversation history, memory stores and API credentials stay on your devices by default. The software ships no telemetry, tracking or private-data collection. Data leaves a node only where you configure a model provider or peer to receive it — and once it does, the recipient's own practices govern, not OpenPanda's.`},
+				{`4. Third-Party Model Providers`, `AI features run on credentials you supply for providers you choose (hosted APIs or local endpoints). Prompts, workspace context and files sent to a provider are governed exclusively by that provider's terms, privacy policy, retention and pricing. OpenPanda is not affiliated with, endorsed by or responsible for any provider; disputes, overage charges and data handling are strictly between you and them.`},
+				{`5. Peer-to-Peer Delegation & Network Trust`, `OpenPanda can delegate tasks across devices authorized through pairing. Payloads, capability cards, files and results travel between nodes over authenticated channels — including nodes operated by other people you pair with, whose actions are outside the authors' control. Pair only with machines you trust and treat the node listener and web console as private endpoints: exposing them to untrusted networks is entirely your own risk.`},
+				{`6. AI-Generated Output`, `Code, commands, analysis and other model output is probabilistic. It may be defective, hallucinated, insecure, non-functional or subject to third-party rights — and it is not professional advice of any kind (including legal, medical, financial or security advice). Review, license-check and test everything before use; you act on generated output at your sole risk.`},
+				{`7. Execution & System Safety`, `OpenPanda can run shell commands, modify files and alter system state, including on remote nodes. Approval tiers, sandboxing and audit logs are mitigations, not guarantees: bugs, misconfiguration, prompt injection or a compromised peer can still cause damage. Verify destructive or irreversible actions before approving them, and keep independent backups of anything that matters.`},
+				{`8. Compliance & Acceptable Use`, `You are solely responsible for using OpenPanda lawfully and in line with every obligation that applies to you — data-protection law, export and sanctions controls, workplace device and network policies, and the terms of any service, repository or network you reach through it. Do not use it to infringe rights, access systems without authorization, or process data you are not entitled to handle. Nothing here transfers that responsibility.`},
+				{`9. No Warranty & Limitation of Liability`, `The software is provided "as is" and "as available" without warranty of any kind, express, implied or statutory — including merchantability, fitness for a particular purpose, security and non-infringement. To the maximum extent permitted by law, the authors and contributors are not liable for any direct, indirect, incidental, special, consequential or punitive damages — including lost data, lost profits, downtime, cost of substitute services or third-party claims — arising from the software, its outputs or its use, even if advised of the possibility. Where liability cannot be excluded entirely, it is limited to the minimum the law requires.`},
+				{`10. Indemnification, Changes & Severability`, `You agree to indemnify and hold the authors and contributors harmless from claims, damages and expenses (including legal fees) arising out of your use of the software, your configuration, the tasks and delegations you issue, or your violation of these terms, of any law or of third-party rights. Terms may be updated together with the software; the build you run carries the terms that apply to it. If any provision is held unenforceable, the remainder stays in full force.`},
 			},
 			prevails: "This card is a summary; the authoritative texts ship in the LICENSE and TERMS.md files and prevail over it.",
 			agree:    "[Y] Agree and Continue",
