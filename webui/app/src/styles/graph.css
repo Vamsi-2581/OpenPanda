@@ -47,12 +47,21 @@
   text-align: center;
 }
 
+/* Stage: positioned shell so floating chrome (detail card) anchors to the
+   canvas, not the wrapping card — toolbar wrapping can never push it off. */
+.mg-stage {
+  position: relative;
+}
+
 .mg-canvas {
   display: block;
   width: 100%;
   height: auto;
   user-select: none;
   touch-action: none;
+}
+.mg-vig {
+  pointer-events: none;
 }
 
 /* Pan/zoom affordances. */
@@ -133,25 +142,38 @@
   fill: var(--text-secondary);
 }
 
-/* Cluster homes: a soft solid glow behind each kind's anchor — grouped
-   territory, not a Venn diagram. Radius follows the cluster's node count. */
-.mg-cluster circle {
-  fill: var(--accent-soft);
-  opacity: 0.55;
+/* Cluster territories: the glow is a radial gradient (fill comes from the
+   per-kind url() in markup) melting to nothing; the dashed ring inside it
+   marks the zone without a hard circle. Labels are small caps tinted to the
+   kind so a zone announces itself quietly. */
+.mg-cluster-ring {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 2.5 5;
+  opacity: 0.5;
 }
-.mg-cluster.mg-topic circle { fill: var(--accent-2-soft); }
-.mg-cluster.mg-project circle { fill: var(--semantic-info-soft); }
-.mg-cluster.mg-daily circle { fill: var(--semantic-warn-soft); }
-.mg-cluster.mg-skill circle { fill: var(--danger-soft); }
-.mg-cluster text {
-  font-size: 10px;
-  letter-spacing: 0.05em;
+.mg-cluster-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   fill: var(--text-tertiary);
   text-anchor: middle;
   paint-order: stroke;
   stroke: var(--bg-raised);
-  stroke-width: 3px;
+  stroke-width: 3.5px;
 }
+.mg-cluster.mg-core .mg-cluster-label { fill: var(--accent); }
+.mg-cluster.mg-topic .mg-cluster-label { fill: var(--accent-2); }
+.mg-cluster.mg-project .mg-cluster-label { fill: var(--semantic-info); }
+.mg-cluster.mg-daily .mg-cluster-label { fill: var(--semantic-warn); }
+.mg-cluster.mg-skill .mg-cluster-label { fill: var(--danger); }
+.mg-cluster.mg-core .mg-cluster-ring { stroke: var(--accent); opacity: 0.3; }
+.mg-cluster.mg-topic .mg-cluster-ring { stroke: var(--accent-2); opacity: 0.35; }
+.mg-cluster.mg-project .mg-cluster-ring { stroke: var(--semantic-info); opacity: 0.35; }
+.mg-cluster.mg-daily .mg-cluster-ring { stroke: var(--semantic-warn); opacity: 0.4; }
+.mg-cluster.mg-skill .mg-cluster-ring { stroke: var(--danger); opacity: 0.35; }
 
 .mg-node {
   cursor: pointer;
@@ -173,6 +195,24 @@
 .mg-hit {
   fill: transparent;
 }
+/* Aura: the kind-tinted halo that fades in on hover / stays lit on
+   selection — focus feedback that reads as warmth, not a hard outline. */
+.mg-aura {
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease);
+  pointer-events: none;
+}
+.mg-node:hover .mg-aura,
+.mg-node.sel .mg-aura {
+  opacity: 1;
+}
+/* Specular highlight on file dots — fixed white: on light themes it sits on
+   the tinted rim, on dark it is the one light accent the sphere needs. */
+.mg-spec {
+  fill: #fff;
+  opacity: 0.5;
+  pointer-events: none;
+}
 .mg-dot {
   stroke-width: 1.5;
   transform-box: fill-box;
@@ -181,6 +221,15 @@
     r var(--dur-med) var(--ease),
     transform var(--dur-fast) var(--ease),
     stroke-width var(--dur-fast) var(--ease);
+}
+/* Pending / non-active surfaces get a quiet dashed ring, not a colour —
+   they exist but are not fully live yet. */
+.mg-ring {
+  fill: none;
+  stroke: var(--semantic-warn);
+  stroke-width: 1;
+  stroke-dasharray: 3 3.5;
+  opacity: 0.8;
 }
 .mg-halo {
   fill: none;
@@ -233,11 +282,18 @@
 }
 
 /* Knowledge terms render as text pills — a term is text, so it reads as a
-   tag instead of pretending to be a dot. */
+   tag instead of pretending to be a dot. The body is a vertical gradient
+   (raised surface melting into a green tint); a sheen strip on top sells
+   the raised surface. */
 .mg-pill {
   stroke: var(--semantic-good);
-  stroke-width: 1.3;
+  stroke-width: 1.2;
   transition: stroke-width var(--dur-fast) var(--ease);
+}
+.mg-pill-sheen {
+  fill: #fff;
+  opacity: 0.3;
+  pointer-events: none;
 }
 .mg-pill-label {
   font-size: 10px;
@@ -245,7 +301,7 @@
   pointer-events: none;
 }
 .mg-node:hover .mg-pill {
-  stroke-width: 2;
+  stroke-width: 1.9;
 }
 .mg-node.sel .mg-pill {
   stroke: var(--semantic-good);
@@ -258,7 +314,8 @@
 .mg-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-3) var(--sp-4);
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
   padding: var(--sp-2) var(--sp-4);
   border-top: 1px solid var(--border-soft);
   font-size: var(--text-xs);
@@ -269,28 +326,34 @@
   align-items: center;
   gap: 6px;
 }
-/* Kind chips are buttons — toggling one filters that kind out of the view. */
+/* Kind chips are pill buttons — toggling one filters that kind out of the
+   view. The dot is filled, matching the node's rim colour. */
 button.mg-legend-item {
-  background: none;
-  border: none;
-  padding: 3px 8px;
-  margin: -3px -8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  padding: 2px 10px;
   font: inherit;
   color: inherit;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
 }
 button.mg-legend-item:hover {
   background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 .mg-legend-item.off {
-  opacity: 0.35;
+  opacity: 0.4;
 }
 .mg-legend-item i {
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  border: 1.5px solid currentColor;
+  background: currentColor;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, currentColor 30%, transparent);
 }
 .mg-legend-item.mg-core i { color: var(--accent); }
 .mg-legend-item.mg-topic i { color: var(--accent-2); }
@@ -322,41 +385,118 @@ button.mg-legend-item:hover {
   stroke-dasharray: 3 4;
 }
 
-/* First-seen timeline: play button + date slider riding under the canvas. */
+/* First-seen timeline: play button + date slider riding under the canvas.
+   The track is a progress fill painted inline (accent up to the current
+   step); the thumb is a raised dot that grows on hover/drag. */
 .mg-timeline {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 6px var(--sp-4);
+  padding: 7px var(--sp-4);
   border-top: 1px solid var(--border-soft);
 }
 .mg-play {
   flex: none;
-  font-size: 10px;
   width: 26px;
   height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mg-play svg {
+  width: 10px;
+  height: 12px;
+  fill: currentColor;
+  display: block;
 }
 .mg-range {
   flex: 1;
   min-width: 0;
-  accent-color: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-inset); /* inline gradient overrides with progress */
+  outline: none;
+  cursor: pointer;
+}
+.mg-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.mg-range::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+.mg-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.mg-range::-moz-range-thumb:hover {
+  transform: scale(1.2);
+}
+.mg-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: transparent; /* inline gradient on the input shows through */
 }
 .mg-date {
   flex: none;
   font-size: var(--text-xs);
+  min-width: 72px;
+  text-align: right;
 }
 
+/* Detail card floats inside .mg-stage — anchored to the canvas' top-right
+   corner regardless of how the toolbar wraps. */
 .mg-detail {
   position: absolute;
-  top: 52px;
+  top: var(--sp-3);
   right: var(--sp-3);
   width: min(310px, calc(100% - 24px));
-  max-height: calc(100% - 140px);
+  max-height: calc(100% - 24px);
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
   border-left: 3px solid var(--border-strong);
   animation: palette-in var(--dur-med) var(--ease);
 }
+/* Kind chip in the detail head: a filled dot tinted like the node's rim,
+   keeping the card honest about what kind of thing it describes. */
+.mg-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 9px 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-inset);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex: none;
+}
+.mg-kind-chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.mg-kind-chip.mg-core i { color: var(--accent); }
+.mg-kind-chip.mg-topic i { color: var(--accent-2); }
+.mg-kind-chip.mg-project i { color: var(--semantic-info); }
+.mg-kind-chip.mg-daily i { color: var(--semantic-warn); }
+.mg-kind-chip.mg-skill i { color: var(--danger); }
+.mg-kind-chip.mg-entity i { color: var(--semantic-good); }
 .mg-detail-core { border-left-color: var(--accent); }
 .mg-detail-topic { border-left-color: var(--accent-2); }
 .mg-detail-project { border-left-color: var(--semantic-info); }

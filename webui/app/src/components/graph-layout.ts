@@ -37,15 +37,9 @@ export function isEntity(n: MemoryGraphNode): boolean {
   return n.layer === 'entity' || n.kind === ENTITY_KIND
 }
 
-/** Kind → anchor angle (0 = right, negative = up): core files at the top, the
- *  rest ringing the circle clockwise in reading order. */
-const KIND_ANGLE: Record<string, number> = {
-  core: -Math.PI / 2,
-  topic: -Math.PI / 2 + (2 * Math.PI) / 5,
-  project: -Math.PI / 2 + (4 * Math.PI) / 5,
-  daily: -Math.PI / 2 + (6 * Math.PI) / 5,
-  skill: -Math.PI / 2 + (8 * Math.PI) / 5,
-}
+/** Canonical kind ordering — the sequence anchors take when dividing the
+ *  circle among the kinds actually present. */
+const KIND_ORDER = ['core', 'topic', 'project', 'daily', 'skill']
 
 /** Keep only the nodes the active layer/kind/date filters admit; an edge
  *  survives only when both of its endpoints do. Nodes without a first_seen
@@ -100,13 +94,27 @@ function uwidth(s: string): number {
 }
 
 /** Wrap a label into at most two lines (CJK ≈ 1 unit, latin ≈ 0.55), with an
- *  ellipsis when even two lines do not fit. */
+ *  ellipsis when even two lines do not fit. Latin names wrap at separator
+ *  boundaries (- _ space /) when one sits inside the window — "node-" /
+ *  "workflow-…" reads far better than a mid-token cut. */
 export function labelLines(label: string, maxUnits = 7): string[] {
   if (uwidth(label) <= maxUnits) return [label]
   const chars = [...label]
   const take = (cap: number): string => {
     let cur = ''
     while (chars.length > 0 && uwidth(cur + chars[0]!) <= cap) cur += chars.shift()!
+    if (chars.length > 0) {
+      const cut = Math.max(
+        cur.lastIndexOf('-'),
+        cur.lastIndexOf('_'),
+        cur.lastIndexOf(' '),
+        cur.lastIndexOf('/'),
+      )
+      if (cut >= 2) {
+        chars.unshift(...[...cur.slice(cut + 1)])
+        cur = cur.slice(0, cut + 1)
+      }
+    }
     return cur
   }
   const first = take(maxUnits)
@@ -140,6 +148,17 @@ export function nodeExtent(n: MemoryGraphNode): number {
   return nodeRadius(n)
 }
 
+/** Distance from the node's centre to its visual rim along the unit vector
+ *  (ux, uy). Pills are ellipses (half-width × 11), so an edge approaching
+ *  from above lands much closer than one coming from the side — a radial
+ *  half-width guess leaves ugly gaps on vertical approaches. */
+export function rimDistance(n: MemoryGraphNode, ux: number, uy: number): number {
+  if (!isEntity(n)) return nodeRadius(n)
+  const rx = nodeExtent(n)
+  const ry = 11
+  return (rx * ry) / Math.sqrt(ry * ry * ux * ux + rx * rx * uy * uy)
+}
+
 /** Deterministic cluster-and-relax layout. `seed` carries positions from a
  *  previous layout of mostly-the-same nodes (timeline ticks, filter toggles):
  *  surviving nodes start where they were, so playback ripples instead of
@@ -160,7 +179,7 @@ export function layoutGraph(
   const mixed = files.length > 0 && entities.length > 0
 
   const innerR = mixed ? R * 0.52 : R * 0.92
-  const outerMin = mixed ? R * 0.6 : R * 0.12
+  const outerMin = mixed ? R * 0.62 : R * 0.12
   const outerMax = mixed ? R * 0.98 : R * 0.92
 
   const pos = new Map<string, Placed>()
@@ -175,28 +194,37 @@ export function layoutGraph(
     (b.weight ?? 1) - (a.weight ?? 1) || a.label.localeCompare(b.label)
 
   // Seed files: a sunflower fan around each kind anchor (golden angle keeps
-  // same-weight nodes from stacking).
+  // same-weight nodes from stacking). Anchors divide the circle among the
+  // kinds actually present — three kinds get 120° of separation instead of
+  // squeezing into neighbouring slots of a fixed pentagon.
+  const kindRank = (k: string) => {
+    const i = KIND_ORDER.indexOf(k)
+    return i < 0 ? KIND_ORDER.length : i
+  }
+  const presentKinds = [...byKind.keys()].sort((a, b) => kindRank(a) - kindRank(b) || a.localeCompare(b))
   const anchors = new Map<string, { x: number; y: number }>()
   for (const [kind, list] of byKind) {
-    const angle = KIND_ANGLE[kind] ?? -Math.PI / 2
-    const ax = cx + Math.cos(angle) * innerR * 0.6
-    const ay = cy + Math.sin(angle) * innerR * 0.6
+    const angle = -Math.PI / 2 + (presentKinds.indexOf(kind) / Math.max(1, presentKinds.length)) * Math.PI * 2
+    const ax = cx + Math.cos(angle) * innerR * 0.78
+    const ay = cy + Math.sin(angle) * innerR * 0.78
     anchors.set(kind, { x: ax, y: ay })
-    clusters.push({ key: kind, x: ax, y: ay, r: 42 + 16 * Math.sqrt(list.length) })
+    clusters.push({ key: kind, x: ax, y: ay, r: 46 + 17 * Math.sqrt(list.length) })
     ;[...list].sort(byWeight).forEach((n, i) => {
       const s = seed?.get(n.id)
       const t = i * 2.399963
-      const rr = i === 0 ? 0 : 14 + 13 * Math.sqrt(i)
+      const rr = i === 0 ? 0 : 13 + 11 * Math.sqrt(i)
       pos.set(n.id, { ...n, x: s?.x ?? ax + Math.cos(t) * rr, y: s?.y ?? ay + Math.sin(t) * rr })
     })
   }
 
-  // Seed entities: a three-ring band around the outside (or the whole disc
-  // when they are the only layer).
+  // Seed entities: an even angular spread around the outside, depth scattered
+  // by the golden-ratio fractional sequence — reads as an organic halo of
+  // terms instead of three mechanical orbit rings.
   ;[...entities].sort(byWeight).forEach((n, i) => {
     const s = seed?.get(n.id)
     const t = -Math.PI / 2 + (i / Math.max(1, entities.length)) * Math.PI * 2
-    const rr = outerMin + (outerMax - outerMin) * ((i % 3) / 2)
+    const frac = (i * 0.618034) % 1
+    const rr = outerMin + (outerMax - outerMin) * (0.16 + 0.68 * frac)
     pos.set(n.id, { ...n, x: s?.x ?? cx + Math.cos(t) * rr, y: s?.y ?? cy + Math.sin(t) * rr })
   })
 
@@ -204,7 +232,9 @@ export function layoutGraph(
   // Spacing follows each node's real footprint (pill width / circle radius)
   // plus a per-pair air gap — long terms get room, small circles pack tighter.
   const minDist = (a: Placed, b: Placed) => {
-    const gap = isEntity(a) && isEntity(b) ? 8 : isEntity(a) || isEntity(b) ? 14 : 18
+    // Air gaps are generous on purpose: file labels hang below their dots, so
+    // circle-only spacing would let neighbouring captions collide.
+    const gap = isEntity(a) && isEntity(b) ? 11 : isEntity(a) || isEntity(b) ? 20 : 26
     return nodeExtent(a) + nodeExtent(b) + gap
   }
   const clampRadius = (p: Placed, lo: number, hi: number) => {
@@ -261,8 +291,8 @@ export function layoutGraph(
       } else {
         const a = anchors.get(p.kind)
         if (a) {
-          p.x += (a.x - p.x) * 0.02
-          p.y += (a.y - p.y) * 0.02
+          p.x += (a.x - p.x) * 0.035
+          p.y += (a.y - p.y) * 0.035
         }
         clampRadius(p, 0, innerR)
       }
