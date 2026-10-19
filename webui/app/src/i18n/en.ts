@@ -238,6 +238,7 @@ const en: Messages = {
   'detail.isolated': 'isolated copy',
   'detail.isolateHint': 'Runs in a private copy of the project tree; changes merge back on completion',
   'detail.children': 'Sub-agents ({n})',
+  'detail.parent': 'Parent',
   'detail.scoped': 'scope',
   'detail.scopeHint': 'Claims these project directories in the shared tree — disjoint siblings run in parallel',
   'detail.result.files': '{n} file(s) changed',

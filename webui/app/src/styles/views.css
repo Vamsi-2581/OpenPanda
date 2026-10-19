@@ -2509,6 +2509,26 @@
   font-size: var(--text-sm);
 }
 
+/* A value that navigates (the parent link): reads as a link, but is a
+   real button for focus and keyboard semantics. */
+.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linklike:hover {
+  text-decoration: underline;
+}
+
 /* ---- Capability card editor + add-device form (stage 6) ---- */
 
 .card-editor {

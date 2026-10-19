@@ -233,6 +233,7 @@ const zhCN: Messages = {
   'detail.isolated': '隔离副本',
   'detail.isolateHint': '在项目树的私有副本中运行，完成后变更自动合并回主树',
   'detail.children': '子智能体（{n}）',
+  'detail.parent': '父任务',
   'detail.scoped': '范围',
   'detail.scopeHint': '在共享树中声明这些项目目录——互不相交的兄弟任务可并行运行',
   'detail.result.files': '变更 {n} 个文件',

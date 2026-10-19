@@ -236,6 +236,7 @@ const de: Messages = {
   'detail.isolated': 'isolierte Kopie',
   'detail.isolateHint': 'Läuft in einer privaten Kopie des Projektbaums; Änderungen werden bei Abschluss zurückgemergt',
   'detail.children': 'Subagenten ({n})',
+  'detail.parent': 'Übergeordnet',
   'detail.scoped': 'Bereich',
   'detail.scopeHint': 'Beansprucht diese Projektverzeichnisse im geteilten Baum — disjunkte Geschwister laufen parallel',
   'detail.result.files': '{n} Datei(en) geändert',

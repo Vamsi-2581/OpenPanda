@@ -236,6 +236,7 @@ const es: Messages = {
   'detail.isolated': 'copia aislada',
   'detail.isolateHint': 'Se ejecuta en una copia privada del árbol del proyecto; los cambios se fusionan al terminar',
   'detail.children': 'Subagentes ({n})',
+  'detail.parent': 'Padre',
   'detail.scoped': 'ámbito',
   'detail.scopeHint': 'Reclama estos directorios del proyecto en el árbol compartido — hermanos disjuntos corren en paralelo',
   'detail.result.files': '{n} archivo(s) modificado(s)',

@@ -395,6 +395,19 @@ export function DetailView({
 
       <div class="detail-grid">
         <Field label={t('detail.id')} value={task.id} mono />
+        {task.parent_id && (
+          <div class="field">
+            <span class="dim">{t('detail.parent')}</span>
+            <button
+              type="button"
+              class="linklike mono"
+              onClick={() => onOpenTask?.(task.parent_id)}
+              title={task.parent_id}
+            >
+              {task.parent_id}
+            </button>
+          </div>
+        )}
         <Field label={t('detail.project')} value={task.project || '—'} />
         <Field label={t('detail.owner')} value={task.owner || '—'} />
         <Field label={t('detail.attempt')} value={task.attempt_id || '—'} mono />

@@ -235,6 +235,7 @@ const ja: Messages = {
   'detail.isolated': '分離コピー',
   'detail.isolateHint': 'プロジェクトツリーのプライベートコピーで実行され、完了時に変更がマージされます',
   'detail.children': 'サブエージェント（{n}）',
+  'detail.parent': '親タスク',
   'detail.scoped': 'スコープ',
   'detail.scopeHint': '共有ツリー内でこれらのディレクトリを占有——重ならない兄弟タスクは並列実行されます',
   'detail.result.files': '{n} ファイル変更',

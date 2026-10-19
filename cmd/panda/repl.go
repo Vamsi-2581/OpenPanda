@@ -1584,6 +1584,7 @@ func (r *repl) cmdTask(arg string) {
 		return
 	}
 	r.outf("  id:      %s\n", t.TaskID)
+	r.outf("  parent:  %s\n", orDash(t.ParentID))
 	r.outf("  project: %s\n", orDash(t.Project))
 	// Parallel-mode visibility, same vocabulary as `panda task show`: an
 	// isolated task runs in a private copy that merges back; a scoped one
