@@ -92,6 +92,17 @@ type Turn struct {
 	// turn lives in the browser, so a reloaded thread would otherwise lose
 	// every duration it had.
 	DurationMS int64 `json:"duration_ms,omitempty"`
+	// Model is the entry model that wrote this reply (the ask's classify /
+	// answer calls). Stored with the turn so the console can still say which
+	// model answered after the thread is reloaded — the live result object
+	// carries it, but that object is never written to disk.
+	Model string `json:"model,omitempty"`
+	// TS is when the turn was written (Unix seconds). It exists for the usage
+	// calendar: a thread that stays open across midnight has its messages
+	// counted on the days they actually happened, which the session's own
+	// CreatedAt/UpdatedAt cannot express. Zero on transcripts written before
+	// the field existed — readers fall back to the session stamps there.
+	TS int64 `json:"ts,omitempty"`
 }
 
 // Session is one chat thread. Worktree/Branch are empty when the work path is
@@ -348,13 +359,18 @@ func (s *Store) Stamps() ([]Stamp, error) {
 }
 
 // AppendTurn appends a turn and refreshes the session timestamp (and the
-// title from the first user turn while the title is still unset).
+// title from the first user turn while the title is still unset). A turn
+// arriving without a stamp gets one here, so every transcript written from
+// now on can be placed on the usage calendar.
 func (s *Store) AppendTurn(id string, turn Turn) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
 	if err != nil {
 		return nil, err
+	}
+	if turn.TS == 0 {
+		turn.TS = time.Now().Unix()
 	}
 	sess.Turns = append(sess.Turns, turn)
 	if turn.Role == "user" && sess.Title == "" {

@@ -836,9 +836,18 @@ func (m tuiModel) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			delta = -transcriptScrollStep
 		}
 		switch m.mode {
-		case modeList, modeModelPanel, modeModelWizard, modeOnboarding, modeSkillsHub:
-			// A wheel notch pages the highlight through the list (MovePage
-			// clamps at both ends); the terms step has no list to move.
+		case modeOnboarding:
+			// The terms card is the one onboarding screen taller than the
+			// terminal, so the wheel scrolls its clause window there. Every
+			// other step is a selection list the wheel pages through
+			// (MovePage clamps at both ends).
+			if m.onboardingStep == onboardingStepTerms {
+				m.scrollTerms(delta)
+			} else if len(m.selectionList.Items) > 0 {
+				m.selectionList.MovePage(delta, m.selectionPageRows())
+			}
+		case modeList, modeModelPanel, modeModelWizard, modeSkillsHub:
+			// A wheel notch pages the highlight through the list.
 			if len(m.selectionList.Items) > 0 {
 				m.selectionList.MovePage(delta, m.selectionPageRows())
 			}

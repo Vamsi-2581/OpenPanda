@@ -292,7 +292,11 @@ func (c *Core) resolveRunPlan(ctx context.Context, taskID string, required []str
 	// delegated task so the parent re-routes it, and fails a local task fast
 	// with an actionable reason instead of parking it inside a dead adapter.
 	if plan.Kind == "agent" && !router.PlanUsable(plan) {
-		return commander.Plan{}, nil, "", fmt.Errorf("route: no usable agent for %v on this node (cli/credentials/endpoint check failed)", required)
+		reason := router.PlanUnusableReason(plan)
+		if reason == "" {
+			reason = "cli/credentials/endpoint check failed"
+		}
+		return commander.Plan{}, nil, "", fmt.Errorf("route: no usable agent for %v on this node (%s)", required, reason)
 	}
 	// Circuit breaker (P2-27): refuse to run an agent that has been failing
 	// repeatedly, before the task leaves its dispatched state, so the parent

@@ -639,6 +639,33 @@ func TestPlanUsable(t *testing.T) {
 	}
 }
 
+// TestPlanUnusableReason: the gate's failure text must name the candidate and
+// the failing check instead of a generic "check failed" — an operator reading
+// "no usable agent" needs to know whether to install a CLI, fix a key, or wait
+// out a provider.
+func TestPlanUnusableReason(t *testing.T) {
+	r := probeRouter(config.ModelConfig{})
+
+	// Non-agent plans have no candidate to explain.
+	if got := r.PlanUnusableReason(Plan{Kind: "native"}); got != "" {
+		t.Fatalf("native plan reason = %q, want empty", got)
+	}
+
+	// A dispatchable candidate clears the whole plan.
+	r.SetAgentProber(func(string, ledger.Agent) bool { return true })
+	if got := r.PlanUnusableReason(Plan{Kind: "agent", Agent: "claude_code"}); got != "" {
+		t.Fatalf("usable plan reason = %q, want empty", got)
+	}
+
+	// A candidate the card does not know is named as such, not lumped into a
+	// generic failure.
+	r.SetAgentProber(func(string, ledger.Agent) bool { return false })
+	got := r.PlanUnusableReason(Plan{Kind: "agent", Agent: "ghost"})
+	if !strings.Contains(got, "ghost: not in the capability card") {
+		t.Fatalf("reason = %q, want it to name the unknown candidate", got)
+	}
+}
+
 func TestCheckAgentReport(t *testing.T) {
 	cleanCredentialEnv(t)
 	if !pyexec.Available() {

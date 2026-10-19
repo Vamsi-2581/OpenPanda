@@ -173,6 +173,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/pair/initiate", h.initiatePair)
 	mux.HandleFunc("POST /api/pair/answer", h.answerPair)
 	mux.HandleFunc("GET /api/self", h.getSelf)
+	mux.HandleFunc("GET /api/stats", h.getStats)
 	mux.HandleFunc("GET /api/events", h.events)
 	mux.HandleFunc("GET /api/settings/model", h.getModelSettings)
 	mux.HandleFunc("PUT /api/settings/model", h.putModelSettings)
@@ -748,13 +749,27 @@ const queueBoardCap = 500
 func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	project := r.URL.Query().Get("project")
+	session := r.URL.Query().Get("session")
 
-	tasks, err := h.store.ListRecentByState(r.Context(), state, queueBoardCap)
+	// Two reads behind one route: the board asks "what is in state X", the
+	// chat's orchestration card asks "what did this thread start". The session
+	// read is its own query rather than a post-filter, because the board read
+	// is capped (queueBoardCap) and filtering after the cap would hide a
+	// thread's older tasks behind other threads' newer ones.
+	var (
+		tasks []core.Task
+		err   error
+	)
+	if session != "" {
+		tasks, err = h.store.ListBySession(r.Context(), session)
+	} else {
+		tasks, err = h.store.ListRecentByState(r.Context(), state, queueBoardCap)
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("list tasks failed"))
 		return
 	}
-	if len(tasks) == queueBoardCap {
+	if session == "" && len(tasks) == queueBoardCap {
 		w.Header().Set("X-Tasks-Truncated", "1")
 		if n, cerr := h.store.CountByState(r.Context(), state); cerr == nil {
 			w.Header().Set("X-Tasks-Total", strconv.Itoa(n))

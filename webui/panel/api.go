@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/entry"
+	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/nodeidentity"
@@ -238,6 +240,12 @@ func (h *handler) listNodes(w http.ResponseWriter, r *http.Request) {
 		if n.ID == localID {
 			row.IsLocal = true
 			row.Ver = version.Version
+			// This console's own machine facts are known exactly, even when
+			// the row predates the columns (a database upgraded mid-flight
+			// re-registers on the next beat, but the map should not show its
+			// own device as unknown in the meantime).
+			row.OS = runtime.GOOS
+			row.FormFactor = hwinfo.FormFactor()
 			held, err := nodeidentity.Held(h.cfg.Node.Kind, h.cfg.Node.EffectiveIdentity())
 			row.Running = err == nil && held && n.Status == "online"
 		} else {

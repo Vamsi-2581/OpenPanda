@@ -9,8 +9,9 @@ import { Icon } from '../components/icons'
 
 /** The plan board — web parity with `/plans`. A plan is the set of tasks
  *  sharing a plan_id; the board summarizes each pipeline (stages, progress,
- *  failures) and drills into the stage list with artifacts and owners. */
-export function PlansView() {
+ *  failures) and drills into the stage list with artifacts and owners. It is
+ *  the second tab of 总控, so it can drop its own heading. */
+export function PlansView({ head = true }: { head?: boolean }) {
   useLocaleRerender()
   const change = useChangeSignal()
   const { data: plans, error } = useAsync(() => api.plans(), [], change)
@@ -18,8 +19,12 @@ export function PlansView() {
 
   return (
     <section>
-      <h1 class="page-title">{t('plans.title')}</h1>
-      <p class="page-sub">{t('plans.subtitle')}</p>
+      {head && (
+        <>
+          <h1 class="page-title">{t('plans.title')}</h1>
+          <p class="page-sub">{t('plans.subtitle')}</p>
+        </>
+      )}
 
       {error && <p class="gate-error">{error}</p>}
       {!error && !plans && <p class="dim">{t('common.loading')}</p>}

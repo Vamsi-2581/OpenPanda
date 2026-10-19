@@ -1053,6 +1053,7 @@ func (m tuiModel) startOnboarding() (tuiModel, tea.Cmd) {
 	m.mode = modeOnboarding
 	m.onboardingStep = onboardingStepLanguage
 	m.termsCursor = 0
+	m.termsScroll = 0
 	m.termsReconsent = false
 
 	title := "Welcome to OpenPanda · Please select your language / 请选择语言:"
@@ -1153,6 +1154,7 @@ func (m tuiModel) startTermsReconsent() (tuiModel, tea.Cmd) {
 	m.mode = modeOnboarding
 	m.onboardingStep = onboardingStepTerms
 	m.termsCursor = 0
+	m.termsScroll = 0
 	m.termsReconsent = true
 	return m, nil
 }
@@ -1324,6 +1326,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.applyLocale()
 			m.onboardingStep = onboardingStepTerms
 			m.termsCursor = 0
+			m.termsScroll = 0
 			return m, nil
 		}
 
@@ -1332,6 +1335,18 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			m.quitting = true
 			return m, tea.Quit
+		case tea.KeyPgUp:
+			m.scrollTerms(-m.termsPageRows())
+			return m, nil
+		case tea.KeyPgDown:
+			m.scrollTerms(m.termsPageRows())
+			return m, nil
+		case tea.KeyHome:
+			m.termsScroll = 0
+			return m, nil
+		case tea.KeyEnd:
+			m.scrollTerms(1 << 20) // clamped to the document
+			return m, nil
 		case tea.KeyUp, tea.KeyLeft:
 			m.termsCursor = 0
 			return m, nil
@@ -1380,6 +1395,7 @@ func (m tuiModel) handleOnboardingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			m.onboardingStep = onboardingStepTerms
 			m.termsCursor = 0
+			m.termsScroll = 0
 			return m, nil
 		case tea.KeyRunes:
 			switch string(msg.Runes) {

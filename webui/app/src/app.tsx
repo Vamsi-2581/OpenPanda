@@ -6,15 +6,13 @@ import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, su
 import { onLocaleChange, t } from './i18n'
 import { useAsync } from './hooks'
 import { navigate, parseHash, primaryNavGroups, type Route } from './nav'
-import { QueueView } from './views/queue'
+import { ControlView } from './views/control'
 import { DetailView } from './views/detail'
 import { SessionsView } from './views/sessions'
 import { SidebarHistory } from './views/sidebar-history'
-import { ProjectsView } from './views/projects'
-import { PlansView } from './views/plans'
 import { NodesView } from './views/nodes'
-import { MemoryView } from './views/memory'
-import { SkillsView } from './views/skills'
+import { WorkspaceView } from './views/workspace'
+import { ProfileView } from './views/profile'
 import { SettingsView } from './views/settings'
 import { OnboardingBanner } from './views/onboarding'
 import { ToastHost } from './components/toast'
@@ -61,7 +59,8 @@ export function App() {
     )
   }
 
-  const active: string = route.view === 'detail' ? 'queue' : route.view
+  // 任务详情 is a drill-down of the board, so it keeps 总控 lit on the rail.
+  const active: string = route.view === 'detail' ? 'control' : route.view
   const reviewCount = useReviewCount()
   const logout = () => {
     clearToken()
@@ -74,26 +73,22 @@ export function App() {
       <ConfirmHost />
       <PaletteHost onLogout={logout} />
       <aside class="sidebar">
-        {/* One line of chrome at the head of the rail: the name (which is also
-            the way into the workspace list) and the one ambient action that
-            works from any view. No chevron after the name — the head is the
-            quietest thing in the column and the glyph only promised a menu
-            the name already opens; no bell either, since reminders live in
-            Settings and in ⌘K. The search field that used to live here is now
-            a magnifier: a bordered input plus a "Ctrl K" chip made the head
-            the heaviest thing in a column whose whole job is to be quiet
+        {/* One line of chrome at the head of the rail: the name and the one
+            ambient action that works from any view. The name is a label, not a
+            control — it used to open 总控 → 项目, which meant a stray click on
+            the wordmark threw the reader out of whatever thread they were in.
+            The projects board is still one click away in the rail below. No
+            chevron after the name either: the head is the quietest thing in
+            the column, and the search field that used to live here is now a
+            magnifier, because a bordered input plus a "Ctrl K" chip made the
+            head the heaviest thing in a column whose whole job is to be quiet
             enough to scan. */}
         <div class="sidebar-head">
-          <button
-            type="button"
-            class="sidebar-workspace"
-            title={t('nav.projects')}
-            onClick={() => navigate({ view: 'projects' })}
-          >
+          <div class="sidebar-workspace">
             <span class="sidebar-workspace-name">
               Open<b>Panda</b>
             </span>
-          </button>
+          </div>
           <div class="sidebar-head-actions">
             <button
               type="button"
@@ -106,20 +101,33 @@ export function App() {
             </button>
           </div>
         </div>
-        {/* 新对话: an action, not a destination — but it reads as a nav row
-            (same 15px label, same hover wash) instead of a filled button, so
-            the head above it stays the only chrome in the column. Navigates
-            without minting a thread: the thread comes into being when the first
-            message leaves the composer, titled after it, so clicking twice
-            cannot litter the history with empty untitled sessions. */}
-        <button
-          type="button"
-          class="nav-item nav-new-chat"
-          onClick={() => navigate({ view: 'sessions', id: null })}
-        >
-          <Icon name="square-pen" />
-          {t('sessions.new')}
-        </button>
+        {/* The quick block: 新对话 and 工作空间, one level above the rail's
+            destinations. 新对话 is an action, not a destination — but it reads
+            as a nav row (same 15px label, same hover wash) instead of a filled
+            button, so the head above it stays the only chrome in the column.
+            It navigates without minting a thread: the thread comes into being
+            when the first message leaves the composer, titled after it, so
+            clicking twice cannot litter the history with empty untitled
+            sessions. 工作空间 is the map of the machines those threads run on,
+            so it belongs at the same altitude rather than down with 总控. */}
+        <div class="nav-quick">
+          <button
+            type="button"
+            class="nav-item nav-new-chat"
+            onClick={() => navigate({ view: 'sessions', id: null })}
+          >
+            <Icon name="square-pen" />
+            {t('sessions.new')}
+          </button>
+          <a
+            href="#/workspace"
+            class={`nav-item${active === 'workspace' ? ' active' : ''}`}
+            aria-current={active === 'workspace' ? 'page' : undefined}
+          >
+            <Icon name="devices" />
+            {t('nav.workspace')}
+          </a>
+        </div>
 
         <nav class="primary-nav" aria-label={t('nav.aria')}>
           {primaryNavGroups.map((g) => (
@@ -128,7 +136,7 @@ export function App() {
               {g.items.map(([v, key]) => (
                 <a key={v} href={`#/${v}`} class={`nav-item${active === v ? ' active' : ''}`}>
                   {t(key)}
-                  {v === 'queue' && reviewCount > 0 && (
+                  {v === 'control' && reviewCount > 0 && (
                     <span
                       class="nav-badge"
                       title={t('queue.col.review')}
@@ -141,13 +149,13 @@ export function App() {
                         // the review-focused board ourselves.
                         e.preventDefault()
                         e.stopPropagation()
-                        navigate({ view: 'queue', review: true })
+                        navigate({ view: 'control', tab: 'queue', review: true })
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
                           e.stopPropagation()
-                          navigate({ view: 'queue', review: true })
+                          navigate({ view: 'control', tab: 'queue', review: true })
                         }
                       }}
                     >
@@ -195,35 +203,32 @@ export function App() {
             onLogout={logout}
           />
         )}
-        {route.view === 'queue' && (
-          <QueueView
+        {route.view === 'control' && (
+          <ControlView
+            tab={route.tab ?? 'queue'}
             project={route.project}
             focusReview={!!route.review}
+            onSelectTab={(tab) => navigate({ view: 'control', tab })}
             onOpen={(id) => navigate({ view: 'detail', id })}
             onOpenSession={(id) => navigate({ view: 'sessions', id })}
+            onOpenProject={(name) => {
+              api.enterProject(name).catch(() => {})
+              navigate({ view: 'sessions', id: null, project: name })
+            }}
+            onOpenQueue={(name) => navigate({ view: 'control', tab: 'queue', project: name })}
           />
         )}
         {route.view === 'detail' && (
           <DetailView
             id={route.id}
-            onBack={() => navigate({ view: 'queue' })}
+            onBack={() => navigate({ view: 'control', tab: 'queue' })}
             onOpenSession={(sid) => navigate({ view: 'sessions', id: sid })}
             onOpenTask={(tid) => navigate({ view: 'detail', id: tid })}
           />
         )}
-        {route.view === 'plans' && <PlansView />}
+        {route.view === 'workspace' && <WorkspaceView />}
         {route.view === 'fleet' && <NodesView />}
-        {route.view === 'memory' && <MemoryView initialTab={route.tab ?? undefined} />}
-        {route.view === 'skills' && <SkillsView />}
-        {route.view === 'projects' && (
-          <ProjectsView
-            onOpenProject={(name) => {
-              api.enterProject(name).catch(() => {})
-              navigate({ view: 'sessions', id: null, project: name })
-            }}
-            onOpenQueue={(name) => navigate({ view: 'queue', project: name })}
-          />
-        )}
+        {route.view === 'profile' && <ProfileView />}
         {route.view === 'settings' && (
           <SettingsView
             initialSection={route.tab ?? undefined}
@@ -287,7 +292,11 @@ function UpdateBanner() {
 
 /** Sidebar footer's node chip: this machine's name, a running/off status
  *  dot, and the running version — the at-a-glance answer to "is my node up,
- *  and what am I on?". Links to System, where the same data lives in full. */
+ *  and what am I on?". It opens the profile page, which is where those three
+ *  facts live in full, alongside the build's codename and its usage
+ *  calendar. It used to point at Settings → System, which answered "what am
+ *  I on" but buried the identity two tabs deep and had nothing to say about
+ *  what this node had actually been doing. */
 function SidebarNode() {
   useLocaleRerender()
   const { data: self } = useAsync(() => api.self(), [])
@@ -296,7 +305,7 @@ function SidebarNode() {
   if (!name) return null
   return (
     <a
-      href="#/system"
+      href="#/profile"
       class="sidebar-node"
       title={t(self.node_running ? 'sidebar.node.up' : 'sidebar.node.down')}
     >

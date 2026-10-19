@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, type DirectoryListing } from '../api/client'
 import { t } from '../i18n'
 import { Icon } from './icons'
-import { suggestProjectName } from './dir-utils'
+import { lastPathSegment, suggestProjectName } from './dir-utils'
 import { useModalFocus } from './modal-focus'
 
 export interface DirPickerProps {
@@ -15,6 +15,43 @@ export interface DirPickerProps {
   disabled?: boolean
 }
 
+/** The pick itself: the native chooser first, the in-page browser as the
+ *  fallback for a node whose panel cannot raise one. Shared by the boxed
+ *  picker on the projects page and the compact button the composer's
+ *  new-chat footer uses — the two look nothing alike but must fail alike. */
+function useDirPick(onPicked: (path: string) => void, disabled: boolean) {
+  const [modalOpen, setModalOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  async function open(current: string) {
+    if (disabled || loading) return
+    setLoading(true)
+    try {
+      // The caption is ours to write: the panel serves five languages and
+      // cannot tell which one the browser is in.
+      const res = await api.chooseDirectory(current, t('sessions.chooseDir'))
+      const canceled = !!(res && (res.canceled ?? res.cancelled))
+      if (res && res.path && !canceled) {
+        onPicked(res.path)
+        return
+      }
+      // A cancel is an answer — the user looked and changed their mind. Do not
+      // answer it by opening a second picker over the one they just closed.
+      if (canceled) return
+      // Otherwise no window can be raised for this console (a browser on
+      // another device, a host with no desktop shell) or it failed to open:
+      // fall back to the in-page browser, which always works.
+      setModalOpen(true)
+    } catch {
+      setModalOpen(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return { modalOpen, setModalOpen, loading, open }
+}
+
 export function DirPicker({
   value = '',
   onChange,
@@ -22,33 +59,16 @@ export function DirPicker({
   placeholder,
   disabled = false,
 }: DirPickerProps) {
-  const [modalOpen, setModalOpen] = useState(false)
-  const [loading, setLoading] = useState(false)
-
-  async function handlePick() {
-    if (disabled || loading) return
-    setLoading(true)
-    try {
-      const res = await api.chooseDirectory(value)
-      const canceled = !!(res && (res.canceled ?? res.cancelled))
-      if (res && res.path && !canceled) {
-        onChange(res.path)
-        if (onSuggestName) {
-          onSuggestName(suggestProjectName(res.path))
-        }
-        return
-      }
-      if (!canceled) {
-        // Native dialog unsupported, failed, or never answered — fall back
-        // to the interactive modal browser either way so the picker always
-        // opens something the user can navigate.
-        setModalOpen(true)
-      }
-    } catch {
-      setModalOpen(true)
-    } finally {
-      setLoading(false)
+  const pick = useDirPick((path) => {
+    onChange(path)
+    if (onSuggestName) {
+      onSuggestName(suggestProjectName(path))
     }
+  }, disabled)
+  const { modalOpen, setModalOpen, loading } = pick
+
+  function handlePick() {
+    void pick.open(value)
   }
 
   return (
@@ -95,6 +115,81 @@ export function DirPicker({
         />
       )}
     </div>
+  )
+}
+
+/** The compact pick: a folder glyph and the chosen path set in the same small
+ *  print as the composer's keyboard legend. The projects page needs a form
+ *  field; a new thread only needs to say where it will run, so this one is a
+ *  footnote that happens to be clickable.
+ *
+ *  A chosen directory is also undoable, and the bubble is where that lives:
+ *  under the pointer the glyph turns into a cross, and the cross drops the
+ *  pick back to "choose a directory". The glyph is the cross's slot rather
+ *  than a second control beside the name — the chip is one line of small
+ *  print, and an × parked next to a long folder name would either crowd it or
+ *  be pushed out of the clamp. */
+export function DirButton({
+  value = '',
+  onChange,
+  label,
+  disabled = false,
+}: {
+  value?: string
+  onChange: (path: string) => void
+  /** The picker's own name, shown while nothing is chosen. */
+  label: string
+  disabled?: boolean
+}) {
+  const pick = useDirPick(onChange, disabled)
+  const clearable = !!value && !disabled
+  return (
+    <>
+      <div
+        class={`workdir-btn${value ? ' has-value' : ''}${disabled ? ' is-disabled' : ''}`}
+        /* The bubble is where the whole path lives: the label shows the folder
+           on its own, so hovering is how you check *which* folder. Nothing to
+           reveal while the pick is still empty — the label already says it. */
+        data-tip={value || undefined}
+        /* The bubble is also the only place the cross can be announced: it is
+           invisible until the pointer is on the chip, so hovering is the one
+           moment the affordance needs a name. */
+        data-tip-hint={clearable ? t('sessions.clearDirHint') : undefined}
+      >
+        <button
+          type="button"
+          class="workdir-open"
+          aria-label={value ? `${label}: ${value}` : label}
+          disabled={disabled || pick.loading}
+          onClick={() => void pick.open(value)}
+        >
+          {/* The rail's working-directory mark, at the rail's own size: the
+              header's closed folder would read as a second title down here. */}
+          <Icon name="folder-open" size={13} class="workdir-glyph" />
+          <span class="workdir-path">{value ? lastPathSegment(value) : label}</span>
+        </button>
+        {clearable && (
+          <button
+            type="button"
+            class="workdir-clear"
+            aria-label={t('sessions.clearDir')}
+            onClick={() => onChange('')}
+          >
+            <Icon name="x" size={13} />
+          </button>
+        )}
+      </div>
+      {pick.modalOpen && (
+        <DirBrowserModal
+          initialPath={value}
+          onSelect={(selectedPath) => {
+            onChange(selectedPath)
+            pick.setModalOpen(false)
+          }}
+          onClose={() => pick.setModalOpen(false)}
+        />
+      )}
+    </>
   )
 }
 

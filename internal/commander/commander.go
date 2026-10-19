@@ -1141,3 +1141,35 @@ func (r *Router) PlanUsable(p Plan) bool {
 	}
 	return false
 }
+
+// PlanUnusableReason explains why PlanUsable said no: one "name: reason" pair
+// per rejected candidate. The gate used to fail with a generic "cli/
+// credentials/endpoint check failed", which is useless to the operator when
+// the real cause is a 429 from the provider behind the agent — the reason
+// names the failing check (missing cli, no model, endpoint unreachable,
+// quota/auth rejected) so the fix is obvious. "" means the plan is usable.
+func (r *Router) PlanUnusableReason(p Plan) string {
+	if p.Kind != "agent" {
+		return ""
+	}
+	var parts []string
+	for _, name := range append([]string{p.Agent}, p.Alternates...) {
+		if name == "" {
+			continue
+		}
+		ag, ok := r.card.Agents[name]
+		if !ok {
+			parts = append(parts, name+": not in the capability card")
+			continue
+		}
+		if r.probeAgent(name, ag) {
+			return ""
+		}
+		_, reason := r.AgentUsableReason(name, ag)
+		if reason == "" {
+			reason = "not dispatchable"
+		}
+		parts = append(parts, name+": "+reason)
+	}
+	return strings.Join(parts, "; ")
+}

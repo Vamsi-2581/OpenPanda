@@ -165,6 +165,10 @@ type tuiModel struct {
 	// Onboarding state
 	onboardingStep onboardingStep
 	termsCursor    int // 0 = Agree [Y], 1 = Decline [N]
+	// termsScroll is the first clause row the terms card shows. The ten clauses
+	// are far taller than a terminal, so the card windows them and this is where
+	// the window sits; it resets whenever the step is (re-)entered.
+	termsScroll int
 	// termsReconsent marks the "license changed, re-accept" path: the terms
 	// step shows alone (no language/approval wizard), and accepting goes
 	// straight to idle instead of continuing the first-run wizard.

@@ -827,15 +827,18 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 		t.Fatalf("expected locale to be English, got %v", m.loc)
 	}
 
-	// Verify rich Terms view in English
+	// Verify rich Terms view in English. The card windows the ten clauses to the
+	// terminal, so this checks what the first screen must carry — the opening
+	// clause, the answer row, and the scroll affordance — rather than clauses
+	// that are deliberately below the fold.
 	termsView := m.View()
 	for _, expectedText := range []string{
-		"AGPL Open Source License",
-		"Local-First Architecture & Privacy Autonomy",
-		"AI Generation Advisory & Risk Disclaimer",
-		"System Execution & Operational Safety",
+		"OpenPanda Terms of Service & License Agreement",
+		"1. Open-Source License (AGPL-3.0)",
+		"2. Self-Hosted Software, Not a Managed Service",
 		"> [Y] Agree and Continue",
 		"[N] Decline and Exit",
+		"PgUp/PgDn",
 	} {
 		if !strings.Contains(termsView, expectedText) {
 			t.Fatalf("terms view missing expected clause '%s':\n%s", expectedText, termsView)
@@ -931,13 +934,12 @@ func TestTUIFirstRunOnboardingFlow(t *testing.T) {
 		t.Fatalf("expected ChineseSimp locale, got %v", mZh.loc)
 	}
 
-	// Check Chinese terms
+	// Check Chinese terms — same windowed card, localized headings.
 	zhTermsView := mZh.View()
 	for _, expectedText := range []string{
-		"AGPL 开源许可证声明",
-		"本地优先与数据自治原则",
-		"AI 生成内容免责声明",
-		"命令执行与系统安全须知",
+		"OpenPanda 开源许可与服务条款协议",
+		"1. 开源许可（AGPL-3.0）",
+		"2. 自托管软件，而非托管服务",
 		"同意并继续",
 	} {
 		if !strings.Contains(zhTermsView, expectedText) {

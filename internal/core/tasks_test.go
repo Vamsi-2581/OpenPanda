@@ -32,6 +32,49 @@ func createTask(t *testing.T, s *TaskStore, parent, title, owner string) Task {
 	return tk
 }
 
+// TestListBySession pins the read behind the chat header's orchestration card:
+// only the tasks linked to the asked-for conversation, newest first, and an
+// empty session id returns nothing instead of the whole table.
+func TestListBySession(t *testing.T) {
+	s := newTestStore(t)
+	var tick int64
+	s.now = func() int64 { tick++; return tick }
+	ctx := context.Background()
+
+	a := createTask(t, s, "", "thread a, first", "node")
+	b := createTask(t, s, "", "thread b, only", "node")
+	c := createTask(t, s, "", "thread a, second", "node")
+	for _, link := range []struct{ id, session string }{
+		{a.TaskID, "sess-a"},
+		{b.TaskID, "sess-b"},
+		{c.TaskID, "sess-a"},
+	} {
+		if err := s.SetSessionID(ctx, link.id, link.session); err != nil {
+			t.Fatalf("link %s to %s: %v", link.id, link.session, err)
+		}
+	}
+
+	got, err := s.ListBySession(ctx, "sess-a")
+	if err != nil {
+		t.Fatalf("list by session: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 tasks for sess-a, got %d", len(got))
+	}
+	// Newest first: `c` was created after `a`.
+	if got[0].TaskID != c.TaskID || got[1].TaskID != a.TaskID {
+		t.Fatalf("unexpected order: %s, %s", got[0].TaskID, got[1].TaskID)
+	}
+
+	// An unlinked task must not leak in, and an empty id is "no thread yet".
+	if other, err := s.ListBySession(ctx, "sess-b"); err != nil || len(other) != 1 || other[0].TaskID != b.TaskID {
+		t.Fatalf("sess-b: got %d rows (err=%v), want just %s", len(other), err, b.TaskID)
+	}
+	if none, err := s.ListBySession(ctx, ""); err != nil || len(none) != 0 {
+		t.Fatalf("empty session id: got %d rows (err=%v), want none", len(none), err)
+	}
+}
+
 // TestRecordEventBumpsUpdatedAt guards the web-console live-refresh path (P0
 // §1.5): an appended event that does not change state must still move
 // tasks.updated_at, because the panel's SSE change detector fingerprints on
@@ -808,6 +851,85 @@ func TestRemoteResultDoesNotOverwriteTerminal(t *testing.T) {
 	}
 	if got.State != StateDone {
 		t.Fatalf("state = %s, want done (late failure must not overwrite)", got.State)
+	}
+}
+
+// TestLeaseExpiryReasonCarriesLastActivity pins the failure text a lease
+// expiry leaves behind. A bare "lease expired" cannot tell a wedged adapter
+// apart from a slow-but-alive one after the fact, so the newest progress note
+// rides along — that is the only record of what the run was doing when the
+// monitor gave up on it.
+func TestLeaseExpiryReasonCarriesLastActivity(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	tk := createTask(t, s, "", "wedged", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "root"))
+	must(s.Accept(ctx, tk.TaskID, "root"))
+	must(s.RecordEvent(ctx, tk.TaskID, "progress",
+		map[string]any{"note": "no output for 3m45s — agent still running"}))
+	if _, err := s.db.Exec(`UPDATE tasks SET lease_expires_at=? WHERE task_id=?`,
+		s.now()-1, tk.TaskID); err != nil {
+		t.Fatalf("stamp lease: %v", err)
+	}
+
+	expired, err := s.ExpireTasks(ctx)
+	if err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+	if len(expired) != 1 || expired[0] != tk.TaskID {
+		t.Fatalf("expired = %v, want [%s]", expired, tk.TaskID)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != StateFailed {
+		t.Fatalf("state = %s, want %s", got.State, StateFailed)
+	}
+	want := `"failed":"lease expired (last activity: no output for 3m45s — agent still running)"`
+	if !strings.Contains(got.ResultJSON, want) {
+		t.Fatalf("result_json = %s, want it to carry %s", got.ResultJSON, want)
+	}
+}
+
+// TestLeaseExpiryReasonWithoutNotes keeps the old wording for a task that
+// never emitted progress — an expiry before the adapter started has nothing
+// to fold in, and "(last activity: )" would read as a bug.
+func TestLeaseExpiryReasonWithoutNotes(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	tk := createTask(t, s, "", "silent", "root")
+
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	must(s.Queue(ctx, tk.TaskID, "root"))
+	must(s.Dispatch(ctx, tk.TaskID, "root", "root"))
+	must(s.Accept(ctx, tk.TaskID, "root"))
+	if _, err := s.db.Exec(`UPDATE tasks SET lease_expires_at=? WHERE task_id=?`,
+		s.now()-1, tk.TaskID); err != nil {
+		t.Fatalf("stamp lease: %v", err)
+	}
+	if _, err := s.ExpireTasks(ctx); err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+	got, err := s.Get(ctx, tk.TaskID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ResultJSON != `{"failed":"lease expired"}` {
+		t.Fatalf("result_json = %s, want the bare reason", got.ResultJSON)
 	}
 }
 

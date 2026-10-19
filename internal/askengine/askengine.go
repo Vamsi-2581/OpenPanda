@@ -32,6 +32,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
+	"github.com/Xustalis/OpenPanda/internal/hwinfo"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 	"github.com/Xustalis/OpenPanda/internal/mcp"
@@ -965,6 +966,9 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	// idempotent with the daemon's own registration.
 	card.NodeKind = e.cfg.Node.Kind
 	card.NodeIdentity = e.cfg.Node.EffectiveIdentity()
+	// Same machine facts the daemon stamps: the REPL self-registers too, and
+	// its row must not read as "unknown device" just because a CLI wrote it.
+	card.FormFactor = hwinfo.FormFactor()
 	stableID := core.RuntimeNodeID(e.cfg.Node.Name, e.cfg.Node.Kind, card.NodeIdentity)
 	// Snapshot the row's heartbeat stamp before Register overwrites it — but
 	// only a stamp strictly above our own last write counts as foreign: a row
