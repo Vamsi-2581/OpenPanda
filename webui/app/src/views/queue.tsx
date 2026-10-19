@@ -219,6 +219,12 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
   const [priority, setPriority] = useState<Task['priority']>('normal')
   const [project, setProject] = useState('')
   const [node, setNode] = useState('')
+  // Same-tree parallelism: 'default' claims the whole project; 'paths' claims
+  // the typed directories so disjoint siblings can run alongside; 'isolate'
+  // runs in a private copy that merges back. Hidden until a project is set —
+  // without one there is nothing to scope.
+  const [parallel, setParallel] = useState<'default' | 'paths' | 'isolate'>('default')
+  const [pathsText, setPathsText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // The environment picker lists the live fleet; loaded lazily when the form
@@ -234,12 +240,17 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
     setBusy(true)
     setError('')
     try {
+      const scopePaths = parallel === 'paths'
+        ? pathsText.split(',').map((p) => p.trim()).filter(Boolean)
+        : undefined
       const res = await api.createTask({
         title: title.trim(),
         prompt: prompt.trim() || undefined,
         priority,
         project: project || undefined,
         node: node || undefined,
+        scope_paths: scopePaths,
+        isolate: parallel === 'isolate' ? true : undefined,
       })
       // A queued task nobody can drain must not read as dispatched — surface
       // the engine's advisory before clearing the composer.
@@ -249,6 +260,8 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
       setPriority('normal')
       setProject('')
       setNode('')
+      setParallel('default')
+      setPathsText('')
       setOpen(false)
       onCreated()
     } catch (err) {
@@ -339,6 +352,36 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
           onInput={(e) => setPrompt((e.target as HTMLTextAreaElement).value)}
         />
       </div>
+      {project && (
+        <div class="field-row">
+          <div class="field-group">
+            <label for="nt-parallel">{t('queue.parallelMode')}</label>
+            <select
+              id="nt-parallel"
+              class="input"
+              value={parallel}
+              onChange={(e) => setParallel((e.target as HTMLSelectElement).value as typeof parallel)}
+            >
+              <option value="default">{t('queue.parallel.default')}</option>
+              <option value="paths">{t('queue.parallel.paths')}</option>
+              <option value="isolate">{t('queue.parallel.isolate')}</option>
+            </select>
+          </div>
+          {parallel === 'paths' && (
+            <div class="field-group">
+              <label for="nt-paths">{t('queue.parallel.pathsLabel')}</label>
+              <input
+                id="nt-paths"
+                class="input"
+                type="text"
+                placeholder={t('queue.parallel.pathsPlaceholder')}
+                value={pathsText}
+                onInput={(e) => setPathsText((e.target as HTMLInputElement).value)}
+              />
+            </div>
+          )}
+        </div>
+      )}
       {error && <p class="gate-error">{error}</p>}
       <div class="settings-actions">
         <button class="btn primary" type="submit" disabled={busy || !title.trim()}>
@@ -593,6 +636,16 @@ function KanbanCard({
           {task.parent_id && (
             <span class="kanban-subagent" title={t('queue.subagent')} aria-label={t('queue.subagent')}>
               ↳{task.spawn_depth != null && task.spawn_depth > 1 ? task.spawn_depth : ''}
+            </span>
+          )}
+          {task.isolate && (
+            <span class="kanban-subagent" title={t('queue.isolate')} aria-label={t('queue.isolate')}>
+              ⧉
+            </span>
+          )}
+          {!task.isolate && task.scope_paths && task.scope_paths.length > 0 && (
+            <span class="kanban-subagent" title={t('queue.scoped') + ': ' + task.scope_paths.join(', ')} aria-label={t('queue.scoped')}>
+              ◫
             </span>
           )}
           {task.title || task.id}

@@ -105,6 +105,61 @@ func execLockKeys(task Task, actuatorID string) []string {
 // run whose rows were never released, and its keys are stolen rather than
 // allowed to wedge the resource. This applies to rows held by taskID itself
 // too: a restarted task takes over its dead predecessor's rows this way.
+// conflictingExecHolders returns the lock rows whose keys contend with key:
+// exact match for ordinary keys, prefix-overlap in either direction for
+// "scope:" keys (a held root "scope:p" blocks "scope:p/a"; a held leaf blocks
+// a new claim on any of its ancestors).
+func conflictingExecHolders(ctx context.Context, tx *sql.Tx, key string) (map[string]string, error) {
+	out := map[string]string{}
+	if !queue.IsScopeKey(key) {
+		var holder string
+		err := tx.QueryRowContext(ctx, `SELECT task_id FROM exec_locks WHERE key=?`, key).Scan(&holder)
+		if errors.Is(err, sql.ErrNoRows) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read exec lock %q: %w", key, err)
+		}
+		out[key] = holder
+		return out, nil
+	}
+	// Ancestors are a fixed enumerable set; descendants come from a "/"-bounded
+	// LIKE prefix. LIKE metacharacters inside the key are escaped so a path
+	// named "100%_x" cannot widen its own conflict domain.
+	var sb strings.Builder
+	sb.WriteString(`SELECT key, task_id FROM exec_locks WHERE key = ?`)
+	args := []any{key}
+	anc := queue.ScopeAncestors(key)
+	if len(anc) > 0 {
+		sb.WriteString(` OR key IN (` + strings.TrimSuffix(strings.Repeat("?,", len(anc)), ",") + `)`)
+		for _, a := range anc {
+			args = append(args, a)
+		}
+	}
+	sb.WriteString(` OR key LIKE ? ESCAPE '\'`)
+	args = append(args, escapeLike(key)+"/%")
+	rows, err := tx.QueryContext(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("read scope exec locks for %q: %w", key, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, holder string
+		if err := rows.Scan(&k, &holder); err != nil {
+			return nil, err
+		}
+		out[k] = holder
+	}
+	return out, rows.Err()
+}
+
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 func (s *TaskStore) TryAcquireExecLocks(ctx context.Context, taskID, nodeID, runID string, keys []string) (bool, error) {
 	if len(keys) == 0 {
 		return true, nil
@@ -114,23 +169,21 @@ func (s *TaskStore) TryAcquireExecLocks(ctx context.Context, taskID, nodeID, run
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		acquired = false
 		for _, key := range keys {
-			var holder string
-			err := tx.QueryRowContext(ctx, `SELECT task_id FROM exec_locks WHERE key=?`, key).Scan(&holder)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue // free
-			}
-			if err != nil {
-				return fmt.Errorf("read exec lock %q: %w", key, err)
-			}
-			live, err := liveExecHolder(ctx, tx, holder, now)
+			holders, err := conflictingExecHolders(ctx, tx, key)
 			if err != nil {
 				return err
 			}
-			if live {
-				return errExecLockBusy
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM exec_locks WHERE key=? AND task_id=?`, key, holder); err != nil {
-				return fmt.Errorf("steal exec lock %q from %s: %w", key, holder, err)
+			for heldKey, holder := range holders {
+				live, err := liveExecHolder(ctx, tx, holder, now)
+				if err != nil {
+					return err
+				}
+				if live {
+					return errExecLockBusy
+				}
+				if _, err := tx.ExecContext(ctx, `DELETE FROM exec_locks WHERE key=? AND task_id=?`, heldKey, holder); err != nil {
+					return fmt.Errorf("steal exec lock %q from %s: %w", heldKey, holder, err)
+				}
 			}
 		}
 		for _, key := range keys {

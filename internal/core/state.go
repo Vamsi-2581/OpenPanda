@@ -279,6 +279,18 @@ type Task struct {
 	// metered round nor be delegated onward, since either would launder the
 	// bound into fresh budget on the next hop.
 	TokenBudget int64
+	// ScopePaths is the project-relative directory set a delegated child
+	// declared it owns. It persists so every later hop and requeue re-derives
+	// the same scope leaf locks (disjoint siblings run in parallel, the
+	// whole-project fallback stays for undeclared rows) instead of silently
+	// widening the child's claim to the entire worktree.
+	ScopePaths []string
+	// Isolate marks a delegated child that runs in a private copy of the
+	// project tree instead of the shared one. It persists for the same
+	// reason ScopePaths does: a requeue, forward or restart must keep
+	// executing isolated — dropping the flag would run the child against
+	// the shared tree with a lock set that protects nothing.
+	Isolate bool
 }
 
 // NeedsFollowup reports whether this row parked in review with the

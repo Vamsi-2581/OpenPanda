@@ -34,6 +34,26 @@ func TestChildBlockedByParent(t *testing.T) {
 	if childBlockedByParent(Task{}, Task{ResourceKeys: []string{"project:x"}}) {
 		t.Fatal("keyless parent can serialize nothing")
 	}
+	// Scope keys contend by prefix-overlap, not equality: a scoped child's
+	// leaf sits behind the parent's scope root even though the strings
+	// differ, and a sibling under the parent's own leaf likewise.
+	scopedParent := Task{ResourceKeys: []string{"project:p", "scope:p"}}
+	if !childBlockedByParent(scopedParent, Task{ResourceKeys: []string{"scope:p/pkg/api"}}) {
+		t.Fatal("child leaf under the parent's root must block")
+	}
+	leafParent := Task{ResourceKeys: []string{"scope:p/pkg"}}
+	if !childBlockedByParent(leafParent, Task{ResourceKeys: []string{"scope:p/pkg/api"}}) {
+		t.Fatal("child leaf under the parent's leaf must block")
+	}
+	if !childBlockedByParent(leafParent, Task{ResourceKeys: []string{"scope:p"}}) {
+		t.Fatal("child root over the parent's leaf must block")
+	}
+	if childBlockedByParent(leafParent, Task{ResourceKeys: []string{"scope:p/other"}}) {
+		t.Fatal("disjoint scope must not block")
+	}
+	if childBlockedByParent(leafParent, Task{ResourceKeys: []string{"scope:q/pkg"}}) {
+		t.Fatal("another project's scope must not block")
+	}
 }
 
 // TestMergeLiveChildrenPicksUpMidRunChild: pendingChildren is seeded from the

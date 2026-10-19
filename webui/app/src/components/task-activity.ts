@@ -93,6 +93,22 @@ export function latestActivity(
       const to = str(data.to_node) || str(data.to)
       return to ? t('queue.live.hop', { node: to }) : t('queue.live.route')
     }
+    case 'delegate_request': {
+      const child = str(data.title) || str(data.child) || ''
+      if (data.isolate === true) {
+        return child
+          ? t('queue.live.spawnIsolated', { child })
+          : t('queue.live.spawnIsolatedBare')
+      }
+      return child ? t('queue.live.spawn', { child }) : t('queue.live.spawnBare')
+    }
+    case 'isolated_merge': {
+      const merged = typeof data.merged === 'number' ? data.merged : 0
+      const conflicts = Array.isArray(data.conflicts) ? data.conflicts.length : 0
+      return conflicts > 0
+        ? t('queue.live.mergeConflicts', { merged: String(merged), conflicts: String(conflicts) })
+        : t('queue.live.merge', { merged: String(merged) })
+    }
     case 'artifact_transfer':
       return t('queue.live.transfer')
 

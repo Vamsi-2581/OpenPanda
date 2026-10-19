@@ -288,6 +288,15 @@ export function isTaskStalled(task: Task, now = Date.now()): boolean {
   }
 }
 
+/** One sub-agent reference inside a parent task's detail payload. */
+export interface TaskChild {
+  id: string
+  state: string
+  title?: string
+  isolate?: boolean
+  scope_paths?: string[]
+}
+
 export interface Task {
   id: string
   parent_id: string
@@ -315,6 +324,14 @@ export interface Task {
    *  resume_execution (parked before running, approve re-runs it), or
    *  needs_changed_input (approve alone cannot help). */
   approval_disposition?: 'accept_work' | 'resume_execution' | 'needs_changed_input'
+  /** Same-tree parallelism declaration: the project-relative lanes this
+   *  task claims (disjoint siblings run simultaneously), or — when isolate
+   *  is set — a private copy whose changes merge back on completion. */
+  scope_paths?: string[]
+  isolate?: boolean
+  /** Spawned sub-agents (getTask only): the tree a parent is orchestrating,
+   *  with each child's live state and its own parallel mode. */
+  children?: TaskChild[]
   created_at: string
   updated_at: string
   events?: TaskEvent[]
@@ -784,6 +801,8 @@ export const api = {
     project?: string
     resource_keys?: string[]
     node?: string
+    scope_paths?: string[]
+    isolate?: boolean
   }): Promise<CreateTaskResult> {
     return request('POST', '/api/tasks', body)
   },
@@ -1926,6 +1945,11 @@ export interface AskStatusEvent {
   delay_ms?: number
   http_status?: number
   reason?: string
+  /** kind === 'spawn': the child's label and its parallel-mode descriptor
+   *  ("isolated", or the claimed lane paths) so the console phrases the
+   *  fan-out milestone in the browser's own language. */
+  name?: string
+  detail?: string
 }
 
 /** Structured fields on an `error` SSE event beyond the message. `kind` is

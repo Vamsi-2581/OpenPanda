@@ -280,6 +280,14 @@ function statusNote(text: string, ev?: AskStatusEvent): string {
       max: ev.max ?? 0,
     })
   }
+  if (ev?.kind === 'spawn' && ev.name) {
+    // The fan-out milestone in the browser's own language: the mode
+    // descriptor says how the child relates to the shared tree — a private
+    // copy that merges back, or the lanes it claims.
+    if (ev.detail === 'isolated') return t('sessions.spawn.isolated', { name: ev.name })
+    if (ev.detail) return t('sessions.spawn.scoped', { name: ev.name, paths: ev.detail })
+    return t('sessions.spawn', { name: ev.name })
+  }
   return text
 }
 

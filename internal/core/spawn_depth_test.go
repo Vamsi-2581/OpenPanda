@@ -389,6 +389,84 @@ func TestDelegationDisabledRefusesSpawn(t *testing.T) {
 	}
 }
 
+// TestSpawnChildTaskPersistsScopePaths pins the row half of the scope
+// protocol: a child spawned with declared paths carries them on its row, so
+// a later requeue/forward re-derives the same leaf locks instead of widening
+// the claim to the whole project.
+func TestSpawnChildTaskPersistsScopePaths(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	c := newCore(t, "scope-persist", "127.0.0.1:17941")
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	root, _, _, err := c.createTask(ctx, TaskInput{Title: "root", Intent: "work", Project: "proj"})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	child, err := c.SpawnChildTask(ctx, root.TaskID, TaskInput{
+		Title: "scoped", Intent: "work", Project: "proj",
+		Paths: []string{"pkg/api", "./pkg/util", "pkg/api"},
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if len(child.ScopePaths) != 2 {
+		t.Fatalf("in-memory scope paths = %v", child.ScopePaths)
+	}
+	got, err := c.store.Get(ctx, child.TaskID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(got.ScopePaths) != 2 || got.ScopePaths[0] != "pkg/api" || got.ScopePaths[1] != "pkg/util" {
+		t.Fatalf("persisted scope paths = %v, want [pkg/api pkg/util]", got.ScopePaths)
+	}
+	// An unscoped child carries nothing — the whole-project fallback.
+	plain, err := c.SpawnChildTask(ctx, root.TaskID, TaskInput{Title: "plain", Intent: "work", Project: "proj"})
+	if err != nil {
+		t.Fatalf("spawn plain: %v", err)
+	}
+	gotPlain, err := c.store.Get(ctx, plain.TaskID)
+	if err != nil {
+		t.Fatalf("reload plain: %v", err)
+	}
+	if len(gotPlain.ScopePaths) != 0 {
+		t.Fatalf("unscoped child paths = %v, want none", gotPlain.ScopePaths)
+	}
+}
+
+// TestSpawnChildTaskPersistsIsolate pins the flag's row half: a requeue or
+// forward rebuilds the lock set from the row, so the isolation decision must
+// survive the row round-trip — without it a re-routed isolated child would
+// silently run against the shared tree holding only its task key.
+func TestSpawnChildTaskPersistsIsolate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	c := newCore(t, "iso-persist", "127.0.0.1:17942")
+	if err := c.Register(ctx); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	root, _, _, err := c.createTask(ctx, TaskInput{Title: "root", Intent: "work", Project: "proj"})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	child, err := c.SpawnChildTask(ctx, root.TaskID, TaskInput{
+		Title: "iso", Intent: "work", Project: "proj", Isolate: true,
+	})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	got, err := c.store.Get(ctx, child.TaskID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !got.Isolate {
+		t.Fatal("persisted isolate flag lost")
+	}
+}
+
 // The structured schema's advertised ceiling follows the configured
 // max_children so the model never sees room the budget doesn't grant.
 func TestAgentResultSchemaMaxItemsFollowsConfig(t *testing.T) {
@@ -400,5 +478,16 @@ func TestAgentResultSchemaMaxItemsFollowsConfig(t *testing.T) {
 	}
 	if s := agentResultSchemaFor(nil, false, 0); !strings.Contains(s, `"maxItems": 8,`) {
 		t.Fatal("zero bound did not keep the baked-in 8")
+	}
+}
+
+// The structured schema advertises both parallelism levers a child may
+// declare: paths for same-tree scope keys, isolate for a private copy.
+func TestAgentResultSchemaAdvertisesScopeAndIsolate(t *testing.T) {
+	s := agentResultSchemaFor(nil, false, 8)
+	for _, prop := range []string{`"paths"`, `"isolate"`} {
+		if !strings.Contains(s, prop) {
+			t.Fatalf("schema missing %s", prop)
+		}
 	}
 }

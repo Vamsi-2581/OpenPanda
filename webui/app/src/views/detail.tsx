@@ -18,10 +18,12 @@ export function DetailView({
   id,
   onBack,
   onOpenSession,
+  onOpenTask,
 }: {
   id: string
   onBack(): void
   onOpenSession?(id: string): void
+  onOpenTask?(id: string): void
 }) {
   useLocaleRerender()
   const change = useChangeSignal()
@@ -148,6 +150,14 @@ export function DetailView({
         <div class="detail-title">
           <h1 class="page-title">{task.title || task.id}</h1>
           <StateBadge state={task.state} />
+          {task.isolate && (
+            <span class="badge blue" title={t('detail.isolateHint')}>{t('detail.isolated')}</span>
+          )}
+          {!task.isolate && task.scope_paths && task.scope_paths.length > 0 && (
+            <span class="badge dim" title={t('detail.scopeHint')}>
+              {t('detail.scoped')}: {task.scope_paths.join(', ')}
+            </span>
+          )}
         </div>
         <div class="detail-actions">
           {task.session_id && onOpenSession && (
@@ -353,8 +363,51 @@ export function DetailView({
         </div>
       )}
 
+      {/* Sub-agent tree: the children this task is orchestrating, with live
+          states and each child's parallel mode. This is the "parent fanned
+          out to N sub-agents" view — without it the children only existed
+          as separate board cards. */}
+      {task.children && task.children.length > 0 && (
+        <div class="detail-block">
+          <h2>{t('detail.children', { n: String(task.children.length) })}</h2>
+          <div class="children-list">
+            {task.children.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                class="child-row"
+                onClick={() => onOpenTask?.(c.id)}
+                title={c.id}
+              >
+                <StateBadge state={c.state} />
+                {c.isolate && (
+                  <span class="badge blue" title={t('detail.isolateHint')}>⧉</span>
+                )}
+                {!c.isolate && c.scope_paths && c.scope_paths.length > 0 && (
+                  <span class="badge dim" title={t('detail.scopeHint')}>◫ {c.scope_paths.join(', ')}</span>
+                )}
+                <span class="child-title">{c.title || c.id}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div class="detail-grid">
         <Field label={t('detail.id')} value={task.id} mono />
+        {task.parent_id && (
+          <div class="field">
+            <span class="dim">{t('detail.parent')}</span>
+            <button
+              type="button"
+              class="linklike mono"
+              onClick={() => onOpenTask?.(task.parent_id)}
+              title={task.parent_id}
+            >
+              {task.parent_id}
+            </button>
+          </div>
+        )}
         <Field label={t('detail.project')} value={task.project || '—'} />
         <Field label={t('detail.owner')} value={task.owner || '—'} />
         <Field label={t('detail.attempt')} value={task.attempt_id || '—'} mono />

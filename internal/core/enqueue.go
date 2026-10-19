@@ -50,7 +50,8 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	if q.Priority < PriorityHigh || q.Priority > PriorityLow {
 		return Task{}, fmt.Errorf("queue priority %d out of range", q.Priority)
 	}
-	if len(q.ResourceKeys) == 0 {
+	autoKeys := len(q.ResourceKeys) == 0
+	if autoKeys {
 		q.ResourceKeys = deriveResourceKeys(in)
 	} else {
 		q.ResourceKeys = mergeActuatorKeys(q.ResourceKeys, in.Requires, in.SpecJSON)
@@ -59,6 +60,16 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 	if err != nil {
 		return Task{}, fmt.Errorf("create task: %w", err)
 	}
+	// Auto-derived keys recomputed once the id exists: an input carrying a
+	// scope declaration (paths) or isolation intent must not hold the
+	// whole-project set — that silently serializes what the declaration
+	// meant to run in parallel, and the isolate branch needs the task key.
+	if autoKeys && in.Project != "" && (len(in.Paths) > 0 || in.Isolate) {
+		q.ResourceKeys = childResourceKeys(t.TaskID, in)
+	}
+	// createTask stamps the scope/isolate row flags from the input — the run
+	// reads the row, and a narrowed key claim must never pair with the
+	// un-narrowed behavior.
 	if err := c.store.SetQueueMeta(ctx, t.TaskID, q.Priority, q.SessionID, q.WorkDir, q.ResourceKeys); err != nil {
 		return Task{}, fmt.Errorf("set queue meta: %w", err)
 	}
@@ -85,7 +96,10 @@ func (c *Core) Enqueue(ctx context.Context, in TaskInput, q QueueSpec) (Task, er
 func deriveResourceKeys(in TaskInput) []string {
 	var keys []string
 	if in.Project != "" {
-		keys = append(keys, "project:"+in.Project)
+		// The scope root joins the legacy project key: a task that never
+		// narrowed its claim must exclude scoped children (whose leaf keys
+		// sit under this root) as well as other whole-project writers.
+		keys = append(keys, "project:"+in.Project, queue.ScopeRootKey(in.Project))
 	} else {
 		if in.TargetNode != "" {
 			keys = append(keys, "node:"+in.TargetNode)
@@ -419,6 +433,8 @@ func (c *Core) forwardScheduled(ctx context.Context, t Task) bool {
 		Intent:       t.Intent,
 		SpecJSON:     t.SpecJSON,
 		Requires:     t.Requires,
+		Paths:        t.ScopePaths,
+		Isolate:      t.Isolate,
 		Chain:        chain,
 		Complexity:   t.Complexity,
 		Risk:         t.Risk,

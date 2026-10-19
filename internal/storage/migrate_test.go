@@ -543,7 +543,8 @@ func TestMigrateV36RekeysOutboxes(t *testing.T) {
 
 // V50 adds tasks.spawn_depth (sub-agent generation) with a 0 default so
 // rows written before the column existed read as depth-0 roots; V51 adds
-// the inherited spawn_cap bound beside it.
+// the inherited spawn_cap bound beside it; V52 adds scope_paths_json — the
+// declared project scope a delegated child carries across hops.
 func TestMigrateV50TasksSpawnDepth(t *testing.T) {
 	db, err := Open(":memory:")
 	if err != nil {
@@ -553,7 +554,7 @@ func TestMigrateV50TasksSpawnDepth(t *testing.T) {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	for _, col := range []string{"spawn_depth", "spawn_cap"} {
+	for _, col := range []string{"spawn_depth", "spawn_cap", "scope_paths_json", "isolate"} {
 		if !columnExists(t, db, "tasks", col) {
 			t.Fatalf("tasks.%s missing after migrate", col)
 		}

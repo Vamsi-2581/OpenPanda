@@ -77,7 +77,11 @@ func DefaultKeys(keys []string, project, workDir, taskID string) []string {
 		return keys
 	}
 	if project != "" {
-		return []string{"project:" + project}
+		// The scope root rides next to the legacy project key: scoped
+		// children hold "scope:<p>/<path>" leaves and must still exclude a
+		// whole-project task (and vice versa), while tasks created before
+		// scope keys existed keep serializing on "project:<p>".
+		return []string{"project:" + project, ScopeRootKey(project)}
 	}
 	if wd := workdirKey(workDir); wd != "" {
 		return []string{"dir:" + wd}
@@ -110,6 +114,11 @@ func workdirKey(dir string) string {
 	}
 	return abs
 }
+
+// WorkDirKey is the exported form of workdirKey for lock composition done
+// outside this package: an isolated child's merge must hold the pinned
+// directory's identity the same way a task pinned to it would.
+func WorkDirKey(dir string) string { return workdirKey(dir) }
 
 // sortReady orders the ready set by the scheduling policy: explicit drag
 // order first (seq>0, ascending), then unsequenced tasks by priority and FIFO.
@@ -152,12 +161,22 @@ func NewResourceRegistry() *ResourceRegistry {
 }
 
 // TryAcquire locks every key for taskID if none of them is held by another
-// task (a key held by taskID itself is not a conflict). It returns false and
-// locks nothing on any conflict.
+// task (a key held by taskID itself is not a conflict). Scope keys contend by
+// prefix-overlap rather than exact match — a held "scope:p" blocks a new
+// "scope:p/a" and vice versa, while "scope:p/a" and "scope:p/b" coexist.
+// It returns false and locks nothing on any conflict.
 func (r *ResourceRegistry) TryAcquire(keys []string, taskID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, k := range keys {
+		if IsScopeKey(k) {
+			for hk, h := range r.holder {
+				if h != taskID && IsScopeKey(hk) && ScopeKeysConflict(k, hk) {
+					return false
+				}
+			}
+			continue
+		}
 		if h, ok := r.holder[k]; ok && h != taskID {
 			return false
 		}

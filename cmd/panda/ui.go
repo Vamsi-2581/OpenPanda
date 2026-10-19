@@ -97,7 +97,18 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 		}
 		note = i18n.Tf(loc, "cli.progress.exec", "agent", agentLabel)
 	case askengine.ProgressSpawn:
-		note = i18n.Tf(loc, "cli.progress.sub", "title", p.Name)
+		// The mode descriptor (private copy, or the claimed lanes) tells the
+		// user HOW this sub-agent relates to the shared tree — the difference
+		// between "another task" and "another task that will merge its work
+		// back" is exactly what parallel decomposition needs to convey.
+		switch {
+		case p.Detail == "isolated":
+			note = i18n.Tf(loc, "cli.progress.subIsolated", "title", p.Name)
+		case p.Detail != "":
+			note = i18n.Tf(loc, "cli.progress.subScoped", "title", p.Name, "paths", p.Detail)
+		default:
+			note = i18n.Tf(loc, "cli.progress.sub", "title", p.Name)
+		}
 	case askengine.ProgressJudge:
 		note = i18n.T(loc, "cli.progress.judge")
 	case askengine.ProgressWait:

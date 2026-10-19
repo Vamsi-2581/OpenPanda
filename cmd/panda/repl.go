@@ -1584,11 +1584,30 @@ func (r *repl) cmdTask(arg string) {
 		return
 	}
 	r.outf("  id:      %s\n", t.TaskID)
+	r.outf("  parent:  %s\n", orDash(t.ParentID))
 	r.outf("  project: %s\n", orDash(t.Project))
+	// Parallel-mode visibility, same vocabulary as `panda task show`: an
+	// isolated task runs in a private copy that merges back; a scoped one
+	// claims named lanes inside the shared tree.
+	if t.Isolate {
+		r.outf("  mode:    isolated (private copy → merge back)\n")
+	} else if len(t.ScopePaths) > 0 {
+		r.outf("  scope:   %s\n", strings.Join(t.ScopePaths, ", "))
+	}
 	r.outf("  title:   %s\n", t.Title)
 	r.outf("  state:   %s\n", t.State)
 	r.outf("  prio:    %s\n", priorityName(t.Priority))
 	r.outf("  owner:   %s\n", orDash(t.OwnerNode))
+	// Sub-agent visibility: a task that fanned out shows its children with
+	// live states — "the parent is orchestrating N sub-agents" must be
+	// readable from the record, not only from the board.
+	if kids, kerr := r.store.Children(r.commandContext(), t.TaskID); kerr == nil && len(kids) > 0 {
+		r.outf("  depth:   %d\n", t.SpawnDepth)
+		r.outf("  children:\n")
+		for _, k := range kids {
+			r.outf("    %s  [%s]  %s\n", k.TaskID, colorState(k.State), k.Title)
+		}
+	}
 	r.outf("  created: %s\n", ts(t.CreatedAt))
 	r.outf("  updated: %s\n", ts(t.UpdatedAt))
 	r.printEvents(t.TaskID)

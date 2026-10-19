@@ -802,7 +802,18 @@ func (c *Core) packStageOutput(ctx context.Context, t Task, workDir string) (str
 		// at the node that has it.
 		return "", fmt.Errorf("no artifact pool on this node: stage %s output cannot be handed to successors", t.StageID)
 	}
-	m, err := c.artifacts.PackDirExceptPaths(workDir, nil, c.hostStatePrune(workDir), 0)
+	prune := c.hostStatePrune(workDir)
+	if t.Isolate {
+		// An isolated workspace carries bookkeeping a remote adopter must
+		// never receive: the three-way merge baseline, and — when the
+		// workspace is a linked git worktree — the .git *file* pointing at
+		// this node's admin dir (dirSkip only names directories, so the
+		// file would otherwise land on the peer's checkout and corrupt it).
+		prune = append(prune,
+			filepath.Join(workDir, isolatedBaselineFile),
+			filepath.Join(workDir, ".git"))
+	}
+	m, err := c.artifacts.PackDirExceptPaths(workDir, nil, prune, 0)
 	if err != nil {
 		return "", fmt.Errorf("pack stage output: %w", err)
 	}
@@ -961,6 +972,18 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 		c.logger.Warn("persist child spawn cap", "task", t.TaskID, "err", err)
 	}
 	t.SpawnCap = cap
+	if paths := normalizeScopePaths(in.Paths); len(paths) > 0 {
+		if err := c.store.SetScopePaths(ctx, t.TaskID, paths); err != nil {
+			c.logger.Warn("persist child scope paths", "task", t.TaskID, "err", err)
+		}
+		t.ScopePaths = paths
+	}
+	if in.Isolate {
+		if err := c.store.SetIsolate(ctx, t.TaskID, true); err != nil {
+			c.logger.Warn("persist child isolate", "task", t.TaskID, "err", err)
+		}
+		t.Isolate = true
+	}
 	if in.WorkDir != "" {
 		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
 			c.logger.Warn("persist child work dir", "task", t.TaskID, "err", err)
@@ -1035,6 +1058,8 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 			Intent:           in.Intent,
 			SpecJSON:         in.SpecJSON,
 			Requires:         in.Requires,
+			Paths:            in.Paths,
+			Isolate:          in.Isolate,
 			Chain:            child.Chain,
 			PreferredNode:    in.PreferredNode,
 			TargetNode:       in.TargetNode,
@@ -1062,8 +1087,11 @@ func (c *Core) DispatchChild(ctx context.Context, child Task, in TaskInput) erro
 	}
 	// Local path (or nobody capable): the queue scheduler adopts it and
 	// forwardScheduled re-routes on later passes — the same semantics an
-	// enqueued root task already has.
-	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, "", "", nil); err != nil {
+	// enqueued root task already has. The child's lock set derives here, not
+	// inside the queue meta writer: a scoped claim becomes leaf keys so
+	// disjoint siblings run in parallel, an unscoped one falls back to the
+	// project serialization.
+	if err := c.store.SetQueueMeta(ctx, child.TaskID, PriorityNormal, "", "", childResourceKeys(child.TaskID, in)); err != nil {
 		return fmt.Errorf("queue meta for child: %w", err)
 	}
 	if err := c.store.Queue(ctx, child.TaskID, c.nodeID); err != nil {
@@ -1092,6 +1120,18 @@ type delegateRequest struct {
 	Requires []string `json:"requires,omitempty"`
 	Title    string   `json:"title,omitempty"`
 	Node     string   `json:"node,omitempty"`
+	// Paths declares the project-relative directories the child owns — the
+	// scope it may write inside the shared worktree. Disjoint sibling
+	// scopes run in parallel; an omitted paths claim keeps the child on
+	// the whole-project lock, serialized like before.
+	Paths []string `json:"paths,omitempty"`
+	// Isolate gives the child a private copy of the project tree (a git
+	// worktree when the project is a repository) instead of the shared one:
+	// it locks nothing shared, runs truly concurrently with any sibling,
+	// and its changes merge back into the project tree when it finishes.
+	// The right choice when the child will rewrite or build the tree at
+	// large; scope paths are the cheaper option for disjoint edits.
+	Isolate bool `json:"isolate,omitempty"`
 }
 
 // parseDelegateRequests extracts every well-formed PANDA_DELEGATE request
@@ -1239,7 +1279,9 @@ const agentResultSchema = `{
           "intent": {"type": "string", "description": "What the sub-task must do"},
           "requires": {"type": "array", "items": {"type": "string"}, "description": "Capability ids the sub-task needs"},
           "title": {"type": "string", "description": "Short title"},
-          "node": {"type": "string", "description": "Optional specific node name"}
+          "node": {"type": "string", "description": "Optional specific node name"},
+          "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 8, "description": "Project-relative directories this sub-task owns and may write. Sibling sub-tasks whose paths do not overlap run in PARALLEL in the same worktree; overlapping or omitted paths serialize. Declare the narrowest real scope (e.g. [\"internal/api\", \"web/src/views\"]) and make sure two sub-tasks never name the same directory."},
+          "isolate": {"type": "boolean", "description": "true gives this sub-task a private copy of the project tree (git worktree when available): it runs fully parallel with everything, and its changes merge back into the project tree when it finishes (conflicts are reported, not guessed). Use for sub-tasks that rewrite or build the tree at large; use paths instead when the edits are disjoint and cheap."}
         },
         "required": ["intent"]
       }
@@ -1434,7 +1476,7 @@ func (c *Core) delegateChildren(ctx context.Context, parent Task, drs []delegate
 			}
 			c.delegateActive.Add(1)
 			defer c.delegateActive.Add(-1)
-			note, pendingID, derr := c.delegateChild(ctx, parent, dr)
+			note, pendingID, derr := c.delegateChild(ctx, parent, dr, drs)
 			if derr != nil {
 				note = "delegation failed: " + derr.Error()
 			}
@@ -1493,7 +1535,7 @@ type pendingChild struct {
 // it holds while the child's executor keeps heartbeating, not for a fixed
 // window — and a child that outlives the wait keeps its row pending rather
 // than being killed; its late result folds back via pendingChildren.
-func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest) (string, string, error) {
+func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateRequest, siblings []delegateRequest) (string, string, error) {
 	// Authorized is deliberately NOT inherited: the user's consent covered the
 	// parent task they were shown, not an arbitrary sub-operation the agent
 	// authors via an output marker. A tier-2 child must earn its own approval —
@@ -1503,11 +1545,47 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		Title:        dr.Title,
 		Intent:       dr.Intent,
 		Requires:     dr.Requires,
+		Paths:        dr.Paths,
+		Isolate:      dr.Isolate,
 		TargetNode:   dr.Node,
 		Project:      parent.Project,
 		Transport:    parent.Transport,
 		DeadlineUnix: parent.DeadlineUnix,
 		UserLocale:   parent.GetUserLocale(),
+	}
+	if in.Isolate && in.Project != "" {
+		// The child must know it works on a private copy: files its siblings
+		// write will not appear under it, and its own changes are merged back
+		// when it finishes.
+		in.Intent += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
+	}
+	if paths := normalizeScopePaths(in.Paths); len(paths) > 0 && in.Project != "" && !in.Isolate {
+		// The scope claim must reach the executor itself, not just the lock
+		// table: the child agent has to know which subtree it owns and —
+		// just as important — which subtrees its siblings claimed, so it
+		// stays inside its lane without needing the message board first.
+		// An isolated child shares no tree, so the lane note would be noise.
+		var others []string
+		seenOther := map[string]bool{}
+		for _, s := range siblings {
+			for _, sp := range normalizeScopePaths(s.Paths) {
+				skip := seenOther[sp]
+				for _, own := range paths {
+					if sp == own {
+						skip = true
+					}
+				}
+				if !skip {
+					seenOther[sp] = true
+					others = append(others, sp)
+				}
+			}
+		}
+		note := "[scope] you own paths: " + strings.Join(paths, ", ")
+		if len(others) > 0 {
+			note += " — sibling tasks own: " + strings.Join(others, ", ") + "; write only inside your own scope"
+		}
+		in.Intent += "\n\n" + note
 	}
 	if in.Title == "" {
 		in.Title = dr.Intent
@@ -1525,12 +1603,30 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		c.waiters.Delete(child.TaskID)
 		return "", "", err
 	}
+	if paths := normalizeScopePaths(in.Paths); len(paths) > 0 && in.Project != "" && !in.Isolate {
+		// Publish the claim on the sibling board once the child is actually
+		// dispatched: siblings see which subtrees are owned before they pick
+		// files to touch — the decentralized-coordination half of the scope
+		// protocol — and a failed dispatch leaves no misleading claim. An
+		// isolated child claims nothing (it works in a private copy), so it
+		// is never announced as a scope holder.
+		body := fmt.Sprintf("child %s (%s) claims scope: %s", child.TaskID, child.Title, strings.Join(paths, ", "))
+		if err := c.deliverTaskMessage(ctx, parent, msgRequest{To: "children", Grade: MsgGradeStatus, Body: body}); err != nil {
+			c.logger.Debug("post scope claim", "task", child.TaskID, "err", err)
+		}
+	}
 	c.EvTrace(ctx, parent.TaskID, "delegate_request", map[string]any{
 		"child":    child.TaskID,
 		"title":    dr.Title,
 		"requires": dr.Requires,
 		"node":     dr.Node,
 		"chain":    child.Chain,
+		// The parallel-mode declaration rides the event so every renderer
+		// (CLI progress line, TUI transcript, web orbit) can say HOW the
+		// child relates to the shared tree — a private copy, named lanes,
+		// or the default whole-project claim.
+		"paths":   dr.Paths,
+		"isolate": dr.Isolate,
 	})
 	r, delivered, state, err := c.awaitChild(ctx, parent, child, waiter)
 	if delivered || err != nil {
@@ -1824,7 +1920,10 @@ func (c *Core) awaitPendingChildren(ctx context.Context, parent Task, pending []
 // behind the parent's own queue resource keys. The queue admits one holder
 // per key, and the parent holds its keys for its entire run — so a child
 // sharing any of them can only start after the parent ends, and a fold that
-// waits on it waits on itself.
+// waits on it waits on itself. Scope keys contend by prefix-overlap, not
+// equality: a scoped child ("scope:p/a") is blocked by the parent's scope
+// root ("scope:p") exactly as an unscoped one is, and only a child whose
+// claim is genuinely disjoint from the parent's stays runnable.
 func childBlockedByParent(parent, child Task) bool {
 	if len(parent.ResourceKeys) == 0 || len(child.ResourceKeys) == 0 {
 		return false
@@ -1832,6 +1931,9 @@ func childBlockedByParent(parent, child Task) bool {
 	for _, ck := range child.ResourceKeys {
 		for _, pk := range parent.ResourceKeys {
 			if ck == pk {
+				return true
+			}
+			if queue.IsScopeKey(ck) && queue.IsScopeKey(pk) && queue.ScopeKeysConflict(ck, pk) {
 				return true
 			}
 		}

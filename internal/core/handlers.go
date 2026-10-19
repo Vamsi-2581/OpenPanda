@@ -234,6 +234,33 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			c.logger.Warn("adopt spawn cap", "task", t.TaskID, "err", err)
 		}
 	}
+	// A scoped or isolated child carries the mode the origin's agent chose:
+	// derive the same lock set here and stamp it on the row, so this node's
+	// exec/queue locks honor it (disjoint siblings parallelize here too,
+	// isolated ones lock nothing shared) instead of falling back to the
+	// whole-project serialization the empty column would produce.
+	if p.Project != "" && (len(p.Paths) > 0 || p.Isolate) {
+		keys := childResourceKeys(t.TaskID, TaskInput{Project: p.Project, Paths: p.Paths, Isolate: p.Isolate, Requires: p.Requires, SpecJSON: p.SpecJSON})
+		if err := c.store.SetResourceKeys(ctx, t.TaskID, keys); err != nil {
+			c.logger.Warn("adopt child scope keys", "task", t.TaskID, "err", err)
+		} else {
+			t.ResourceKeys = keys
+		}
+		if paths := normalizeScopePaths(p.Paths); len(paths) > 0 {
+			if err := c.store.SetScopePaths(ctx, t.TaskID, paths); err != nil {
+				c.logger.Warn("adopt child scope paths", "task", t.TaskID, "err", err)
+			} else {
+				t.ScopePaths = paths
+			}
+		}
+		if p.Isolate {
+			if err := c.store.SetIsolate(ctx, t.TaskID, true); err != nil {
+				c.logger.Warn("adopt child isolate", "task", t.TaskID, "err", err)
+			} else {
+				t.Isolate = true
+			}
+		}
+	}
 	// Same adoption for the token quota (§6.1): zero is the legacy/unbounded
 	// default the column already carries, so only a declared remainder needs
 	// persisting — and a negative wire value never reaches here (declined

@@ -898,13 +898,23 @@ func taskTableRowState(t core.Task, c taskTableCols, state string) string {
 	if ws == "" {
 		ws = "-"
 	}
+	// Parallel-mode marker: how the row relates to the shared tree — the
+	// same glyphs the web kanban uses, so the two boards read alike. ⧉ is a
+	// private copy that merges back, ◫ a scoped claim inside the tree.
+	title := t.Title
+	switch {
+	case t.Isolate:
+		title = "⧉ " + title
+	case len(t.ScopePaths) > 0:
+		title = "◫ " + title
+	}
 	return row(
 		cell(refOr(c.refs, t.TaskID), c.id),
 		stateCell(state, c.state),
 		cell(priorityName(t.Priority), c.prio),
 		cell(shortNode(t.OwnerNode), c.node),
 		cell(ws, c.ws),
-		cell(t.Title, c.title),
+		cell(title, c.title),
 	)
 }
 

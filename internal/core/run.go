@@ -612,6 +612,26 @@ func (c *Core) prepareRunDir(execCtx, ctx context.Context, task Task, taskID str
 		}
 	}
 
+	// Isolated delegation (delegateRequest.Isolate): the child declared it
+	// wants a private copy of the project tree instead of the shared one —
+	// a git worktree when the project is a repository, a copy otherwise.
+	// Populated from the tree as it is right now (HEAD plus the working
+	// tree's uncommitted delta); the run below executes entirely inside it,
+	// and run's terminal path merges the changes back. A setup failure is
+	// fatal rather than a silent fallback: the task's lock set is already
+	// narrowed to itself, and dropping it onto the shared tree unlocked
+	// would let siblings stomp each other.
+	if task.Isolate && task.Project != "" && task.PlanID == "" {
+		iso, ierr := c.setupIsolatedWorkDir(execCtx, task, workDir)
+		if ierr != nil {
+			return runPrep{}, fmt.Errorf("isolated workspace: %w", ierr)
+		}
+		c.EvTrace(execCtx, taskID, "isolated_workspace", map[string]any{
+			"workspace": iso, "source": workDir,
+		})
+		workDir = iso
+	}
+
 	// §5.2 shadow resume: a task preempted mid-edit parked its scoped files
 	// before the cancel landed (negoInterruptLocal). Merging happens before
 	// the drift snapshot so restored paths count as pre-existing state, not
@@ -1151,6 +1171,19 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		// "children", so orchestrating parents learn the protocol too.
 		if messageScope(task) != "" || len(pendingChildren) > 0 {
 			prompt += i18n.T(promptLang, "prompt.msgboard.hint")
+		}
+		// A scoped task must hear the lane it claims at the prompt level —
+		// the lock table only keeps OTHER tasks out; nothing inside the run
+		// tells the agent which subtree is its own. Delegate children carry
+		// this in their intent already (skip them); a manually queued
+		// `task add --paths` row does not, and neither do reruns whose intent
+		// was rewritten.
+		if !task.Isolate && len(task.ScopePaths) > 0 && !strings.Contains(task.Intent, "[scope]") {
+			prompt += "\n\n[scope] you own paths: " + strings.Join(task.ScopePaths, ", ") +
+				" — write only inside your own scope; sibling tasks may own other paths in this tree."
+		}
+		if task.Isolate && task.Project != "" && !strings.Contains(task.Intent, "[isolated]") {
+			prompt += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
 		}
 
 		// A task stamped remote at intake carries off-node intent: commander
@@ -2042,6 +2075,22 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		// authorized native Tier-2 run is audited, then fall through to
 		// Complete.
 		c.audit(context.WithoutCancel(ctx), taskID, "agent:tier2", plan.Agent, "authorized", "completed under submit-time consent")
+	}
+
+	// An isolated child's workspace is a private copy: its changes land back
+	// on the shared project tree before the task reports done, through the
+	// three-way merge (project locks held for its duration). The note rides
+	// the result so the parent's fold and the task row both carry the merge
+	// outcome — applied count, or the conflicting paths left with the
+	// project's bytes. Placement matters: after the output artifact above
+	// packed the workspace, before Complete so the row's stdout is final.
+	if task.Isolate && task.Project != "" && task.PlanID == "" {
+		if note := c.mergeIsolatedRun(ctx, task); note != "" {
+			if res.Stdout != "" {
+				res.Stdout += "\n"
+			}
+			res.Stdout += note
+		}
 	}
 
 	wCtx, cancel := c.storeWriteCtx(ctx)
