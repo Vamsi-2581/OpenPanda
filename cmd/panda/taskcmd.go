@@ -92,7 +92,8 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "  <id>                                    show one task and its timeline")
 	fmt.Fprintln(os.Stderr, "  add --title T [--prompt P] [--priority "+cliPriorities+"]")
 	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]")
-	fmt.Fprintln(os.Stderr, "      [--agents a,b [--mode m] | --nodes n1,n2] [--wait [--wait-timeout D]] [--json]   enqueue a task")
+	fmt.Fprintln(os.Stderr, "      [--paths d1,d2 | --isolate] [--agents a,b [--mode m] | --nodes n1,n2]")
+	fmt.Fprintln(os.Stderr, "      [--wait [--wait-timeout D]] [--json]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
 	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
@@ -183,6 +184,15 @@ func runTaskShow(args []string) {
 		taskField("children", strings.Join(lines, "\n"))
 	}
 	taskField("project", orDash(t.Project))
+	// Parallel-mode visibility: how this task relates to the shared tree it
+	// runs against — an isolated copy that merges back, or the path lanes it
+	// claims inside the shared worktree. Unscoped tasks stay quiet (they
+	// hold the whole-project lock, which is the default everyone knows).
+	if t.Isolate {
+		taskField("mode", "isolated (private copy → merge back)")
+	} else if len(t.ScopePaths) > 0 {
+		taskField("scope", strings.Join(t.ScopePaths, ", "))
+	}
 	taskField("title", t.Title)
 	stateLabel := colorState(t.State)
 	// A dispatched row with a parked outbox delivery is not on a wire — it is
@@ -617,8 +627,13 @@ type taskJSON struct {
 	// RouteFallback names the peer routing intended before the link failed
 	// and the task ran locally — empty when the task went where decided.
 	RouteFallback string `json:"route_fallback,omitempty"`
-	Created       string `json:"created_at"`
-	Updated       string `json:"updated_at"`
+	// ScopePaths/Isolate mirror the delegate declaration the row carries —
+	// how the task claims the shared tree: disjoint path lanes, or a private
+	// copy that merges back. Empty means the default whole-project claim.
+	ScopePaths []string `json:"scope_paths,omitempty"`
+	Isolate    bool     `json:"isolate,omitempty"`
+	Created    string   `json:"created_at"`
+	Updated    string   `json:"updated_at"`
 }
 
 func taskToJSON(t core.Task) taskJSON {
@@ -635,6 +650,8 @@ func taskToJSON(t core.Task) taskJSON {
 		Intent:      t.Intent,
 		WorkDir:     t.WorkDir,
 		ExecWorkDir: t.ExecWorkDir,
+		ScopePaths:  t.ScopePaths,
+		Isolate:     t.Isolate,
 		Created:     ts(t.CreatedAt),
 		Updated:     ts(t.UpdatedAt),
 	}
@@ -740,6 +757,8 @@ func runTaskAdd(args []string) {
 	preferred := fs.String("preferred", "", "target node id or name (hard pin: runs there or fails)")
 	nodes := fs.String("nodes", "", "comma-separated node ids to pin the task onto (one task per node; each lands on its named node or fails)")
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
+	scopePaths := fs.String("paths", "", "comma-separated project-relative dirs the task owns (needs --project): disjoint tasks run in parallel in the shared tree")
+	isolate := fs.Bool("isolate", false, "run in a private copy of the project tree (git worktree when available) and merge changes back on success — needs --project")
 	wait := fs.Bool("wait", false, "block until the task settles (done/failed/cancelled/review) and print the result")
 	waitTimeout := fs.Duration("wait-timeout", 30*time.Minute, "with --wait: stop watching after this long (the task itself keeps running)")
 	fs.Parse(reorderFlags(fs, args))
@@ -832,6 +851,13 @@ func runTaskAdd(args []string) {
 			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.actionSpecAgents"))
 			os.Exit(2)
 		}
+		// Plan stages get their own per-stage keys and private dirs — a
+		// scope claim or isolation request on the parent would be silently
+		// dropped, which is worse than saying so.
+		if strings.TrimSpace(*scopePaths) != "" || *isolate {
+			fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.scopePlanConflict"))
+			os.Exit(2)
+		}
 		runTaskAddAgents(loc, engine, cfg, agentList, *mode, *title, *prompt, requiresList, requiresExplicit, prio, jsonOutput)
 		return
 	}
@@ -874,6 +900,24 @@ func runTaskAdd(args []string) {
 		// like a workspace (same rule `panda ask` uses).
 		projName, _ = ambientProject(cfg)
 	}
+	// The same-node parallelism levers are declared on the task row the same
+	// way a delegate marker would: they need a project to scope (the ambient
+	// resolution above counts), and isolate must not be asked for a lane it
+	// will never see — the copy ignores path claims entirely.
+	var pathList []string
+	for _, p := range strings.Split(*scopePaths, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			pathList = append(pathList, p)
+		}
+	}
+	if (len(pathList) > 0 || *isolate) && projName == "" {
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.scopeNoProject"))
+		os.Exit(2)
+	}
+	if len(pathList) > 0 && *isolate {
+		fmt.Fprintln(os.Stderr, i18n.T(loc, "cli.task.add.scopeIsolateConflict"))
+		os.Exit(2)
+	}
 	in := core.TaskInput{
 		Title:       *title,
 		ParentID:    pID,
@@ -882,6 +926,8 @@ func runTaskAdd(args []string) {
 		Intent:      *prompt,
 		SpecJSON:    specJSON,
 		Requires:    requiresList,
+		Paths:       pathList,
+		Isolate:     *isolate,
 		TargetNode:  pref,
 		Authorized:  *authorize,
 	}

@@ -1172,6 +1172,19 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		if messageScope(task) != "" || len(pendingChildren) > 0 {
 			prompt += i18n.T(promptLang, "prompt.msgboard.hint")
 		}
+		// A scoped task must hear the lane it claims at the prompt level —
+		// the lock table only keeps OTHER tasks out; nothing inside the run
+		// tells the agent which subtree is its own. Delegate children carry
+		// this in their intent already (skip them); a manually queued
+		// `task add --paths` row does not, and neither do reruns whose intent
+		// was rewritten.
+		if !task.Isolate && len(task.ScopePaths) > 0 && !strings.Contains(task.Intent, "[scope]") {
+			prompt += "\n\n[scope] you own paths: " + strings.Join(task.ScopePaths, ", ") +
+				" — write only inside your own scope; sibling tasks may own other paths in this tree."
+		}
+		if task.Isolate && task.Project != "" && !strings.Contains(task.Intent, "[isolated]") {
+			prompt += "\n\n[isolated] you work in a private copy of the project tree; changes merge back automatically when you finish — do not expect sibling edits to appear live."
+		}
 
 		// A task stamped remote at intake carries off-node intent: commander
 		// holds its agent run to the restricted tool face unless the origin's

@@ -523,10 +523,16 @@ type taskJSON struct {
 	// ApprovalDisposition says what approving a reviewed task would do —
 	// accept_work / resume_execution / needs_changed_input — so the board can
 	// label the pending decision instead of a bare "awaiting approval".
-	ApprovalDisposition string      `json:"approval_disposition,omitempty"`
-	CreatedAt           string      `json:"created_at"`
-	UpdatedAt           string      `json:"updated_at"`
-	Events              []eventJSON `json:"events,omitempty"`
+	ApprovalDisposition string `json:"approval_disposition,omitempty"`
+	// ScopePaths/Isolate mirror the parallel-mode declaration on the row:
+	// scope_paths names the project-relative lanes this task claims inside
+	// the shared tree, isolate means it runs in a private copy whose changes
+	// merge back on completion. Both empty = the default whole-tree claim.
+	ScopePaths []string    `json:"scope_paths,omitempty"`
+	Isolate    bool        `json:"isolate,omitempty"`
+	CreatedAt  string      `json:"created_at"`
+	UpdatedAt  string      `json:"updated_at"`
+	Events     []eventJSON `json:"events,omitempty"`
 
 	// — Decision-orbit visibility (§5.2). traces are the subset of Events
 	// that belong to the 8-track set, decoded so the client avoids a second
@@ -632,6 +638,8 @@ func toTaskJSON(t core.Task) taskJSON {
 		Scheduled:    t.Scheduled,
 		WorkDir:      t.WorkDir,
 		ExecWorkDir:  t.ExecWorkDir,
+		ScopePaths:   t.ScopePaths,
+		Isolate:      t.Isolate,
 		CreatedAt:    ts(t.CreatedAt),
 		UpdatedAt:    ts(t.UpdatedAt),
 	}

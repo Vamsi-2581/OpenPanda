@@ -36,6 +36,12 @@ type createTaskRequest struct {
 	// Node pins the task to a preferred executor (id or name) — the board's
 	// environment picker. Empty leaves routing to the scheduler.
 	Node string `json:"node"`
+	// Same-tree parallelism declaration — the same semantics a delegate
+	// marker carries: paths names the project-relative lanes this task holds
+	// (disjoint siblings run in parallel), isolate gives it a private copy
+	// that merges back on completion. Both need a project to mean anything.
+	ScopePaths []string `json:"scope_paths"`
+	Isolate    bool     `json:"isolate"`
 }
 
 // createTask serves POST /api/tasks (queue redesign): enqueue a user task and
@@ -84,6 +90,8 @@ func (h *handler) createTask(w http.ResponseWriter, r *http.Request) {
 		Requires:      requires,
 		Authorized:    req.Authorize,
 		PreferredNode: req.Node,
+		Paths:         req.ScopePaths,
+		Isolate:       req.Isolate,
 	}
 	q := core.DefaultQueueSpec()
 	q.Priority = priority

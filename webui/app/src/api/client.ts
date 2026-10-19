@@ -315,6 +315,11 @@ export interface Task {
    *  resume_execution (parked before running, approve re-runs it), or
    *  needs_changed_input (approve alone cannot help). */
   approval_disposition?: 'accept_work' | 'resume_execution' | 'needs_changed_input'
+  /** Same-tree parallelism declaration: the project-relative lanes this
+   *  task claims (disjoint siblings run simultaneously), or — when isolate
+   *  is set — a private copy whose changes merge back on completion. */
+  scope_paths?: string[]
+  isolate?: boolean
   created_at: string
   updated_at: string
   events?: TaskEvent[]
@@ -784,6 +789,8 @@ export const api = {
     project?: string
     resource_keys?: string[]
     node?: string
+    scope_paths?: string[]
+    isolate?: boolean
   }): Promise<CreateTaskResult> {
     return request('POST', '/api/tasks', body)
   },

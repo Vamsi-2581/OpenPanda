@@ -148,6 +148,14 @@ export function DetailView({
         <div class="detail-title">
           <h1 class="page-title">{task.title || task.id}</h1>
           <StateBadge state={task.state} />
+          {task.isolate && (
+            <span class="badge blue" title={t('detail.isolateHint')}>{t('detail.isolated')}</span>
+          )}
+          {!task.isolate && task.scope_paths && task.scope_paths.length > 0 && (
+            <span class="badge dim" title={t('detail.scopeHint')}>
+              {t('detail.scoped')}: {task.scope_paths.join(', ')}
+            </span>
+          )}
         </div>
         <div class="detail-actions">
           {task.session_id && onOpenSession && (
