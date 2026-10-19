@@ -97,6 +97,11 @@ func NewNode(db *sql.DB, id string, card ledger.Card, tier int, logger *slog.Log
 
 // Register writes this node into the local capability directory.
 func (n *Node) Register(ctx context.Context) error {
+	// Stamp the machine facts here rather than in the card file: the OS is
+	// the running process's, and the form factor is this box's, neither of
+	// which an operator can declare. Cached inside hwinfo, so the probe runs
+	// once per process.
+	n.card.FormFactor = hwinfo.FormFactor()
 	if err := ledger.Register(n.db, n.card, n.id, n.tier); err != nil {
 		return fmt.Errorf("register node %s: %w", n.id, err)
 	}
