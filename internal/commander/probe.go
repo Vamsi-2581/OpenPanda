@@ -5,8 +5,10 @@ package commander
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,8 +36,13 @@ import (
 // and caches the verdict so a burst of tasks pays it once.
 const (
 	// endpointProbeTimeout bounds a single probe. On a dead route the TCP
-	// connect fails fast; a live API answers a tiny request well under it.
-	endpointProbeTimeout = 5 * time.Second
+	// connect fails fast, so this only ever pays for itself on a relay that is
+	// alive but slow — and account-pool relays in front of coding CLIs are
+	// exactly that: measured at 3.4-6.0s to answer a 1-token request, because
+	// they pick an upstream account before forwarding. Five seconds put the
+	// ceiling inside that spread, so roughly a quarter of probes timed out and
+	// the agent behind a healthy relay was reported unreachable.
+	endpointProbeTimeout = 10 * time.Second
 	// endpointProbeOKTTL caches a healthy verdict: a provider that answered a
 	// minute ago is almost certainly still up, and re-probing per task would
 	// make routing latency depend on the provider's RTT.
@@ -74,7 +81,7 @@ type ProbeSpec struct {
 	// KeyDefinitive marks APIKey as literally the credential the run sends —
 	// an env var, an inline token, the injected key — not a possibly-stale
 	// OAuth access token extracted from an auth store the CLI would refresh.
-	// Only a definitive key lets a 401/402/403/429 verdict mean "the run
+	// Only a definitive key lets a 401/402/403 verdict mean "the run
 	// would fail the same way"; without one that response just proves the
 	// service is up.
 	KeyDefinitive bool
@@ -97,9 +104,16 @@ type ProbeVerdict struct {
 	// transport error text.
 	Detail string
 	// Rejected is true when the endpoint refused the definitive credential
-	// (401/402/403/429): the service is up but the run would fail on
-	// auth/quota — a different fix than a dead route.
+	// (401/402/403): the service is up but the run would fail on
+	// auth or quota — a different fix than a dead route.
 	Rejected bool
+	// Unknown is true when the probe drew no answer within its deadline. That
+	// single outcome carries no information about the agent: the route may be
+	// dead, or alive and queued behind its own upstream, and nothing observed
+	// distinguishes the two. Routing must not disqualify on it. A refused
+	// connect or an unknown host is NOT unknown — that is a deterministic
+	// answer that nothing serves this address, and it still disqualifies.
+	Unknown bool
 }
 
 // probeKey is the cache identity: everything that can change the verdict
@@ -112,6 +126,7 @@ type endpointVerdict struct {
 	ok       bool
 	detail   string // e.g. "http 200", "http 503", "dial tcp …: connect refused"
 	rejected bool
+	unknown  bool // no answer arrived: deadline or transport failure
 	checked  time.Time
 }
 
@@ -127,12 +142,13 @@ var probeNow = time.Now
 // within the probe budget. Verdict rules:
 //   - transport error or HTTP ≥500 → unreachable: the model cannot serve
 //     right now (the "configured but cannot connect" case).
-//   - 401/402/403/429 with a definitive key → rejected: the run would send
+//   - 401/402/403 with a definitive key → rejected: the run would send
 //     the same credential and fail the same way (auth or quota).
 //   - any other HTTP response → reachable: the service answers API-shaped
 //     requests; without a definitive key a 4xx only proves the host, and a
 //     wrong model name earns a 4xx too — both are the adapter's business,
-//     not routing's.
+//     not routing's. 429 lands here as well, because a rate limit is a
+//     service that is alive and answering.
 //
 // Results are cached per probe key with asymmetric TTLs.
 func modelProbe(spec ProbeSpec) ProbeVerdict {
@@ -145,15 +161,19 @@ func modelProbe(spec ProbeSpec) ProbeVerdict {
 		}
 		if probeNow().Sub(v.checked) < ttl {
 			endpointMu.Unlock()
-			return ProbeVerdict{OK: v.ok, Detail: v.detail, Rejected: v.rejected}
+			return ProbeVerdict{OK: v.ok, Detail: v.detail, Rejected: v.rejected, Unknown: v.unknown}
 		}
 	}
 	endpointMu.Unlock()
 
 	v := probeModelOnce(spec)
 
+	// An unknown verdict keeps the short failure TTL on purpose: it stops the
+	// routing path from paying another full deadline on an endpoint that is
+	// already known not to answer quickly, and caching it costs nothing now
+	// that unknown no longer disqualifies the agent.
 	endpointMu.Lock()
-	endpointCache[key] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, checked: probeNow()}
+	endpointCache[key] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, checked: probeNow()}
 	endpointMu.Unlock()
 	return v
 }
@@ -181,7 +201,10 @@ func probeModelOnce(spec ProbeSpec) ProbeVerdict {
 	}
 	resp, err := endpointClient.Do(req)
 	if err != nil {
-		return ProbeVerdict{Detail: trimProbeErr(err)}
+		// Only a deadline is unknown. A refused connect, an unreachable host or
+		// a TLS failure is a deterministic statement about the address, and the
+		// gate that keeps a misconfigured agent from winning a plan needs it.
+		return ProbeVerdict{Detail: trimProbeErr(err), Unknown: isDeadline(err)}
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
@@ -199,15 +222,31 @@ func probeModelOnce(spec ProbeSpec) ProbeVerdict {
 }
 
 // credentialRejected reports whether the status means "the credential or the
-// account behind it was refused": bad auth, no quota, or rate-limited — all
-// failures the run would hit identically.
+// account behind it was refused": bad auth or no quota — failures the run would
+// hit identically with the same key.
+//
+// 429 is deliberately absent. It reports "rate limited right now", a transient
+// the run may well ride out, not a verdict on the credential — and the rest of
+// the tree already reads it that way, retrying 429 alongside 5xx
+// (entry/model.go, entry/fallback.go). Counting it here let a busy relay
+// permanently disqualify an otherwise healthy agent: a relay that answers
+// "which of my accounts can serve this?" with 429 says nothing about the key.
 func credentialRejected(code int) bool {
 	switch code {
 	case http.StatusUnauthorized, http.StatusPaymentRequired,
-		http.StatusForbidden, http.StatusTooManyRequests:
+		http.StatusForbidden:
 		return true
 	}
 	return false
+}
+
+// isDeadline reports whether err is a timeout rather than a deterministic
+// transport refusal. The http.Client's own deadline, its ResponseHeaderTimeout
+// and the TLS handshake timeout all surface as a net.Error with Timeout set,
+// wrapped in a *url.Error that errors.As walks through.
+func isDeadline(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // trimProbeErr shortens a transport error for display: url.Error wraps the
