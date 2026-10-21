@@ -93,7 +93,7 @@ func main() {
 func subcommandNames() []string {
 	return []string{
 		"daemon", "serve", "ask", "repl", "chat", "web", "voice",
-		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "queue",
+		"install", "uninstall", "update", "upgrade", "doctor", "status", "nodes", "pair", "join", "queue",
 		"task", "plan", "cancel", "approve", "reject", "logs", "skill", "mcp",
 		"reminder", "detect", "card", "init", "metrics", "heatmap", "audit", "session",
 		"sessions", "memory", "config", "model", "models", "agents", "project",
@@ -399,6 +399,11 @@ func runDaemon(args []string) {
 	coreNode.SetTrustConfig(cfg.Network.Trust)
 	coreNode.SetPeerTrustHints(cfg.Network.PeerTrustHints())
 	coreNode.SetReputationEnabled(cfg.Routing.Reputation)
+	// Cross-network policy (network.bootstrap_edges / auto_punch / transit /
+	// rendezvous + the trust.relay tables): installed here so a node started
+	// without it runs the documented defaults rather than an unconfigured
+	// zero policy.
+	coreNode.SetNetworkPolicy(cfg.Network)
 	// The artifact pool is the data plane: a stage's packed output, named by its
 	// hash, that a later stage on another node pulls over the bus. Without it a
 	// delegated task can only carry a path, which means nothing on the node that
@@ -772,9 +777,10 @@ func fatalMsg(msg string) {
 func printVersion(_ []string) {
 	if jsonOutput {
 		info := map[string]any{
-			"version":  versionpkg.Version,
-			"codename": versionpkg.Codename,
-			"schema":   storage.LatestVersion(),
+			"version":    versionpkg.Version,
+			"codename":   versionpkg.Codename,
+			"schema":     storage.LatestVersion(),
+			"provenance": versionpkg.ProvenanceClass(),
 		}
 		// db_schema lets a probe (self-updater, install.sh) learn the data
 		// directory's current schema from this binary alone — the value that
@@ -786,7 +792,15 @@ func printVersion(_ []string) {
 		emitJSON(info)
 		return
 	}
-	fmt.Printf("panda %s\n", versionpkg.Display())
+	line := versionpkg.Display()
+	// A build from a channel other than release says so in the human line —
+	// an operator must be able to tell a self-evolution binary apart at a
+	// glance (release and unsigned dev need no mark: they are the ordinary
+	// cases).
+	if p := versionpkg.ProvenanceClass(); p != versionpkg.ProvenanceRelease && p != versionpkg.ProvenanceUnsigned {
+		line += " (" + p + ")"
+	}
+	fmt.Printf("panda %s\n", line)
 }
 
 // printUsage lists the subcommands as a grouped command tree — `panda help`
