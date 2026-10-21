@@ -34,6 +34,10 @@ func selfTestRepo(t *testing.T) string {
 	run("init", "-q", "-b", "main")
 	run("config", "user.email", "test@panda")
 	run("config", "user.name", "test")
+	// Keep the bytes as written: the Windows runner's default autocrlf would
+	// rewrite the worktree file to CRLF, so the diff (and the patch applied
+	// from it) would carry CRLF where the fixture wrote LF.
+	run("config", "core.autocrlf", "false")
 	if err := os.WriteFile(filepath.Join(repo, "foo.txt"), []byte("v0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -268,6 +272,56 @@ func TestProposeSelfMergeRefusesStaleBase(t *testing.T) {
 	}
 	if _, err := c.ProposeSelfMerge(ctx, set.Manifest.ID); err == nil {
 		t.Fatal("a set whose base is stale must not be proposable")
+	}
+}
+
+// TestSelfMergeRefusesChangedSet pins the review binding: the artifact on
+// disk at approve time must still be the one the reviewer saw. The
+// boot-time rebase sweep rewrites a queued set in place, so approving a
+// proposal whose set has since been rebased would merge bytes nobody looked
+// at.
+func TestSelfMergeRefusesChangedSet(t *testing.T) {
+	ctx := context.Background()
+	repo := selfTestRepo(t)
+	mgr := self.New(t.TempDir(), repo, testLogger())
+	c := newSelfTestCore(t, "digest-node", "mesh", mgr)
+	pub, priv, ok := c.nodeKeyPair()
+	if !ok {
+		t.Fatal("node key unavailable")
+	}
+	set := mintTestSet(t, mgr, pub, priv, "digest change")
+	task, err := c.ProposeSelfMerge(ctx, set.Manifest.ID)
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	// Rewrite the set in place: a rebase re-mints the manifest (new title,
+	// new patch bytes) while the set stays pending.
+	if err := mgr.RebaseOnto(ctx, set.Manifest.ID, set.Manifest.Base, pub, priv); err != nil {
+		t.Fatalf("rebase: %v", err)
+	}
+
+	oldGuard, oldGate, oldStage, oldUpd, oldRestart := selfSwapGuard, selfRunGate, selfStageTree, selfNewUpdater, selfRestart
+	t.Cleanup(func() {
+		selfSwapGuard, selfRunGate, selfStageTree, selfNewUpdater, selfRestart = oldGuard, oldGate, oldStage, oldUpd, oldRestart
+	})
+	selfSwapGuard = func() error { return nil }
+	selfRunGate = func(context.Context, string) self.GateDigest {
+		return self.GateDigest{OK: true, Legs: []self.GateLeg{{Name: "stub", OK: true}}}
+	}
+	selfStageTree = func(*self.Manager, context.Context, string, string, string) error { return nil }
+	fake := &fakeSelfUpdater{}
+	selfNewUpdater = func(updater.Options) selfUpdater { return fake }
+	selfRestart = func(*slog.Logger, bool) {}
+
+	final, res, err := c.ResumeApproved(ctx, task.TaskID)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if res.OK || fake.applied {
+		t.Fatalf("a changed patch set must not merge: state=%s res=%+v applied=%v", final.State, res, fake.applied)
+	}
+	if !strings.Contains(res.Stderr, "changed since it was proposed") {
+		t.Fatalf("the failure must name the digest mismatch: %q", res.Stderr)
 	}
 }
 
