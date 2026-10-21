@@ -670,13 +670,14 @@ func runDaemon(args []string) {
 		}); err != nil {
 			return err
 		}
-		coreNode.ApplyNetworkConfig(ctx, config.NetworkConfig{
-			SharedSecret:      fresh.Network.SharedSecret,
-			Peers:             peers,
-			AllowCleartext:    fresh.Network.AllowCleartext,
-			AllowCleartextFor: fresh.Network.AllowCleartextFor,
-			Trust:             fresh.Network.Trust,
-		})
+		// Apply the WHOLE freshly-loaded network section, not a hand-built
+		// literal: NetworkConfig's cross-net fields (bootstrap_edges,
+		// auto_punch, transit, rendezvous) default to false/zero when
+		// omitted, and SetNetworkPolicy would silently switch the mesh into
+		// manual mode after every pairing. Only the peer list is new here.
+		live := fresh.Network
+		live.Peers = peers
+		coreNode.ApplyNetworkConfig(ctx, live)
 		return nil
 	})
 
@@ -920,6 +921,8 @@ func printUsage(w *os.File) {
 	h("  mcp", "cli.help.d.mcp", wide)
 	h("  rpc", "cli.help.d.rpc", wide)
 	h("  auth login|status|logout <provider>", "cli.help.d.auth", wide)
+	line("  self status|queue|doctor|mint|propose|rebase|rollback|reset")
+	h("", "cli.help.d.self", wide)
 	line("")
 	line(t("cli.help.g.observability"))
 	h("  status", "cli.help.d.status", wide)
