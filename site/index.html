@@ -106,7 +106,7 @@
         {
           "@type": "Question",
           "name": "现在能用在生产环境吗？",
-          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.0「Constellation」是第一个发布级版本，可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放。逐条列出，不含糊。" }
+          "acceptedAnswer": { "@type": "Answer", "text": "v0.1.0「Constellation」是发布级这条线的第一个稳定版，可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 status.md 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放（协议级，v0.1.1 处理）。逐条列出，不含糊。" }
         },
         {
           "@type": "Question",
@@ -589,7 +589,7 @@
     <div class="section-label reveal"><span data-i18n="s8.label">TRAJECTORY</span><span>08 / 11</span></div>
     <div class="section-head">
       <h2 class="h2 reveal" data-i18n="s8.title">飞行计划。</h2>
-      <p class="lede reveal" data-i18n="s8.lede">当前发布级版本 v0.1.0 Constellation；上一支预览 v0.0.12 已并入它。</p>
+      <p class="lede reveal" data-i18n="s8.lede">当前版本 v0.1.0 Constellation；上一支稳定版 v0.0.11 已由它接替。</p>
     </div>
     <div class="track">
       <article class="mile done reveal">
@@ -607,7 +607,7 @@
       <article class="mile current reveal">
         <span class="mile-ver">v0.1.0</span>
         <h3 data-i18n="s8.m3.name">Constellation</h3>
-        <p data-i18n="s8.m3.d">第一个发布级版本：跨网组网、同项目并行、审计收口、控制台一体化。</p>
+        <p data-i18n="s8.m3.d">发布级这条线的第一个稳定版：跨网组网、同项目并行、审计收口、控制台一体化。</p>
         <span class="mile-state" data-i18n="s8.m3.state">当前版本</span>
       </article>
       <article class="mile reveal">
@@ -617,7 +617,7 @@
         <span class="mile-state" data-i18n="s8.m4.state">计划中</span>
       </article>
     </div>
-    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认装最新发布级版本；要预览版，显式指定版本号。</p>
+    <p class="roadmap-note reveal" data-i18n="s8.note">一键安装默认取最新稳定版（v0.1.0）；要装指定版本，加 --version。</p>
   </div>
 </section>
 
@@ -737,7 +737,7 @@
             <span class="faq-q" data-i18n="faq.q5.q">现在能用在生产环境吗？</span>
             <span class="faq-icon" aria-hidden="true"></span>
           </summary>
-          <div class="faq-body"><p data-i18n="faq.q5.a">v0.1.0「Constellation」是第一个发布级版本，可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a> 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放。逐条列出，不含糊。</p></div>
+          <div class="faq-body"><p data-i18n="faq.q5.a">v0.1.0「Constellation」是发布级这条线的第一个稳定版，可以日常用。单机、三台真机组网，以及 Mac → 中继 → 云主机的真实跨网多跳都跑通了（3 MiB 项目树哈希一致），自用、跑内部工具没问题，但还不建议直接对外托管。没做完的写在 <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a> 里：UPnP/NAT-PMP 端口映射、punch 与目录帧的源签名收敛、跨节点 hello 重放（协议级，v0.1.1 处理）。逐条列出，不含糊。</p></div>
         </details>
 
         <details class="faq reveal">
@@ -775,7 +775,7 @@
     <div class="install-panel reveal">
       <div class="install-top">
         <h2 class="install-title" data-i18n="s9.title">一行命令，<br>点火入轨。</h2>
-        <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH。装完跑一次 <b>panda init</b> 就绪。</p>
+        <p class="install-note" data-i18n="s9.note">安装器会按平台与架构取产物，校验 <span class="nowrap">SHA-256</span>、解压并写进 PATH，装完跑一次 <b>panda init</b> 就绪。默认装最新稳定版，要指定版本就加 <b>--version</b>。</p>
       </div>
       <div class="install-tabs" role="tablist" aria-label="Install method">
         <button class="install-tab active" data-os="unix" role="tab" aria-selected="true" data-i18n="s9.tab.unix"
@@ -810,7 +810,7 @@
         <p>macOS <b>arm64 · amd64</b></p>
         <p>Linux <b>amd64 · arm64</b></p>
         <p>Windows <b>amd64 · arm64</b></p>
-        <a href="https://github.com/Xustalis/OpenPanda/releases/latest" target="_blank" rel="noopener" data-i18n="s9.all">全部安装包与校验值 ↗</a>
+        <a href="https://github.com/Xustalis/OpenPanda/releases" target="_blank" rel="noopener" data-i18n="s9.all">全部安装包与校验值 ↗</a>
       </div>
     </div>
   </div>
@@ -826,7 +826,7 @@
         <span>Open<b>Panda</b></span>
       </a>
       <p class="footer-tag" data-i18n="foot.tag">Local-first, forever.</p>
-      <p class="footer-version"><b>v0.1.0 Constellation</b> <span>· release-grade</span></p>
+      <p class="footer-version"><b>v0.1.0 Constellation</b> <span>· stable</span></p>
     </div>
     <div class="footer-col">
       <h4 data-i18n="foot.product">产品</h4>

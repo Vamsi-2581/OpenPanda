@@ -235,7 +235,7 @@ export const EN = {
   's8.label': 'TRAJECTORY',
   's8.title': 'Flight plan.',
   's8.lede':
-    'The current release-grade version is v0.1.0 Constellation; the previous preview, v0.0.12, has been folded into it.',
+    'The current version is v0.1.0 Constellation; the last stable, v0.0.11, has been succeeded by it.',
   's8.m1.name': 'Apoapsis',
   's8.m1.d': 'Cross-node delegation, worktree following, actuator dispatch.',
   's8.m1.state': 'Released',
@@ -244,14 +244,14 @@ export const EN = {
   's8.m2.state': 'Stable',
   's8.m3.name': 'Constellation',
   's8.m3.d':
-    'The first release-grade version: cross-network mesh, same-project parallelism, audit close-out, one integrated console.',
+    'The first stable cut of the release-grade line: cross-network mesh, same-project parallelism, audit close-out, one integrated console.',
   's8.m3.state': 'Current',
   's8.m4.name': 'Assistant',
   's8.m4.d':
     'Desktop shell (tray residency, global hotkeys, self-update), dense mesh layer, honest status reporting.',
   's8.m4.state': 'Planned',
   's8.note':
-    'The one-liner installs the latest release-grade version; for a preview, name the version explicitly.',
+    'The one-liner resolves the latest stable (v0.1.0); to install a specific version, add --version.',
 
   /* ── 09 · licensing ────────────────────────────────────────────────── */
   'lic.title': 'Open source,<br>with the price in plain sight.',
@@ -303,7 +303,7 @@ export const EN = {
     'Six release targets: macOS, Linux and Windows × amd64 / arm64, plus a lite-linux variant. Ten adapters today — Claude Code, Codex, Antigravity, OpenCode, Grok Build, Hermes, OpenClaw, Pi, DeepSeek Harness, and a generic one that takes any headless CLI.',
   'faq.q5.q': 'Can I use it in production?',
   'faq.q5.a':
-    'v0.1.0 “Constellation” is the first release-grade version and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, cross-node hello replay.',
+    'v0.1.0 “Constellation” is the first stable cut of the release-grade line and holds up day to day. A single machine, a three-machine mesh, and a real cross-network multi-hop (Mac → relay → cloud host, 3 MiB project tree hash identical) all run; self-use and internal tooling are fine, but exposing it to the public is not advised yet. What is unfinished is listed item by item in <a href="https://github.com/Xustalis/OpenPanda/blob/main/docs/status.md" target="_blank" rel="noopener">status.md</a>: UPnP/NAT-PMP port mapping, source-signature convergence for punch and directory frames, and cross-node hello replay (protocol-level, scheduled for v0.1.1).',
   'faq.q6.q': 'Is it free? How does licensing work?',
   'faq.q6.a':
     'Personal, study and internal company use cost nothing. Only when you distribute or host a modified version does <a href="https://github.com/Xustalis/OpenPanda/blob/main/LICENSE" target="_blank" rel="noopener">AGPL</a> require you to open your changes; if you would rather not, that is when a commercial licence comes in — just <a href="mailto:fing2024@outlook.com">email</a>.',
@@ -318,7 +318,7 @@ export const EN = {
   's9.label': 'LIFTOFF',
   's9.title': 'One command,<br>ignition.',
   's9.note':
-    'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once.',
+    'The installer picks the artifact for your platform and architecture, verifies <span class="nowrap">SHA-256</span>, unpacks it and writes it into PATH. Then run <b>panda init</b> once. It installs the latest stable by default; add <b>--version</b> to pin a specific one.',
   's9.tab.unix': 'macOS / Linux',
   's9.copy': 'Copy',
   's9.s1': 'Initialise the node, model provider and capability card.',
