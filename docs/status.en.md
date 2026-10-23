@@ -121,7 +121,7 @@ English translation of [status.md](status.md)（中文版为准）· English
 > children boards by the parent's executing node — same rule as result
 > reporting), reads at supervision-tick boundaries never blocking a
 > running agent; `panda task board <id>` is the viewing entry, design
-> in `docs/plans/design-task-message-board.md`; unit tests and a
+> in the message-board notes; unit tests and a
 > three-node in-process e2e all green, real multi-device verification
 > pending); 2026-10-15 (a computer-use and security wrap-up on main
 > after v0.0.11-preview: computer-use "eye/hand" landed —
@@ -152,6 +152,95 @@ English translation of [status.md](status.md)（中文版为准）· English
 > panda-screen missing-value guards, shell completions for `task
 > board`/`task artifact`; version turned `0.0.11`, `make gate` green).
 
+> 2026-10-22 (`v0.1.0-preview` "Constellation", the first cut of the
+> release-grade line. The installers were hardened in the same pass: every
+> path now refuses a downgrade (Windows gained the schema guard and
+> `-Force`), `install.sh` verifies the release signature where the local
+> openssl supports Ed25519 and aborts on a mismatch, and `install.ps1`
+> resolves versions from the repository it actually downloads from.
+> Installer coverage grew to 23 checks in `scripts/test-installers.sh`,
+> adding downgrade refusal and the `--force` override, a foreign signature, an
+> unsigned release that must warn (and must be refused under
+> `OPENPANDA_REQUIRE_SIG`), and `--lite`. The
+> cross-network mesh P1–P5 landed whole (dual-key identity and reachability
+> cards, transitive blind relay, epidemic directory sync, K=2 rendezvous edges
+> and the reachability ladder, the policy surface and relay budgets,
+> `panda://join`, pair over transit, `dial_check`), and the release audit plus a
+> second hardening pass closed the rest: multi-hop artifact pulls through
+> relays, a model-reported failure no longer settling as done, a declined task
+> falling back to a capable origin, hello identity pinning, a bounded
+> project-pack admission, the UDP-plane crash, strict-mode secret read denial,
+> the standalone console's thread and skills APIs; then the directory share cap
+> bound to the row's signer (phantom rows could fill the directory and starve
+> honest peers), the dial budget no longer owning the connection, trust
+> assertions failing closed, the pairing sweep's nil dereference (it could stop
+> the whole daemon), the transit SealNone guard's regression test, and the
+> relayed punch request keeping its origin. The live cross-network multi-hop
+> was verified (Mac → relay → cloud, a 3 MiB project tree hashing the same).
+> See `CHANGELOG.md`; not done: UPnP/NAT-PMP,
+> punch/dir source-signature convergence, a daemon→panel mesh-metrics IPC path,
+> and hello replay across peers (a protocol-level challenge-response, for
+> v0.1.1).
+>
+> 2026-10-23 (`v0.1.0` "Constellation" promoted: the same code as
+> `v0.1.0-preview` — same feature set, same wire format, same store schema,
+> same audit sign-off; what moved is the default channel. `/releases/latest`,
+> the one-liner, the Homebrew tap and `panda update` on a stable node serve
+> `v0.1.0` from now on, and the `v0.1.0-preview` tag stays published for
+> anyone who pinned it. Two claims were corrected before the promotion: the
+> site named `v0.1.0` while only the preview existed, and the preview's
+> release notes said the default channels already served it; the release
+> workflow now appends a pre-release block to any hyphenated tag. The repo was
+> tidied in the same pass — the old preview tags and releases
+> (`v0.0.8-preview` through `v0.0.12-preview`) and the local backup tags are
+> gone, leaving `v0.1.0-preview` as the only pre-release; only `main` remains
+> on the remote, and the scratch worktrees and stale branches are cleared.
+> The 23-check installer suite passes and `make gate` is green.)
+
+> 2026-10-21 (cross-network mesh P1–P5: dual-key identity and reachability cards,
+> transitive blind relay, epidemic directory sync, K=2 rendezvous edges and the
+> reachability ladder, policy surface and relay budgets, `panda://join`, pair over
+> transit, `dial_check`, and §8 counters. Remaining: UPnP/NAT-PMP, punch/dir
+> source-signature convergence, and a daemon→panel IPC path for mesh metrics).
+>
+> 2026-10-21 (self-evolution phases 1–4 main body, opt-in and off by default:
+> signed patch-set manifests with per-patch sha256, `<data>/self` queue + merge
+> worktree, a merge proposal as a review task, approve → apply → `make gate` →
+> build → `StageLocal` → swap, `panda.release` rollback, cross-process worktree
+> lock, base-freshness check, `+self.N` allocation at merge, and a service restart
+> deferred until the review row settles; web patch-set/diff review card and
+> read-only `/api/selfevo`. Remaining: mesh transport, auto mode, producer-side
+> gate digest, `panda update --no-rebase`, macOS stable signing).
+>
+> 2026-10-21 (a review pass over the P0–P2 findings — self-evolution side: a
+> merge proposal pins the digest of the manifest the reviewer saw, and an
+> approve whose set changed since (the boot-time rebase sweep rewrites a
+> queued set in place) asks for a re-review instead of merging unseen bytes;
+> a rebase no longer rewrites a terminal (rejected/merged) set and no longer
+> erases a "rejected" marker (one rebase used to turn the human's "no" back
+> into a pending set); `panda self rebase` now carries the same admission
+> rule as the boot sweep (under producers=self a foreign set is no longer
+> re-signed into "this node's"); a manifest's base must be a pinned commit
+> sha; set ids are validated as plain directory names (no escaping the
+> queue root); an import no longer carries the source directory's `.state`
+> marker; the `+self.N` counter is persisted so `reset --purge` cannot make
+> the version regress; the rollback's schema guard fails closed and uses the
+> live data directory's floor. Cross-network side: a transit destination
+> checks that the inner frame is addressed to it (otherwise it executes
+> somebody else's task and answers for them); the relay bandwidth budget
+> charges the bytes that actually leave the node; an unsigned directory row
+> may create a row but never displace one (otherwise any member could
+> rewrite a peer's card and addrs and knock it out of the dial path); the
+> per-sender new-id budget is reserved under the lock (no TOCTOU) and each
+> sender's share of the directory is capped (rotating session ids does not
+> help); the want list is sorted before the page cut (it used to be cut in
+> map order, so the two sides never covered the same ids); the directory
+> digest ignores the measured RTT (it used to move with every ping, so the
+> two sides never converged and re-pulled every 30s) and is cached for 2s
+> (each inbound heartbeat used to cost a full table scan and hash); the
+> rendezvous election treats the failure domain as a preference rather than
+> a filter (every LAN peer shares one domain, so only one was elected)).
+>
 > This document answers one question: **where the project stands now —
 > what works and what does not.**
 
@@ -455,5 +544,4 @@ unbuilt.
    that is the **scout→plan two-phase protocol** (probe the codebase
    first, then split and dispatch dynamically on the report) — the
    message board is its communication substrate; the splitting protocol
-   itself is still to be designed (see
-   `docs/plans/design-task-message-board.md` §8).
+   itself is still to be designed (see §8 of the message-board notes).

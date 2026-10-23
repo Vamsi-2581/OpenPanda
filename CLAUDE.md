@@ -11,7 +11,7 @@ it coordinates the agent CLIs already on each device (Claude Code,
 Codex, and friends) plus direct shell execution and human-approved
 tasks.
 
-Requires Go 1.26+. The build deliberately avoids CGO: even SQLite comes
+Requires Go 1.26.10+ (the patch level is a security floor: 1.26.10 is where GO-2026-6809, reachable through crypto/x509 in the bus TLS path, is fixed). The build deliberately avoids CGO: even SQLite comes
 from `modernc.org/sqlite`, so cross-compilation is just `GOOS/GOARCH`.
 
 ## Licensing
@@ -86,11 +86,14 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
   (`verify`/`entries`), `session`/`sessions` (`list`/`show`/`rm` plus
   `fork`/`tree` for thread branching), `memory`, `model`/`models`
   (multi-model registry + active-model switcher), `config` (sections
-  `model`/`mcp`/`limits`/`routing`/`injection`/`approval`/`delegation`,
-  comments preserved), `agents`, `project`, `mcp` (exposes the node's self-tools
-  as an MCP stdio server), `rpc` (NDJSON-over-stdio embedding surface,
-  experimental), `auth` (subscription OAuth, experimental), `read`
-  (markdown viewer; aliases `view`/`cat`/`md`/`markdown`), `version`,
+  `model`/`mcp`/`limits`/`routing`/`injection`/`approval`/`delegation`/
+  `self_evolution`, comments preserved), `agents`, `project`, `mcp` (exposes
+  the node's self-tools as an MCP stdio server), `rpc` (NDJSON-over-stdio
+  embedding surface, experimental), `auth` (subscription OAuth,
+  experimental), `self` (`status`/`queue`/`doctor`/`mint`/`propose`/
+  `rebase`/`rollback`/`reset` — the opt-in self-evolution patch-set
+  pipeline), `read` (markdown viewer; aliases
+  `view`/`cat`/`md`/`markdown`), `version`,
   `completion` (bash/zsh/fish script generation). Global flags:
   `--config`, `--card`, `--mcp`, `--json`.
 - `internal/` — all runtime code (see below).
@@ -157,7 +160,9 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
   `version`, `hwinfo`, `install`, `i18n` (EN/ZH/JA/ES/DE), `reminders`,
   `updater`, `doctor`, `cliui`, `providers`, `pyexec`, `askengine`,
   `artifact`, `mdtext`, `mcp`/`mcpserve`, `agents`, `plan`, `auth`
-  (subscription-OAuth token store + PKCE flows).
+  (subscription-OAuth token store + PKCE flows), `self` (self-evolution:
+  signed patch-set manifests/queue/worktree/archive, release-gate runner,
+  staged swap + `panda.release` rollback target).
 
 ## Conventions
 
@@ -166,6 +171,14 @@ prebuilt copy; only a placeholder `dist/index.html` is committed.
 - Before opening a PR run `make gate` — it is what CI enforces.
 - User-facing strings go through `internal/i18n` and
   `webui/app/src/i18n/` — all five locales are maintained in parallel.
+- The marketing site (`site/`) is bilingual, but by a different mechanism:
+  Chinese is the markup (every translatable node carries `data-i18n`,
+  `data-i18n-aria`, `data-i18n-placeholder` or `data-i18n-content`) and
+  English lives in the flat table in `site/js/i18n.js`. New copy needs the
+  attribute *and* an English entry — a key without one falls back to the
+  Chinese already in the page. Language comes from `?lang=`, then
+  `localStorage["openpanda.site.lang"]`, then the browser; there is no build
+  step, so Pages ships the files as they are.
 - New agent adapters plug into `adapters/` and speak the `_harness.py`
   wire contract; `make adapter-test` (`tests/adapter_contract_test.py`)
   exercises it against fake CLIs on PATH and is a prerequisite of
