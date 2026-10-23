@@ -46,7 +46,7 @@ Aún no hay cambios sin publicar.
 
 **La línea de calidad de release empieza aquí** — nombre en clave **Constellation**: la flota dibujada en un solo cielo. Las tareas del mismo proyecto corren en paralelo mediante ámbitos de rutas declarados y worktrees aislados, con los límites de delegación apretándose en cada salto; una malla entre redes transporta trabajo entre nodos que no pueden marcarse —identidad de dos claves, relays ciegos, sincronización epidémica de directorios, aristas de encuentro K=2 y la escalera de alcanzabilidad—, y `panda://join` incorpora un dispositivo nuevo desde una sola URI. Una consola lo comanda todo: una página de tarea que empieza por su veredicto, un tablero de pendientes que entrega trabajo a la flota, una plantilla con la que un hilo contrata a su propio equipo y una transcripción que dibuja la captura como imagen — con la auditoría de release cerrada detrás: cada hallazgo de corrección y seguridad está corregido con una prueba de regresión, y la cadena real Mac → relay → nube quedó verificada.
 
-Lo que no está terminado se documenta en lugar de insinuarse: mapeo de puertos UPnP/NAT-PMP, convergencia de firmas para tramas de punch y de directorio, contadores de mesh a través del IPC del panel y la repetición de hello entre nodos —un desafío de protocolo que sigue abierto. `docs/status.md` los enumera junto al resto.
+Limitaciones conocidas de esta versión: el mapeo de puertos UPnP/NAT-PMP no está implementado; la convergencia de firmas para tramas de punch y de directorio aún no está cerrada; los contadores de mesh no se puentean a través del IPC del panel; y la repetición de hello entre nodos sigue siendo un desafío de protocolo abierto. `docs/status.md` los sigue uno por uno.
 
 ### Aspectos destacados
 

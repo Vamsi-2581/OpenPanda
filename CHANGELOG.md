@@ -52,7 +52,7 @@ _No unreleased changes yet._
 
 **The release-grade line begins here** — codename **Constellation**: the fleet drawn as one sky. Same-project tasks run in parallel through declared path scopes and isolated worktrees, under delegation bounds that tighten at every hop; a cross-network mesh carries work between nodes that cannot dial each other — two-key identity, blind relays, epidemic directory sync, K=2 rendezvous edges and the reachability ladder — and `panda://join` brings a new device in from one URI. One console commands it all: a verdict-first task page, a to-do board that hands work to the fleet, a thread roster, and a transcript that draws a screenshot as a picture — with the release audit's correctness and security work closed behind it, verified on a live Mac → relay → cloud chain.
 
-What is not finished is written down rather than implied: UPnP/NAT-PMP port mapping, signature convergence for punch and directory frames, mesh counters across the panel's IPC, and cross-node hello replay — a protocol-level challenge still open. `docs/status.md` lists them alongside the rest.
+Known limitations in this release: UPnP/NAT-PMP port mapping is not implemented; punch and directory frames do not yet converge on source signatures; mesh counters are not bridged across the panel's IPC; and cross-node hello replay remains an open protocol-level challenge-response. `docs/status.md` tracks each item.
 
 ### Highlights
 

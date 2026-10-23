@@ -46,7 +46,7 @@ Noch keine unveröffentlichten Änderungen.
 
 **Die Release-Qualitätslinie beginnt hier** — Codename **Constellation**: die Flotte als ein Himmel. Aufgaben desselben Projekts laufen parallel über deklarierte Pfadbereiche und isolierte Worktrees, während die Delegationsgrenzen bei jedem Hop enger werden; ein netzübergreifendes Mesh trägt Arbeit zwischen Knoten, die sich nicht erreichen können — zweischlüssige Identität, blinde Relays, epidemische Verzeichnis-Synchronisation, Rendezvous-Kanten mit K=2 und die Erreichbarkeitsleiter —, und ein neues Gerät kommt über eine einzige `panda://join`-URI hinein. Eine Konsole befehligt alles: eine Aufgabenseite, die mit ihrem Urteil beginnt, ein To-do-Board, das Arbeit an die Flotte übergibt, eine Liste, mit der ein Thread sein eigenes Team einstellt, und eine Transkription, die den Screenshot als Bild zeichnet — mit der geschlossenen Release-Prüfung dahinter: jeder Korrektheits- und Sicherheitsbefund ist mit einem Regressionstest behoben, und die echte Kette Mac → Relay → Cloud ist verifiziert.
 
-Was nicht fertig ist, steht geschrieben statt angedeutet: UPnP/NAT-PMP-Portmapping, Signatur-Konvergenz für Punch- und Verzeichnis-Frames, Mesh-Zähler über das IPC des Panels und die Hello-Wiederholung zwischen Knoten — eine Protokoll-Challenge, die weiter offen ist. `docs/status.md` führt sie mit dem Rest auf.
+Bekannte Einschränkungen dieser Version: UPnP/NAT-PMP-Portmapping ist nicht implementiert; die Signatur-Konvergenz für Punch- und Verzeichnis-Frames ist noch offen; Mesh-Zähler werden nicht über das IPC des Panels gebrückt; und die Hello-Wiederholung zwischen Knoten bleibt eine offene Protokoll-Challenge. `docs/status.md` führt die Punkte einzeln auf.
 
 ### Schwerpunkte
 
