@@ -609,6 +609,7 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		if m.listKind == listTeam {
 			m.teamMarks = nil
+			m.teamExtras = nil
 		}
 		m.mode = modeIdle
 		return m, nil
@@ -633,6 +634,7 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q", "Q":
 			if m.listKind == listTeam {
 				m.teamMarks = nil
+				m.teamExtras = nil
 			}
 			m.mode = modeIdle
 			return m, nil

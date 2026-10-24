@@ -122,6 +122,11 @@ type tuiModel struct {
 	// teamMarks is the working set of the open roster picker: toggling changes
 	// only this map until Enter applies it, so Esc is a true cancel.
 	teamMarks map[string]bool
+	// teamExtras is the picker's snapshot of roster entries the registry has
+	// never heard of (a capability card's agent). They are drawn as rows of
+	// their own so applying the picker cannot silently drop a name it also
+	// could not show.
+	teamExtras []string
 
 	// pendingInputs is the busy-mode submission queue: lines the user enters
 	// while a turn or an exec owns the foreground. They drain FIFO the moment

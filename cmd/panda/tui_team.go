@@ -48,7 +48,7 @@ func agentInstalled(k agents.Known) bool {
 // the current working set.
 func (m tuiModel) buildTeamItems() []SelectionItem {
 	checked := teamCheck(m.th)
-	items := make([]SelectionItem, 0, len(agents.Registry())+1)
+	items := make([]SelectionItem, 0, len(agents.Registry())+len(m.teamExtras)+1)
 	autoBadge := ""
 	if len(m.teamMarks) == 0 {
 		autoBadge = checked
@@ -85,6 +85,22 @@ func (m tuiModel) buildTeamItems() []SelectionItem {
 			Badge:   badge,
 		})
 	}
+	// Roster entries the registry cannot name — a capability card's agent —
+	// still get a row. Without one the picker showed a conversation whose
+	// roster was non-empty as "automatic", and applying it wrote that empty
+	// set back: a name the user picked was lost by looking at it.
+	for _, name := range m.teamExtras {
+		badge := ""
+		if m.teamMarks[name] {
+			badge = checked
+		}
+		items = append(items, SelectionItem{
+			ID:      name,
+			Title:   name,
+			Snippet: i18n.T(m.loc, "tui.team.extra"),
+			Badge:   badge,
+		})
+	}
 	return items
 }
 
@@ -102,10 +118,19 @@ func (m *tuiModel) rebuildTeamPicker() {
 // pick marked.
 func (m tuiModel) openTeamPicker() (tuiModel, tea.Cmd) {
 	marks := make(map[string]bool)
+	known := make(map[string]bool, len(agents.Registry()))
+	for _, k := range agents.Registry() {
+		known[k.Name] = true
+	}
+	var extras []string
 	for _, n := range m.r.teamForAsk() {
 		marks[n] = true
+		if !known[n] {
+			extras = append(extras, n)
+		}
 	}
 	m.teamMarks = marks
+	m.teamExtras = extras
 
 	sl := NewSelectionList(i18n.T(m.loc, "tui.team.title"), m.buildTeamItems())
 	sl.EmptyText = i18n.T(m.loc, "tui.team.empty")
@@ -146,7 +171,8 @@ func (m *tuiModel) toggleTeamMark() {
 }
 
 // applyTeamPicker commits the working set. Registry order (not click order) is
-// the stored order, so the same pick always produces the same roster.
+// the stored order, so the same pick always produces the same roster; names
+// outside the registry keep the order they were listed in.
 func (m tuiModel) applyTeamPicker() (tea.Model, tea.Cmd) {
 	it, ok := m.selectionList.Selected()
 	m.mode = modeIdle
@@ -161,12 +187,18 @@ func (m tuiModel) applyTeamPicker() (tea.Model, tea.Cmd) {
 				names = append(names, k.Name)
 			}
 		}
+		for _, n := range m.teamExtras {
+			if m.teamMarks[n] {
+				names = append(names, n)
+			}
+		}
 	}
 	if err := m.r.setTeam(names); err != nil {
 		return m, m.printBlock(block{kind: blockError, body: err.Error()})
 	}
 	m.team = m.r.teamNow()
 	m.teamMarks = nil
+	m.teamExtras = nil
 	body := i18n.T(m.loc, "repl.team.cleared")
 	if len(m.team) > 0 {
 		body = i18n.Tf(m.loc, "repl.team.set", "names", strings.Join(m.team, ", "))

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -99,5 +100,52 @@ func TestTeamPickerSpaceThroughUpdate(t *testing.T) {
 	}
 	if got := loadBareTeam(); len(got) != 0 {
 		t.Fatalf("esc wrote a roster: %v", got)
+	}
+}
+
+// TestTeamPickerKeepsUnregisteredAgent: a roster entry the registry cannot
+// name — a capability card's agent — gets a row of its own and survives an
+// apply. The picker used to draw registry agents only, so a card agent's
+// roster rendered as "automatic" and one Enter wrote that empty set back.
+func TestTeamPickerKeepsUnregisteredAgent(t *testing.T) {
+	m := newIsolatedTUI(t)
+	if err := m.r.setTeam([]string{"meta-wrapper"}); err != nil {
+		t.Fatalf("seed roster: %v", err)
+	}
+	m, _ = m.openTeamPicker()
+
+	idx := -1
+	for i, it := range m.selectionList.Items {
+		if it.ID == "meta-wrapper" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("picker has no row for an unregistered agent: %+v", m.selectionList.Items)
+	}
+	if m.selectionList.Items[idx].Badge == "" {
+		t.Fatal("unregistered agent row is not marked as selected")
+	}
+	if m.selectionList.Cursor != idx {
+		t.Fatalf("cursor = %d, want the selected row %d", m.selectionList.Cursor, idx)
+	}
+
+	next, _ := m.applyTeamPicker()
+	m = next.(tuiModel)
+	if len(m.team) != 1 || m.team[0] != "meta-wrapper" {
+		t.Fatalf("applied team = %v, want [meta-wrapper]", m.team)
+	}
+
+	// A mixed roster keeps both names when the picker is opened and applied
+	// without touching a row.
+	if err := m.r.setTeam([]string{"codex", "meta-wrapper"}); err != nil {
+		t.Fatalf("seed mixed roster: %v", err)
+	}
+	m, _ = m.openTeamPicker()
+	next, _ = m.applyTeamPicker()
+	m = next.(tuiModel)
+	if got := strings.Join(m.team, ","); got != "codex,meta-wrapper" {
+		t.Fatalf("mixed roster after apply = %q, want codex,meta-wrapper", got)
 	}
 }

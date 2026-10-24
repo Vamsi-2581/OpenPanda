@@ -62,6 +62,12 @@ func (e todoEnv) outf(format string, args ...any) {
 // to an exit code.
 func runTodo(args []string) {
 	loc := i18n.Detect()
+	// Usage answers before the store opens: help has to work on a machine that
+	// has never run `panda init`, where loading the config would fail first.
+	if todoHelpRequested(args) {
+		fmt.Println(i18n.T(loc, "cli.todo.usage"))
+		return
+	}
 	cfg, err := config.Load(cliConfigPath)
 	if err != nil {
 		fatal("load config", err)
@@ -140,6 +146,13 @@ func splitSlashArgs(arg string) []string {
 // like it worked).
 func todoMain(ctx context.Context, db *sql.DB, env todoEnv, args []string) error {
 	store := todos.NewStore(db)
+	// Help wins over verb parsing: `panda todo --help` starts with a dash, so
+	// the verb stayed "list" and the flag reached todoList's FlagSet, which
+	// returned a bare `flag: help requested` instead of usage.
+	if todoHelpRequested(args) {
+		env.outln(i18n.T(env.loc, "cli.todo.usage"))
+		return nil
+	}
 	verb := "list"
 	rest := args
 	if len(args) > 0 {
@@ -175,12 +188,31 @@ func todoMain(ctx context.Context, db *sql.DB, env todoEnv, args []string) error
 		return todoMove(ctx, store, env, rest)
 	case "start", "work", "run":
 		return todoStart(ctx, store, env, rest)
-	case "help", "-h", "--help":
-		env.outln(i18n.T(env.loc, "cli.todo.usage"))
-		return nil
 	default:
 		return fmt.Errorf("%s\n%s", i18n.Tf(env.loc, "cli.todo.unknown", "verb", verb), i18n.T(env.loc, "cli.todo.usage"))
 	}
+}
+
+// todoHelpRequested reports whether the line asks for usage rather than for a
+// verb. Only a leading "help" or an explicit help flag counts: `panda todo add
+// help` is a title, not a help request. The check has to run before the
+// subcommand FlagSets, because they are created with io.Discard output — a
+// help flag that reaches one comes back as a bare `flag: help requested`
+// error rather than as usage.
+func todoHelpRequested(args []string) bool {
+	if len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "help") {
+		return true
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		switch a {
+		case "-h", "-help", "--help":
+			return true
+		}
+	}
+	return false
 }
 
 // todoList prints the board. Completed rows are hidden unless --all is given:
@@ -537,21 +569,13 @@ func todoStart(ctx context.Context, store *todos.Store, env todoEnv, args []stri
 	}
 	sessionID := ""
 	if env.cfg != nil {
-		sessionID = linkTaskSession(env.cfg, task.TaskID, t.Title, prompt)
+		sessionID = linkTaskSessionIn(env.cfg, task.TaskID, t.Title, prompt, t.Project)
 	}
 	running := todos.StatusRunning
 	tid := task.TaskID
 	updated, perr := store.Patch(ctx, id, todos.Patch{Status: &running, TaskID: &tid})
 	if env.jsonOut {
-		payload := map[string]any{
-			"task_id": task.TaskID, "session_id": sessionID, "state": task.State,
-		}
-		if perr != nil {
-			payload["link_error"] = perr.Error()
-		} else {
-			payload["todo"] = updated
-		}
-		return writeTodoJSON(env, payload)
+		return writeTodoJSON(env, todoStartJSON(task, sessionID, warn, updated, perr))
 	}
 	env.outln(i18n.Tf(env.loc, "cli.todo.started", "id", strconv.FormatInt(id, 10), "task", task.TaskID, "state", task.State))
 	if sessionID != "" {
@@ -561,6 +585,26 @@ func todoStart(ctx context.Context, store *todos.Store, env todoEnv, args []stri
 		env.outln(i18n.Tf(env.loc, "cli.todo.linkFail", "task", task.TaskID, "err", perr.Error()))
 	}
 	return nil
+}
+
+// todoStartJSON is the machine-readable result of starting a to-do. warning
+// carries askengine's dead-queue advisory — the row is durable but nothing
+// drains this store, so a script that reads only state would take an
+// unclaimable task as one on its way. link_error is the separate, later
+// failure to write the back-reference onto the to-do.
+func todoStartJSON(task core.Task, sessionID, warn string, updated todos.Todo, linkErr error) map[string]any {
+	payload := map[string]any{
+		"task_id":    task.TaskID,
+		"session_id": sessionID,
+		"state":      task.State,
+		"warning":    warn,
+	}
+	if linkErr != nil {
+		payload["link_error"] = linkErr.Error()
+	} else {
+		payload["todo"] = updated
+	}
+	return payload
 }
 
 // engineFor returns the host's engine or builds a short-lived LocalOnly one.

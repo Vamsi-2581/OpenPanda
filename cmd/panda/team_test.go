@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -177,5 +178,25 @@ func TestNodeCommandOneShot(t *testing.T) {
 	}
 	if _, err := r.nodeCommand("two words"); err == nil {
 		t.Fatal("a node id may not contain spaces")
+	}
+}
+
+// TestUnknownAgentNamesHonoursCard: a card-defined agent is a known roster
+// name. The one-shot CLI used to compare against the registry alone, so every
+// `panda ask --team <card agent>` printed a bogus "unknown agent" warning
+// about a name the user had correctly picked.
+func TestUnknownAgentNamesHonoursCard(t *testing.T) {
+	cardPath := filepath.Join(t.TempDir(), "capabilities.yaml")
+	card := "device: test-node\nagents:\n  meta-wrapper:\n    adapter: generic\n"
+	if err := os.WriteFile(cardPath, []byte(card), 0o600); err != nil {
+		t.Fatalf("write card: %v", err)
+	}
+	got := unknownAgentNames([]string{"meta-wrapper", "definitely-not-an-agent"}, cardPath)
+	if !reflect.DeepEqual(got, []string{"definitely-not-an-agent"}) {
+		t.Fatalf("unknown = %v, want only the typo", got)
+	}
+	// A missing card still leaves the registry in charge.
+	if got := unknownAgentNames([]string{"codex"}, ""); len(got) != 0 {
+		t.Fatalf("registry agent flagged unknown: %v", got)
 	}
 }

@@ -172,7 +172,7 @@ func runAsk(args []string) {
 		fail(2, "panda: "+err.Error())
 	}
 	if len(agents) > 0 {
-		if unknown := unknownAgentNames(agents); len(unknown) > 0 {
+		if unknown := unknownAgentNames(agents, *cardPath); len(unknown) > 0 {
 			fmt.Fprintln(os.Stderr, "⚠ "+i18n.Tf(loc, "repl.team.unknown", "names", strings.Join(unknown, ", ")))
 		}
 	}

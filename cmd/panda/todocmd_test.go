@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 	"github.com/Xustalis/OpenPanda/internal/todos"
@@ -139,5 +141,75 @@ func TestTodoStartWithoutEngine(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "configured model") {
 		t.Fatalf("refusal = %q, want the model hint", err.Error())
+	}
+}
+
+// TestTodoHelpFlags: help is answered wherever the user puts it. A help flag
+// used to reach a subcommand's FlagSet — created with io.Discard — which came
+// back as a bare `flag: help requested`: `panda todo --help` exited 2 instead
+// of printing usage.
+func TestTodoHelpFlags(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+
+	for _, args := range [][]string{
+		{"--help"},
+		{"-h"},
+		{"help"},
+		{"list", "--help"},
+		{"add", "anything", "--help"},
+	} {
+		out := &bytes.Buffer{}
+		env := todoEnv{out: out, errW: &bytes.Buffer{}, loc: i18n.English}
+		if err := todoMain(ctx, db, env, args); err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
+		if !strings.Contains(out.String(), "usage: panda todo") {
+			t.Errorf("%v output = %q, want usage", args, out.String())
+		}
+	}
+
+	// A title that happens to read "help" is still a title, not a help flag.
+	out := &bytes.Buffer{}
+	env := todoEnv{out: out, errW: &bytes.Buffer{}, loc: i18n.English}
+	if err := todoMain(ctx, db, env, []string{"add", "help"}); err != nil {
+		t.Fatalf("add help: %v", err)
+	}
+	if strings.Contains(out.String(), "usage: panda todo") {
+		t.Fatalf("`add help` printed usage instead of adding: %q", out.String())
+	}
+}
+
+// TestTodoStartJSONCarriesWarning: the dead-queue advisory has to reach a
+// machine reader. state alone says the row exists, not that any process will
+// ever drain it — the panel's board path returns the same warning.
+func TestTodoStartJSONCarriesWarning(t *testing.T) {
+	payload := todoStartJSON(
+		core.Task{TaskID: "task-1", State: "queued"}, "sess-1", "no consumer will drain this store",
+		todos.Todo{ID: 7}, nil,
+	)
+	if payload["warning"] != "no consumer will drain this store" {
+		t.Fatalf("warning = %v, want the advisory", payload["warning"])
+	}
+	if _, ok := payload["todo"]; !ok {
+		t.Fatal("payload dropped the linked to-do")
+	}
+	if _, ok := payload["link_error"]; ok {
+		t.Fatal("successful link reported link_error")
+	}
+
+	linked := todoStartJSON(core.Task{TaskID: "task-2", State: "queued"}, "", "", todos.Todo{}, errors.New("boom"))
+	if linked["link_error"] != "boom" {
+		t.Fatalf("link_error = %v", linked["link_error"])
+	}
+	if _, ok := linked["todo"]; ok {
+		t.Fatal("failed link reported a to-do")
 	}
 }

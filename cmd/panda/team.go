@@ -315,14 +315,21 @@ func normalizeTeam(names []string) ([]string, error) {
 // legal — a peer may carry the agent — but the command warns, because a typo
 // otherwise surfaces much later as a refused task.
 func (r *repl) unknownAgents(names []string) []string {
+	return unknownAgentNames(names, r.cardPathNow())
+}
+
+// unknownAgentNames lists roster entries neither the registry nor the node's
+// capability card knows about. A card-defined agent is a valid roster entry
+// even when the registry has never heard of it (a local adapter wrapper), so
+// the card has to be consulted here too — the one-shot CLI used to warn about
+// every wrapper the user had correctly picked. A missing card is fine: the
+// roster can be chosen before `panda init` ran.
+func unknownAgentNames(names []string, cardPath string) []string {
 	known := map[string]bool{}
 	for _, k := range agents.Registry() {
 		known[k.Name] = true
 	}
-	// Card-defined agents are valid roster entries even when the registry has
-	// never heard of them (a local adapter wrapper). A missing card is fine:
-	// the roster can be picked before `panda init` ran.
-	if card, err := ledger.LoadCard(r.cardPathNow()); err == nil {
+	if card, err := ledger.LoadCard(cardPath); err == nil {
 		for name := range card.Agents {
 			known[name] = true
 		}
@@ -369,23 +376,6 @@ func resolveAskTeam(flag string, inherit bool) ([]string, error) {
 		return nil, nil
 	}
 	return normalizeTeam(names)
-}
-
-// unknownAgentNames is the card-free variant of the warning used by the
-// one-shot CLI (which already holds the card path elsewhere, but does not need
-// it to flag a likely typo).
-func unknownAgentNames(names []string) []string {
-	known := map[string]bool{}
-	for _, k := range agents.Registry() {
-		known[k.Name] = true
-	}
-	var out []string
-	for _, n := range names {
-		if !known[n] {
-			out = append(out, n)
-		}
-	}
-	return out
 }
 
 // applyTeamDelta computes the next roster for one operation.
