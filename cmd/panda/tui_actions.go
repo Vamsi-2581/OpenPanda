@@ -607,9 +607,22 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectionList.MovePage(m.listPageRows(), m.listPageRows())
 		return m, nil
 	case tea.KeyEsc:
+		if m.listKind == listTeam {
+			m.teamMarks = nil
+		}
 		m.mode = modeIdle
 		return m, nil
+	case tea.KeySpace:
+		if m.listKind == listTeam {
+			m.toggleTeamMark()
+			return m, nil
+		}
 	case tea.KeyRunes:
+		// Some terminals deliver space as a rune rather than KeySpace.
+		if m.listKind == listTeam && string(msg.Runes) == " " {
+			m.toggleTeamMark()
+			return m, nil
+		}
 		switch string(msg.Runes) {
 		case "k", "K":
 			m.selectionList.MoveUp()
@@ -618,10 +631,16 @@ func (m tuiModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectionList.MoveDown(m.listPageRows())
 			return m, nil
 		case "q", "Q":
+			if m.listKind == listTeam {
+				m.teamMarks = nil
+			}
 			m.mode = modeIdle
 			return m, nil
 		}
 	case tea.KeyEnter:
+		if m.listKind == listTeam {
+			return m.applyTeamPicker()
+		}
 		item, ok := m.selectionList.Selected()
 		if !ok {
 			m.mode = modeIdle
