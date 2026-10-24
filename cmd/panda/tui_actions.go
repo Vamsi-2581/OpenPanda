@@ -958,9 +958,18 @@ func (m tuiModel) wizardConfig() config.ModelConfig {
 	} else {
 		mc, _ = providers.ModelConfig(m.wizardProvider, m.wizardModel, m.wizardKey)
 		// The base URL field is editable for builtins too: a relay standing
-		// in for the vendor's endpoint overrides the catalogue URL here.
+		// in for the vendor's endpoint overrides the catalogue URL here. A
+		// value that is still one of the provider's own endpoints — the
+		// prefilled row URL, say — is rebased onto the surface this model is
+		// served on (an aggregator routes Claude away from its chat row).
 		if m.wizardBaseURL != "" {
-			mc.BaseURL = m.wizardBaseURL
+			if p, ok := providers.Lookup(m.wizardProvider); ok && p.OwnsEndpoint(m.wizardBaseURL) {
+				if base, apiType := p.EndpointFor(mc.Model); base != "" {
+					mc.BaseURL, mc.APIType = base, apiType
+				}
+			} else {
+				mc.BaseURL = m.wizardBaseURL
+			}
 		}
 	}
 	if m.wizardThinking != "" && m.wizardThinking != "auto" {

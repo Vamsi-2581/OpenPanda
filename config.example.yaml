@@ -346,7 +346,7 @@ log:
 # Built-in providers (internal/providers): deepseek, claude (Anthropic),
 # openai (ChatGPT), kimi (月之暗面), minimax, volcengine (火山引擎/豆包),
 # zhipu (智谱), qwen (通义千问), siliconflow (硅基流动), openrouter,
-# ollama (本地), custom.
+# opencode-go (OpenCode Go / Console), ollama (本地), custom.
 #
 # models:
 #   - name: deepseek
@@ -367,6 +367,11 @@ log:
 #     model: "kimi-k3"
 #     api_type: "openai"
 #     api_key: ""
+#   - name: opencode-go        # one oc_sk_ key from OpenCode Console covers
+#     provider: opencode-go    # both pay-as-you-go and Go/Go Plus
+#     model: "kimi-k3"         # open models use the OpenAI-chat endpoint;
+#     api_key: ""              # claude-*/qwen3.x-plus ids are routed to the
+#                              # Anthropic Messages endpoint automatically
 
 # MCP server (Model Context Protocol): one stdio server whose tools become
 # callable by the ask engine. The command is space-separated argv; empty

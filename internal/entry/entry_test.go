@@ -1694,3 +1694,65 @@ func TestPromptLocaleResolution(t *testing.T) {
 		t.Fatalf("unset locale = %q, want the process locale %q", got, i18n.Detect())
 	}
 }
+
+// TestNewClientRoutesOpenCodeGo pins the gateway's per-model surface
+// resolution at client construction: a config that restated the catalogue's
+// endpoint (or named none) is rebased onto the route serving the model, an
+// endpoint the user pointed elsewhere is honoured, and a family on an
+// unimplemented wire surface fails here with the reason.
+func TestNewClientRoutesOpenCodeGo(t *testing.T) {
+	claude, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "claude-sonnet-5-5",
+	})
+	if err != nil {
+		t.Fatalf("claude client: %v", err)
+	}
+	if claude.apiType != config.APITypeAnthropic || claude.baseURL != "https://opencode.ai/inference/anthropic" {
+		t.Fatalf("claude client = %s %s, want the Anthropic route", claude.apiType, claude.baseURL)
+	}
+
+	chat, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "kimi-k3",
+	})
+	if err != nil {
+		t.Fatalf("chat client: %v", err)
+	}
+	if chat.apiType != config.APITypeOpenAI || chat.baseURL != "https://opencode.ai/inference/openai/v1" {
+		t.Fatalf("chat client = %s %s, want the OpenAI-chat row", chat.apiType, chat.baseURL)
+	}
+
+	// The TUI wizard writes the catalogue's base and its default dialect into
+	// the config even when the user then types a routed model; the route
+	// still wins because that base is one of the provider's own.
+	tui, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIType: config.APITypeOpenAI,
+		BaseURL: "https://opencode.ai/inference/openai/v1",
+		APIKey:  "oc_sk_test", Model: "qwen3.8-flash",
+	})
+	if err != nil {
+		t.Fatalf("tui-shaped client: %v", err)
+	}
+	if tui.apiType != config.APITypeAnthropic || tui.baseURL != "https://opencode.ai/inference/anthropic" {
+		t.Fatalf("tui-shaped client = %s %s, want the Anthropic route", tui.apiType, tui.baseURL)
+	}
+
+	// An endpoint the user pointed elsewhere is not rebased.
+	relay, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", BaseURL: "https://relay.example.com/v1",
+		APIKey: "oc_sk_test", Model: "kimi-k3",
+	})
+	if err != nil {
+		t.Fatalf("relay client: %v", err)
+	}
+	if relay.baseURL != "https://relay.example.com/v1" {
+		t.Fatalf("relay base = %s, want the user's endpoint", relay.baseURL)
+	}
+
+	// A family served on an unimplemented surface fails at construction with
+	// the reason, not with an opaque gateway error on every call.
+	if _, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "gpt-6.1-sol",
+	}); err == nil || !strings.Contains(err.Error(), "Responses API") {
+		t.Fatalf("gpt model error = %v, want the Responses API reason", err)
+	}
+}

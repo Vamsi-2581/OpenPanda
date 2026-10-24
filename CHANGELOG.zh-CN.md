@@ -42,6 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增
 
+- **OpenCode Go / Console 成为内置模型供应商** —— `panda model add opencode-go oc_sk_…` 可注册这个网关：按量付费的 Console 目录与 Go/Go Plus 订阅共用同一把 key。开放模型走它的 OpenAI Chat 线面，Claude 与 Anthropic 方言的 Qwen 在同一把 key 下自动路由到 Anthropic Messages 线面，每个模型各自计价。GPT/Grok/Gemini/SystemOne 走的是本客户端不实现的线面，在配置阶段就会被拒绝并说明原因，而不是每次调用才失败。
 - `OPENPANDA_UPDATE_BASE` 可把自更新的下载指向发布资产镜像——这是给"能连 `api.github.com`、连不上 `release-assets.githubusercontent.com`"的网络留的出口。安装脚本已支持的 `OPENPANDA_RELEASE_BASE` 作为别名一并接受，一个变量同时管安装与升级。
 - **同意卡片展示条款本身，而不是它的摘要** —— 引导向导与设置里的弹窗原先渲染十条压缩过的条款，那是同一份法律文本的第二份副本，随时可能与它所概括的文件脱节。现在两处都直接渲染 `TERMS.md` 本身——全部十七节，按控制台语言——走的是转写页同一个 Markdown 渲染器。正文完全不再复制进控制台：每份译本在构建时从仓库自己的文件内联进来，需要修改时只有一处。
 - **你选的团队就是派发预算** —— 每轮子代理上限原先是写死的 `3`，所以团队为 claude_code、codex、deepseek_harness 和 opencode 的会话只派出了三个任务，第四个在提交之前就被丢掉：没有卡片、没有报错、回执上什么都没有。上限现在由名单推导（每选一个 agent 一个任务），`task_budget` 让模型为没人枚举过的并行工作申报更大额度（上限 8），会话团队也进入入口提示词，模型会点名你选的 agent，而不是自己编。

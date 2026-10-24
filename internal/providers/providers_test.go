@@ -307,3 +307,73 @@ func TestAllReturnsCopy(t *testing.T) {
 		t.Fatal("All() exposes the shared backing array")
 	}
 }
+
+// TestOpenCodeGoGateway pins the OpenCode Go / Console row: one oc_sk_ key
+// serves two implemented wire surfaces (OpenAI chat for open models, Anthropic
+// Messages for Claude and the Anthropic-dialect Qwen ids), the families on
+// unimplemented surfaces are refused with a reason, pricing is per model, and
+// both catalogue endpoints resolve back to the same provider.
+func TestOpenCodeGoGateway(t *testing.T) {
+	p, ok := Lookup("opencode-go")
+	if !ok {
+		t.Fatal("missing opencode-go provider")
+	}
+	if p.DefaultModel != "kimi-k3" || p.ModelsPath != "https://opencode.ai/inference/v1/models" {
+		t.Fatalf("unexpected row: %+v", p)
+	}
+
+	chat, ok := ModelConfig("opencode-go", "glm-5.3", "oc_sk_test")
+	if !ok || chat.BaseURL != "https://opencode.ai/inference/openai/v1" || chat.APIType != config.APITypeOpenAI {
+		t.Fatalf("chat model = %+v (ok=%v), want the OpenAI-chat surface", chat, ok)
+	}
+	anth, _ := ModelConfig("opencode-go", "claude-sonnet-5-5", "oc_sk_test")
+	if anth.BaseURL != "https://opencode.ai/inference/anthropic" || anth.APIType != config.APITypeAnthropic {
+		t.Fatalf("claude model = %+v, want the Anthropic surface", anth)
+	}
+	// Qwen3.8 Max is the chat-dialect exception in its family.
+	if qmax, _ := ModelConfig("opencode-go", "qwen3.8-max", "oc_sk_test"); qmax.APIType != config.APITypeOpenAI || qmax.BaseURL != p.BaseURL {
+		t.Fatalf("qwen3.8-max = %+v, want the default chat surface", qmax)
+	}
+	// A bare add lands on the paid default: Console's free tiers are
+	// OpenCode-only and answer 403 from other clients.
+	if def, _ := ModelConfig("opencode-go", "", "oc_sk_test"); def.Model != "kimi-k3" {
+		t.Fatalf("default model = %q, want kimi-k3", def.Model)
+	}
+
+	for _, want := range []string{"gpt-6.1-sol", "grok-4.7", "gemini-4-argon", "jev-1.13"} {
+		if p.UnsupportedReason(want) == "" {
+			t.Errorf("%s should be reported unsupported", want)
+		}
+	}
+	if got := p.UnsupportedReason("kimi-k3"); got != "" {
+		t.Errorf("kimi-k3 reported unsupported: %q", got)
+	}
+
+	// Both catalogue endpoints (and only those) identify the provider — the
+	// chat URL embeds "openai" but is the gateway's.
+	for _, u := range []string{p.BaseURL, "https://opencode.ai/inference/anthropic"} {
+		got, ok := Detect(u, "")
+		if !ok || got.ID != "opencode-go" {
+			t.Errorf("Detect(%q) = %v, %v; want opencode-go", u, got.ID, ok)
+		}
+	}
+
+	// Pricing is per model rather than one row price.
+	if got := LookupPricing("opencode-go", "kimi-k3"); got != (Pricing{InputPerMillion: 3.00, OutputPerMillion: 15.00}) {
+		t.Errorf("kimi-k3 pricing = %+v", got)
+	}
+	if got := LookupPricing("opencode-go", "minimax-m3.1-flash"); got != (Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.60}) {
+		t.Errorf("minimax-m3.1-flash pricing = %+v", got)
+	}
+	if got := LookupPricing("opencode-go", "some-unlisted-model"); got != (Pricing{}) {
+		t.Errorf("unlisted pricing = %+v, want zero", got)
+	}
+
+	// Thinking follows the routed dialect, not the row's default.
+	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "claude-sonnet-5-5"}); got != "anthropic" {
+		t.Errorf("claude thinking style = %q, want anthropic", got)
+	}
+	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "kimi-k3"}); got != "object" {
+		t.Errorf("kimi thinking style = %q, want object", got)
+	}
+}

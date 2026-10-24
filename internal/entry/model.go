@@ -208,17 +208,6 @@ func ResolveContextWindow(model config.ModelConfig) int {
 // commander applies to adapter endpoints (D7).
 func NewClient(model config.ModelConfig) (*Client, error) {
 	p, hasProvider := providers.Lookup(model.Provider)
-	base := model.BaseURL
-	if base == "" {
-		if hasProvider && p.BaseURL != "" {
-			base = p.BaseURL
-		} else {
-			return nil, ErrNoModel
-		}
-	}
-	if err := security.NewNetworkGuard(security.EndpointHost(base)).CheckURL(base); err != nil {
-		return nil, err
-	}
 	name := model.Model
 	if name == "" {
 		if hasProvider && p.DefaultModel != "" {
@@ -226,6 +215,29 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		} else {
 			name = defaultModel
 		}
+	}
+	// routedBase/routedType name the surface this model is served on when
+	// the provider is an aggregator (OpenCode's gateway answers open models
+	// on its OpenAI-chat endpoint and Claude/Qwen on its Anthropic one).
+	routedBase, routedType := "", ""
+	if hasProvider {
+		routedBase, routedType = p.EndpointFor(name)
+	}
+	base := model.BaseURL
+	if base == "" || (hasProvider && p.OwnsEndpoint(base)) {
+		// An empty base takes the catalogue's. A base that merely restated
+		// one of the provider's own endpoints is rebased onto the surface
+		// this model is actually served on; a base the user pointed at some
+		// other relay is left alone.
+		if routedBase != "" {
+			base = routedBase
+		}
+	}
+	if base == "" {
+		return nil, ErrNoModel
+	}
+	if err := security.NewNetworkGuard(security.EndpointHost(base)).CheckURL(base); err != nil {
+		return nil, err
 	}
 	// tuning carries the catalogue row of the vendor actually behind the
 	// endpoint: a "custom" entry (or no provider at all) holds none, so the
@@ -235,6 +247,14 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 	if !hasTuning || tuning.ID == "custom" {
 		if d, ok := providers.Detect(base, name); ok && d.ID != "custom" {
 			tuning, hasTuning = d, true
+		}
+	}
+	// A family served on a wire surface this client cannot speak (OpenAI
+	// Responses, Google Generative AI) fails here with the reason, rather
+	// than on every request with an opaque gateway 400.
+	if hasTuning {
+		if reason := tuning.UnsupportedReason(name); reason != "" {
+			return nil, fmt.Errorf("entry: %s via %s: %s", name, tuning.ID, reason)
 		}
 	}
 	// Per-model specs beat the provider row (a vendor's models may carry
@@ -270,8 +290,19 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		}
 	}
 	apiType := strings.ToLower(strings.TrimSpace(model.APIType))
-	if apiType == "" && hasProvider {
-		apiType = strings.ToLower(strings.TrimSpace(p.APIType))
+	if hasProvider {
+		provType := strings.ToLower(strings.TrimSpace(p.APIType))
+		// The route's dialect wins when the config named none or merely
+		// restated the provider row's default: on an aggregator the model,
+		// not the row, decides which wire surface serves it.
+		if apiType == "" || apiType == provType {
+			if routedType != "" {
+				apiType = strings.ToLower(strings.TrimSpace(routedType))
+			}
+		}
+		if apiType == "" {
+			apiType = provType
+		}
 	}
 	if apiType != config.APITypeOpenAI {
 		apiType = config.APITypeAnthropic
