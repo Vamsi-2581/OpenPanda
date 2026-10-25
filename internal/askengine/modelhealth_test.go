@@ -48,6 +48,51 @@ func TestModelBreakerEscalates(t *testing.T) {
 	}
 }
 
+// TestModelBreakerKeepsStreakAcrossCooldown pins the escalation across probes:
+// asking whether a cooling model is healthy (which is what routing does) must
+// read the deadline, not clear the record. Clearing it restarted the ladder at
+// 30s on every probe, so a flapping endpoint was retried at the base delay
+// forever and the 60/120/240/300s steps were unreachable in practice.
+func TestModelBreakerKeepsStreakAcrossCooldown(t *testing.T) {
+	e := &Engine{}
+	e.recordModelFailure("k")
+	// Simulate the cooldown elapsing.
+	e.breakerMu.Lock()
+	st := e.breaker["k"]
+	st.until = time.Now().Add(-time.Second)
+	e.breaker["k"] = st
+	e.breakerMu.Unlock()
+
+	if !e.isModelHealthy("k") {
+		t.Fatal("an elapsed cooldown must read as healthy")
+	}
+	if st := e.breaker["k"]; st.fails != 1 {
+		t.Fatalf("fails = %d, want the streak kept at 1", st.fails)
+	}
+
+	e.recordModelFailure("k")
+	if got := time.Until(e.breaker["k"].until); got < 2*breakerBaseCooldown-time.Second {
+		t.Fatalf("second cooldown = %v, want the escalated (60s) step", got)
+	}
+}
+
+// TestModelBreakerForgetsStaleStreak pins the other side of the count: a
+// failure whose previous cooldown ended long ago starts the ladder over
+// instead of inheriting a streak nobody remembers.
+func TestModelBreakerForgetsStaleStreak(t *testing.T) {
+	e := &Engine{}
+	e.breaker = map[string]modelBreaker{
+		"k": {fails: 4, until: time.Now().Add(-breakerResetAfter - time.Minute)},
+	}
+	e.recordModelFailure("k")
+	if st := e.breaker["k"]; st.fails != 1 {
+		t.Fatalf("fails = %d, want the stale streak forgotten", st.fails)
+	}
+	if got := time.Until(e.breaker["k"].until); got > breakerBaseCooldown+time.Second {
+		t.Fatalf("cooldown = %v, want the base step", got)
+	}
+}
+
 // TestModelBreakerKeyedByEndpoint pins the identity rule: two registry aliases
 // of the same model id on different endpoints are separate clients, so one
 // provider's outage does not cool down the other.

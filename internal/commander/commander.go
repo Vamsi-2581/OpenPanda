@@ -964,7 +964,7 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// injection.model=never opts out of this too: "never" is documented as
 	// "agents always use their own models", and a retry that hands the task
 	// panda's key is exactly the override the setting promises not to do.
-	if !res.OK && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	if !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if injModel.BaseURL == "" || security.NewNetworkGuard(security.EndpointHost(injModel.BaseURL)).CheckURL(injModel.BaseURL) == nil {
 			injectedEnv := modelEnvForAdapter(injModel, name, adapter)
 			if len(injectedEnv) > 0 {
