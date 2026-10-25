@@ -43,6 +43,54 @@ func TestProjectsSaveLoad(t *testing.T) {
 	}
 }
 
+// TestProjectsRenameRefusesExistingTarget pins the guard: the copy-then-drop
+// sequence would otherwise overwrite the target project's memory and then
+// delete the source's, losing both in one call.
+func TestProjectsRenameRefusesExistingTarget(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	if err := p.Save("old", MemFile{Entries: []string{"old entry"}}); err != nil {
+		t.Fatalf("save old: %v", err)
+	}
+	if err := p.Save("taken", MemFile{Entries: []string{"target entry"}}); err != nil {
+		t.Fatalf("save target: %v", err)
+	}
+	if err := p.Rename("old", "taken"); err == nil {
+		t.Fatal("rename onto an existing project must be refused")
+	}
+	// Both sides are untouched.
+	for name, want := range map[string]string{"old": "old entry", "taken": "target entry"} {
+		m, err := p.Load(name)
+		if err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		if len(m.Entries) != 1 || m.Entries[0] != want {
+			t.Fatalf("%s entries = %v, want %q", name, m.Entries, want)
+		}
+	}
+}
+
+// TestProjectsRenameMovesMemory pins the successful path: the memory lands on
+// the new name and the old directory is gone.
+func TestProjectsRenameMovesMemory(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	if err := p.Save("old", MemFile{Entries: []string{"entry"}}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := p.Rename("old", "new"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	got, err := p.Load("new")
+	if err != nil {
+		t.Fatalf("load new: %v", err)
+	}
+	if len(got.Entries) != 1 || got.Entries[0] != "entry" {
+		t.Fatalf("new entries = %v, want the moved entry", got.Entries)
+	}
+	if old, err := p.Load("old"); err != nil || len(old.Entries) != 0 {
+		t.Fatalf("old project still has entries: %v (err %v)", old.Entries, err)
+	}
+}
+
 func TestProjectsLoadMissing(t *testing.T) {
 	p := NewProjects(t.TempDir())
 	got, err := p.Load("nope")
