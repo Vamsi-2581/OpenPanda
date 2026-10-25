@@ -50,6 +50,14 @@ updates:
   # download-artifact in installers.yml, and action-gh-release in release.yml
   # — so when a batch like this lands, read the new major's `action.yml` for
   # the inputs the workflows pass before tagging a release: nothing else will.
+  #
+  # Every action is referenced by commit SHA rather than by tag: a tag is a
+  # mutable pointer, so whoever owns the upstream repository could move it and
+  # have this repo execute the new commit with its own token and write
+  # permissions — no diff, no review. Dependabot still updates SHA-pinned
+  # actions (it rewrites both the SHA and the `# vX` comment beside it), and
+  # scripts/check-actions-pinned.sh — a required step in the gate — fails the
+  # build if a reference ever drifts back to a tag.
   - package-ecosystem: github-actions
     directory: /
     schedule:

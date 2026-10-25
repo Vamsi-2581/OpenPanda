@@ -8,22 +8,42 @@ on:
 
 # The action commits signatures to the cla-signatures branch and posts
 # PR comments — both need write permissions on a pull_request_target run.
+#
+# Each permission maps to a call the action actually makes (verified against
+# the pinned dist bundle):
+#   contents: write      → repos.createOrUpdateFileContents (the signature file)
+#   pull-requests: write → issues.createComment / lock / updateComment
+#   actions: write       → actions.reRunWorkflow (re-runs the failed check)
+# `statuses: write` is what the upstream README asks for. The current
+# bundle does not call the commit-status API — the check the ruleset requires
+# is this job's own conclusion — but it stays: dropping it on the strength of
+# a grep against one released bundle would silently break the `cla` required
+# check the next time upstream changes.
 permissions:
   actions: write
   contents: write
   pull-requests: write
   statuses: write
 
+# One CLA run per PR. A fork PR can push commits at will, and every push
+# fired a fresh write-permission run; queueing them instead of cancelling
+# keeps a burst from starving the runner quota.
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   cla:
     runs-on: ubuntu-latest
+    # A hung action must not occupy a runner for six hours.
+    timeout-minutes: 10
     steps:
       - name: CLA Assistant
         if: >-
           github.event_name == 'pull_request_target' ||
           github.event.comment.body == 'recheck' ||
           github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'
-        uses: contributor-assistant/github-action@v2.6.1
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
