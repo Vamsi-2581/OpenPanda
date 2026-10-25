@@ -463,6 +463,15 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// The write-back is a fresh read-modify-write of the same file every other
+	// surface edits: the file lock has to cover it, or an AppendTurn landing
+	// between this load and save is overwritten by the trimmed copy. It is
+	// taken only here — summarize above can run for seconds and holds nothing.
+	unlock, lerr := lockStore(s.root)
+	if lerr != nil {
+		return nil, fmt.Errorf("sessions: lock: %w", lerr)
+	}
+	defer unlock()
 	fresh, err := s.load(id)
 	if err != nil {
 		return nil, err
@@ -521,6 +530,11 @@ func (s *Store) SetOperation(id string, op Operation) (bool, error) {
 // StartOperation installs a new operation generation unconditionally. A later
 // SetOperation must carry this id, which gives durable compare-and-set behavior.
 func (s *Store) StartOperation(id string, op Operation) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -535,6 +549,11 @@ func (s *Store) StartOperation(id string, op Operation) error {
 
 // SetWorktree records the worktree path/branch on a session.
 func (s *Store) SetWorktree(id, path, branch string) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -549,6 +568,11 @@ func (s *Store) SetWorktree(id, path, branch string) error {
 
 // SetAgentSession records an agent's native session id on a session.
 func (s *Store) SetAgentSession(id, agent, agentSessionID string) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -574,6 +598,11 @@ func (s *Store) SetTeam(id string, team []string) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -589,6 +618,11 @@ func (s *Store) SetTeam(id string, team []string) error {
 
 // SetTitle updates the title of a session.
 func (s *Store) SetTitle(id, title string) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -602,6 +636,11 @@ func (s *Store) SetTitle(id, title string) error {
 
 // SetPinned marks or clears a session's pinned flag.
 func (s *Store) SetPinned(id string, pinned bool) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -634,6 +673,11 @@ func (s *Store) ListByProject(project string) ([]*Session, error) {
 // SetProject updates the project association for a session.
 // An empty project string disassociates the session.
 func (s *Store) SetProject(id, project string) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.load(id)
@@ -653,6 +697,11 @@ func (s *Store) RenameProject(oldName, newName string) (int, error) {
 	if oldName == "" || oldName == newName {
 		return 0, nil
 	}
+	unlock, lerr := lockStore(s.root)
+	if lerr != nil {
+		return 0, fmt.Errorf("sessions: lock: %w", lerr)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -686,6 +735,11 @@ func (s *Store) RenameProject(oldName, newName string) (int, error) {
 
 // Delete removes the session file (worktree cleanup is the caller's job).
 func (s *Store) Delete(id string) error {
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !ValidID(id) {

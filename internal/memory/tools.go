@@ -126,14 +126,7 @@ func (t *Tool) add(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	m, err := t.load(target, args)
-	if err != nil {
-		return "", err
-	}
-	if err := m.Add(entry); err != nil {
-		return "", err
-	}
-	if err := t.save(target, args, m); err != nil {
+	if err := t.mutate(target, args, func(m *MemFile) error { return m.Add(entry) }); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已记住（%s）：%s", target, entry), nil
@@ -154,14 +147,7 @@ func (t *Tool) replace(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	m, err := t.load(target, args)
-	if err != nil {
-		return "", err
-	}
-	if err := m.Replace(old, new); err != nil {
-		return "", err
-	}
-	if err := t.save(target, args, m); err != nil {
+	if err := t.mutate(target, args, func(m *MemFile) error { return m.Replace(old, new) }); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已更新（%s）：%s", target, new), nil
@@ -177,14 +163,7 @@ func (t *Tool) remove(args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	m, err := t.load(target, args)
-	if err != nil {
-		return "", err
-	}
-	if err := m.Remove(old); err != nil {
-		return "", err
-	}
-	if err := t.save(target, args, m); err != nil {
+	if err := t.mutate(target, args, func(m *MemFile) error { return m.Remove(old) }); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已删除（%s）：%s", target, old), nil
@@ -219,6 +198,11 @@ func (t *Tool) load(target string, args map[string]any) (MemFile, error) {
 }
 
 // save writes a MemFile back to its layer.
+//
+// Deprecated in the mutation paths: add/replace/remove go through mutate so the
+// load and the save are one locked critical section. Kept for callers that
+// genuinely replace a whole file (a CLI `memory set`), where the caller's view
+// is the intended new content rather than a diff against the old one.
 func (t *Tool) save(target string, args map[string]any, m MemFile) error {
 	switch target {
 	case targetUser:
@@ -240,6 +224,36 @@ func (t *Tool) save(target string, args map[string]any, m MemFile) error {
 			return err
 		}
 		return t.projects.Save(project, m)
+	default:
+		return fmt.Errorf("memory: unknown target %q", target)
+	}
+}
+
+// mutate runs fn against the layer's current contents with the store's
+// read-modify-write lock held, then writes the result back. The whole cycle is
+// one critical section: load and save as two steps let a second writer slip
+// between them and vanish one of the two changes with both reporting success.
+func (t *Tool) mutate(target string, args map[string]any, fn func(*MemFile) error) error {
+	switch target {
+	case targetUser:
+		if t.hermes == nil {
+			return ErrNoStore
+		}
+		return t.hermes.UpdateUser(fn)
+	case targetMemory:
+		if t.hermes == nil {
+			return ErrNoStore
+		}
+		return t.hermes.UpdateMemory(fn)
+	case targetProject:
+		if t.projects == nil {
+			return ErrNoStore
+		}
+		project, err := argString(args, "project")
+		if err != nil {
+			return err
+		}
+		return t.projects.Update(project, fn)
 	default:
 		return fmt.Errorf("memory: unknown target %q", target)
 	}

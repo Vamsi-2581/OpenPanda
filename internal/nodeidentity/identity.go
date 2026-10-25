@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/fslock"
 )
 
 const (
@@ -26,12 +28,19 @@ var ErrAlreadyRunning = errors.New("node identity already running")
 
 // Lock is held for the lifetime of a daemon process.
 type Lock struct {
-	file *os.File
-	path string
+	release func()
+	path    string
 }
 
 // Acquire obtains the exclusive local lock for kind/identity. The OS-level
 // advisory lock is released automatically if the process exits unexpectedly.
+//
+// Only contention is reported as ErrAlreadyRunning. A lock that cannot be taken
+// for any other reason — an unreadable config directory, a volume that refuses
+// locks — comes back as itself, because callers draw opposite conclusions from
+// the two: a daemon treats ErrAlreadyRunning as "another node is up" and stands
+// down, and Held reports it as "the row has an owner". Reporting an I/O error
+// as contention is how a broken environment turned into a false demotion.
 func Acquire(kind, identity string) (*Lock, error) {
 	kind = strings.TrimSpace(kind)
 	identity = strings.TrimSpace(identity)
@@ -48,18 +57,14 @@ func Acquire(kind, identity string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create node lock directory: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	release, err := fslock.Acquire(path, false)
 	if err != nil {
-		return nil, fmt.Errorf("open node lock %s: %w", path, err)
+		if errors.Is(err, fslock.ErrHeld) {
+			return nil, fmt.Errorf("node %s identity %q: %w", kind, identity, ErrAlreadyRunning)
+		}
+		return nil, fmt.Errorf("node %s identity %q: lock %s: %w", kind, identity, path, err)
 	}
-	if err := lockFile(f); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("node %s identity %q: %w: %v", kind, identity, ErrAlreadyRunning, err)
-	}
-	return &Lock{file: f, path: path}, nil
+	return &Lock{release: release, path: path}, nil
 }
 
 // Held reports whether another process currently owns the identity lock.
@@ -78,15 +83,12 @@ func Held(kind, identity string) (bool, error) {
 // Release releases the OS lock. The lock file itself is intentionally kept:
 // that makes startup races deterministic and avoids stale PID-file recovery.
 func (l *Lock) Release() error {
-	if l == nil || l.file == nil {
+	if l == nil || l.release == nil {
 		return nil
 	}
-	err := unlockFile(l.file)
-	closeErr := l.file.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
+	l.release()
+	l.release = nil
+	return nil
 }
 
 // lockRootOverride redirects the lock directory for tests: os.UserConfigDir()

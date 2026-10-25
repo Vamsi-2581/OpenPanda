@@ -3,6 +3,7 @@
 package memory
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,6 +67,18 @@ func (h *Hermes) SaveMemory(m MemFile) error {
 	return h.save(MemoryPath(h.root), m, h.limits.memory())
 }
 
+// UpdateUser runs fn against the current USER.md and writes the result back as
+// one critical section. fn's error aborts the write.
+func (h *Hermes) UpdateUser(fn func(*MemFile) error) error {
+	return h.update(UserPath(h.root), h.limits.user(), fn)
+}
+
+// UpdateMemory runs fn against the current MEMORY.md and writes the result back
+// as one critical section.
+func (h *Hermes) UpdateMemory(fn func(*MemFile) error) error {
+	return h.update(MemoryPath(h.root), h.limits.memory(), fn)
+}
+
 // TopicsDir is the memory/topics/ directory holding optional topic files.
 func (h *Hermes) TopicsDir() string { return filepath.Join(h.root, "topics") }
 
@@ -121,6 +134,16 @@ func (h *Hermes) SaveTopic(name string, m MemFile) error {
 	return h.save(path, m, h.limits.memory())
 }
 
+// UpdateTopic runs fn against one topic file's current contents and writes the
+// result back as one critical section.
+func (h *Hermes) UpdateTopic(name string, fn func(*MemFile) error) error {
+	path, err := h.TopicPath(name)
+	if err != nil {
+		return err
+	}
+	return h.update(path, h.limits.memory(), fn)
+}
+
 // DeleteTopic removes one topic file. Deleting a missing topic is an error so
 // callers can tell a typo from a removal.
 func (h *Hermes) DeleteTopic(name string) error {
@@ -128,6 +151,13 @@ func (h *Hermes) DeleteTopic(name string) error {
 	if err != nil {
 		return err
 	}
+	// Cross-process first: a topic is deleted while a save/update of the same
+	// file may be in flight from the CLI or the console.
+	release, err := lockRoot(h.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock topic %q: %w", name, err)
+	}
+	defer release()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := os.Remove(path); err != nil {
@@ -234,6 +264,50 @@ func (h *Hermes) load(path string, limit int) (MemFile, error) {
 // the character cap and refuses an over-limit file with ErrOverLimit rather
 // than silently truncating.
 func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
+	release, err := lockRoot(h.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock %s: %w", filepath.Base(path), err)
+	}
+	defer release()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.saveLocked(path, m, defaultLimit)
+}
+
+// update is the read-modify-write counterpart of save: fn sees the file as it
+// is on disk right now and its changes are written before the lock is dropped.
+// Callers that would otherwise load, mutate and save must come through here —
+// that sequence outside the lock is the lost-update case this store used to
+// have, and it fails silently (both writers report success, one entry is gone).
+func (h *Hermes) update(path string, limit int, fn func(*MemFile) error) error {
+	release, err := lockRoot(h.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock %s: %w", filepath.Base(path), err)
+	}
+	defer release()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m, err := h.load(path, limit)
+	if err != nil {
+		return err
+	}
+	before := m.Bytes()
+	if err := fn(&m); err != nil {
+		return err
+	}
+	// A callback that decided nothing changed (a candidate that failed a gate,
+	// a duplicate) must not rewrite the file: the write is atomic but not free,
+	// and a fresh mtime on an identical file tells every watcher the memory
+	// changed when it did not.
+	if bytes.Equal(before, m.Bytes()) {
+		return nil
+	}
+	return h.saveLocked(path, m, limit)
+}
+
+// saveLocked writes the file; the caller holds both the in-process mutex and
+// the cross-process lock, so this is the one place that touches the bytes.
+func (h *Hermes) saveLocked(path string, m MemFile, defaultLimit int) error {
 	limit := m.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -246,10 +320,6 @@ func (h *Hermes) save(path string, m MemFile, defaultLimit int) error {
 			return ErrSeparator
 		}
 	}
-	// Serialize the write so a concurrent SaveMemory/SaveUser cannot truncate and
-	// interleave with this one, which would leave a torn MEMORY.md on disk.
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("memory: create memory dir: %w", err)
 	}

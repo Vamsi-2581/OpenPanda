@@ -4,6 +4,8 @@ package memory
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,5 +75,63 @@ func TestProjectsSaveEnforcesCap(t *testing.T) {
 	}
 	if len(got.Entries) != 0 {
 		t.Errorf("failed save should write nothing, got %v", got.Entries)
+	}
+}
+
+// TestProjectsRenameCarriesMemory pins the copy-then-drop contract: the new
+// name has the entries, the old directory is gone, and a failed copy leaves the
+// old one in place (the failure case is covered by the containment check
+// below — an invalid new name must not touch the source).
+func TestProjectsRenameCarriesMemory(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	if err := p.Save("old", MemFile{Entries: []string{"one", "two"}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := p.Rename("old", "new"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	got, err := p.Load("new")
+	if err != nil {
+		t.Fatalf("load new: %v", err)
+	}
+	if len(got.Entries) != 2 || got.Entries[0] != "one" {
+		t.Fatalf("new entries = %v", got.Entries)
+	}
+	if _, err := os.Stat(filepath.Join(p.root, "old")); !os.IsNotExist(err) {
+		t.Fatalf("old directory survived the rename: %v", err)
+	}
+}
+
+func TestProjectsRenameRejectsBadNewName(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	if err := p.Save("keep", MemFile{Entries: []string{"payload"}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := p.Rename("keep", "../escape"); err == nil {
+		t.Fatal("expected a traversal-shaped new name to be rejected")
+	}
+	got, err := p.Load("keep")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(got.Entries) != 1 {
+		t.Fatalf("source lost by a rejected rename: %v", got.Entries)
+	}
+}
+
+func TestProjectsRenameSameNameIsNoop(t *testing.T) {
+	p := NewProjects(t.TempDir())
+	if err := p.Save("same", MemFile{Entries: []string{"entry-1"}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := p.Rename("same", "same"); err != nil {
+		t.Fatalf("rename same name: %v", err)
+	}
+	got, err := p.Load("same")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(got.Entries) != 1 || got.Entries[0] != "entry-1" {
+		t.Fatalf("entries lost by same-name rename: %v", got.Entries)
 	}
 }

@@ -215,78 +215,88 @@ func rem(candidates []*Candidate) map[string]int {
 //     user can review and correct them. External-only repetition never opens
 //     the channel (stored prompt injection stays closed, P1-22).
 func (d *Dreamer) deep(candidates []*Candidate) ([]string, error) {
-	mem, err := d.hermes.LoadMemory()
+	now := d.now()
+	type promotion struct {
+		entry        string
+		viaWhitelist bool
+	}
+	var promoted []string
+	var announce []promotion
+
+	// The scoring decisions below are made against MEMORY.md's current
+	// entries (novelty, coveredBy), so the read and the write have to be one
+	// critical section: a sweep that loaded the file and then wrote it back
+	// would drop whatever an agent added in between. The audit line is held
+	// back until the write lands — announcing a promotion the next line could
+	// still fail to persist is a claim the log cannot back up.
+	err := d.hermes.UpdateMemory(func(mem *MemFile) error {
+		for _, c := range candidates {
+			if len(c.Days) == 0 {
+				continue
+			}
+			first, last := dayRange(c.Days)
+			score := scoreCandidate(
+				noveltySignal(c.Text, mem.Entries),
+				frequencySignal(c.Count),
+				queryDiversitySignal(len(c.Days)),
+				recencySignal(last, now),
+				consolidationSignal(first, last),
+				conceptualSignal(c.Text),
+			)
+			trusted := Sources(c.Sources).Trusted()
+			if !trusted {
+				// A4 low weight: daily-log lines carrying external input are weak
+				// evidence — discount before the threshold gates (see the weight
+				// system in signals.go; this discount rides beside it).
+				score *= dailyExternalDiscount
+			}
+			c.Score = score
+			if c.Count < d.minRecall || len(c.Days) < d.minQueries {
+				continue
+			}
+			// Substance dedup: a candidate already covered by an existing entry
+			// (same text embedded in a longer note) would pile a near-duplicate
+			// onto MEMORY.md on every sweep it recurs.
+			if coveredBy(mem.Entries, c.Text) {
+				continue
+			}
+			entry := c.Text
+			viaWhitelist := false
+			if trusted {
+				if score < d.minScore {
+					continue
+				}
+			} else {
+				// Provenance taint gate with the repeated-emphasis whitelist
+				// channel: only the agent's own repeated observations open it.
+				if trustedDaysWithin(c, now, emphasizeWindowDays*24*time.Hour) < emphasizeMinDays {
+					continue
+				}
+				entry = c.Text + " " + PromotionSourceTag
+				viaWhitelist = true
+			}
+			if err := mem.Add(entry); err != nil {
+				// A candidate already promoted into MEMORY.md (and still present in
+				// the warm daily logs) is not an error — skip it, don't abort the
+				// whole sweep. An over-limit add likewise leaves consolidation to
+				// the agent rather than failing the dream, and a line carrying the
+				// § delimiter simply can never be a memory entry.
+				if errors.Is(err, ErrOverLimit) || errors.Is(err, ErrDuplicate) || errors.Is(err, ErrSeparator) {
+					continue
+				}
+				return err
+			}
+			promoted = append(promoted, entry)
+			announce = append(announce, promotion{entry: entry, viaWhitelist: viaWhitelist})
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	now := d.now()
-
-	var promoted []string
-	for _, c := range candidates {
-		if len(c.Days) == 0 {
-			continue
-		}
-		first, last := dayRange(c.Days)
-		score := scoreCandidate(
-			noveltySignal(c.Text, mem.Entries),
-			frequencySignal(c.Count),
-			queryDiversitySignal(len(c.Days)),
-			recencySignal(last, now),
-			consolidationSignal(first, last),
-			conceptualSignal(c.Text),
-		)
-		trusted := Sources(c.Sources).Trusted()
-		if !trusted {
-			// A4 low weight: daily-log lines carrying external input are weak
-			// evidence — discount before the threshold gates (see the weight
-			// system in signals.go; this discount rides beside it).
-			score *= dailyExternalDiscount
-		}
-		c.Score = score
-		if c.Count < d.minRecall || len(c.Days) < d.minQueries {
-			continue
-		}
-		// Substance dedup: a candidate already covered by an existing entry
-		// (same text embedded in a longer note) would pile a near-duplicate
-		// onto MEMORY.md on every sweep it recurs.
-		if coveredBy(mem.Entries, c.Text) {
-			continue
-		}
-		entry := c.Text
-		viaWhitelist := false
-		if trusted {
-			if score < d.minScore {
-				continue
-			}
-		} else {
-			// Provenance taint gate with the repeated-emphasis whitelist
-			// channel: only the agent's own repeated observations open it.
-			if trustedDaysWithin(c, now, emphasizeWindowDays*24*time.Hour) < emphasizeMinDays {
-				continue
-			}
-			entry = c.Text + " " + PromotionSourceTag
-			viaWhitelist = true
-		}
-		if err := mem.Add(entry); err != nil {
-			// A candidate already promoted into MEMORY.md (and still present in
-			// the warm daily logs) is not an error — skip it, don't abort the
-			// whole sweep. An over-limit add likewise leaves consolidation to
-			// the agent rather than failing the dream, and a line carrying the
-			// § delimiter simply can never be a memory entry.
-			if errors.Is(err, ErrOverLimit) || errors.Is(err, ErrDuplicate) || errors.Is(err, ErrSeparator) {
-				continue
-			}
-			return nil, err
-		}
-		promoted = append(promoted, entry)
-		if d.OnPromotion != nil {
-			d.OnPromotion(entry, viaWhitelist)
-		}
-	}
-
-	if len(promoted) > 0 {
-		if err := d.hermes.SaveMemory(mem); err != nil {
-			return nil, err
+	if d.OnPromotion != nil {
+		for _, p := range announce {
+			d.OnPromotion(p.entry, p.viaWhitelist)
 		}
 	}
 	return promoted, nil
