@@ -4,8 +4,10 @@ package core
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,22 @@ func TestChildResourceKeys(t *testing.T) {
 	got = childResourceKeys("c1", TaskInput{Paths: []string{"pkg"}})
 	if slices.Contains(got, "scope:p/pkg") {
 		t.Fatalf("projectless paths must not mint scope keys: %v", got)
+	}
+	// A pinned work directory is a tree of its own and outranks the project
+	// key: holding project:p as well would make the child queue behind every
+	// sibling editing a tree it never touches — the exact serialization
+	// one-business-domain-per-directory exists to avoid.
+	wd := t.TempDir()
+	got = childResourceKeys("c-wd", TaskInput{Project: "p", WorkDir: wd})
+	if want := []string{"dir:" + queue.WorkDirKey(wd)}; !slices.Equal(got, want) {
+		t.Fatalf("pinned-workdir child keys = %v, want %v", got, want)
+	}
+	// A pin INSIDE the project's tree arrives as both (delegateChild fills the
+	// lanes): the directory decides where to run, the lane decides what the
+	// child excludes — a dir: key there would be invisible to the project root.
+	got = childResourceKeys("c-wd", TaskInput{Project: "p", WorkDir: wd, Paths: []string{"feat-a"}})
+	if want := []string{"scope:p/feat-a"}; !slices.Equal(got, want) {
+		t.Fatalf("in-project pinned child keys = %v, want %v", got, want)
 	}
 }
 
@@ -299,5 +317,63 @@ func TestExecLocksScopePrefixConflict(t *testing.T) {
 	}
 	if ok, err = s.TryAcquireExecLocks(ctx, c.TaskID, "n1", "run-c", []string{queue.ScopeLeafKey("proj", "x")}); err != nil || !ok {
 		t.Fatalf("stale root must be stealable: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestRelUnderDirResolvesSymlinks locks the containment rule against the one
+// thing path math cannot see: a link makes "inside the tree" a property of the
+// target, not of the spelling. Answering it lexically is not a near miss — it
+// hands the project's lock to a task writing a tree the project never sees, or
+// hides an in-tree task behind a dir: key nothing else collides with.
+//
+// The paths here carry mixed case on purpose: t.TempDir() on Linux names the
+// tree after the test, and a case-folded lock identity of that tree resolves to
+// nothing on a case-sensitive filesystem. Passing identities instead of paths
+// would make every case below answer "lexically" while looking correct on NTFS.
+func TestRelUnderDirResolvesSymlinks(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "Project")
+	outside := filepath.Join(base, "Elsewhere")
+	for _, d := range []string{filepath.Join(root, "Sub"), outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	// A path inside the tree that resolves out of it, and the mirror image.
+	if err := os.Symlink(outside, filepath.Join(root, "link-out")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "Sub"), filepath.Join(base, "link-in")); err != nil {
+		t.Fatalf("symlink link-in: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		p       string
+		wantRel string
+		wantOK  bool
+	}{
+		{"plain subdirectory", filepath.Join(root, "Sub"), "Sub", true},
+		{"the tree itself", root, "", false},
+		{"link out of the tree", filepath.Join(root, "link-out"), "", false},
+		{"link into the tree", filepath.Join(base, "link-in"), "Sub", true},
+		// A pin may name a directory that does not exist yet: --workdir creates
+		// it, and a project may precede its tree. The link in its prefix still
+		// decides which tree it is.
+		{"missing tail under a link out", filepath.Join(root, "link-out", "later"), "", false},
+		{"missing tail in the tree", filepath.Join(root, "later"), "later", true},
+	}
+	for _, tc := range cases {
+		rel, ok := relUnderDir(root, tc.p)
+		if ok != tc.wantOK || rel != tc.wantRel {
+			t.Fatalf("%s: relUnderDir = %q,%v want %q,%v", tc.name, rel, ok, tc.wantRel, tc.wantOK)
+		}
+		// The lane folds case, so the tree's own spelling still lands on one
+		// key: "Sub" here and "sub" from a declared path are the same lane.
+		if ok {
+			if a, b := queue.ScopeLeafKey("p", rel), queue.ScopeLeafKey("p", strings.ToLower(rel)); a != b {
+				t.Fatalf("%s: lane %q does not fold to %q", tc.name, a, b)
+			}
+		}
 	}
 }
