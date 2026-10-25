@@ -42,7 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 追加
 
-- **OpenCode Go / Console が組み込みモデルプロバイダになりました** —— `panda model add opencode-go oc_sk_…` で、従量課金の Console カタログと Go/Go Plus サブスクリプションが共有するゲートウェイを登録できます。オープンモデルは OpenAI Chat の面を、Claude と Anthropic 方言の Qwen は同じキーのまま Anthropic Messages の面へ自動的に振り分けられ、モデルごとに価格を持ちます。GPT/Grok/Gemini/SystemOne は本クライアントが話さない面で提供されるため、呼び出しのたびに失敗するのではなく、設定時に理由付きで拒否されます。
+- **OpenCode Go / Console が組み込みモデルプロバイダになりました** —— `panda model add opencode-go oc_sk_…` で、従量課金の Console カタログと Go/Go Plus サブスクリプションが共有するゲートウェイを登録できます。各モデルは同じキーのまま、それを提供する面へ振り分けられます：オープンモデルは OpenAI Chat、Claude と Anthropic 方言の Qwen は Anthropic Messages、GPT/Grok/Muse は OpenAI Responses API、Gemini は Google Generative AI API です。後ろ二つの方言はエントリクライアントに新たに加わったもので、ストリーミング・ツール呼び出し・使用量計測に対応します。SystemOne（Jev）だけは未対応のままで、呼び出しのたびに失敗する代わりに設定時に明示されます。価格はモデルごとです。
 - `OPENPANDA_UPDATE_BASE` で自己更新のダウンロード先をリリースアセットのミラーに向けられます。`api.github.com` には届くが `release-assets.githubusercontent.com` には届かないネットワークのための逃げ道です。インストーラが既に解釈する `OPENPANDA_RELEASE_BASE` も別名として受け付けるため、1 つの変数でインストールと更新の両方を制御できます。
 - **同意カードは要約ではなく規約そのものを示します** —— ウィザードと設定のダイアログは、かつて十項目に圧縮した条項を表示していました。それは要約の対象であるファイルからずれうる、同じ法的文書の二つ目の複製でした。現在はどちらも `TERMS.md` そのもの——十七節すべてを、コンソールの言語で——トランスクリプトと同じ Markdown レンダラーで描画します。本文をコンソールへ複製することはもうありません。各翻訳はビルド時にリポジトリのファイルから取り込まれるため、直すべきテキストは一つだけです。
 - **選んだチームがそのままディスパッチ予算になります** —— ラウンドごとのサブエージェント上限は固定の `3` でした。そのためチームが claude_code、codex、deepseek_harness、opencode の会話は 3 件しかディスパッチせず、4 件目は投入される前に落ちていました。カードもエラーも、レシート上の記述もありません。上限は名簿から導出され（選んだエージェント 1 体につき 1 件）、`task_budget` で誰も列挙していない並列作業のために上限を広げられ（上限 8）、スレッドのチームはエントリのプロンプトにも入るため、モデルはあなたが選んだエージェントを名指しし、別の名前を作りません。

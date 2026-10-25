@@ -530,7 +530,9 @@ func (r *repl) modelAdd(args []string) {
 		mc.BaseURL = pa.baseURL
 	}
 	if pa.apiType != "" {
-		if pa.apiType != config.APITypeOpenAI && pa.apiType != config.APITypeAnthropic {
+		switch pa.apiType {
+		case config.APITypeOpenAI, config.APITypeAnthropic, config.APITypeResponses, config.APITypeGoogle:
+		default:
 			r.outln(i18n.Tf(r.loc, "repl.model.add.badtype", "type", pa.apiType))
 			return
 		}

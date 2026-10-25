@@ -398,12 +398,14 @@ var builtins = []Provider{
 	{
 		// OpenCode's own gateway: the pay-as-you-go Console catalogue and the
 		// Go/Go Plus subscription share one oc_sk_ key and one endpoint.
-		// Models are served on four wire surfaces; this client speaks two of
-		// them — open models on the OpenAI-chat surface below, Claude and the
-		// Anthropic-dialect Qwen ids through Routes — while Responses, Google
-		// and SystemOne families are refused with the reason (Unsupported).
-		// Console's free-tier ids are OpenCode-only (403 from other clients),
-		// which is why no free model is the default.
+		// Models are served on four wire surfaces and this client speaks all
+		// of them: open models on the OpenAI-chat surface below, Claude and
+		// the Anthropic-dialect Qwen ids on Anthropic Messages, GPT/Grok/Muse
+		// on the OpenAI Responses API, and Gemini on Google Generative AI —
+		// under the same key, resolved per model through Routes. SystemOne
+		// (Jev) remains refused with the reason. Console's free-tier ids are
+		// OpenCode-only (403 from other clients), which is why no free model
+		// is the default.
 		ID:            "opencode-go",
 		Label:         "OpenCode Go / Console",
 		APIType:       config.APITypeOpenAI,
@@ -412,16 +414,24 @@ var builtins = []Provider{
 		DefaultModel:  "kimi-k3",
 		ThinkingStyle: "object",
 		PromptCache:   true,
-		Routes: []Route{{
-			Prefixes: []string{"claude-", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.8-flash"},
-			BaseURL:  "https://opencode.ai/inference/anthropic",
-			APIType:  config.APITypeAnthropic,
-		}},
+		Routes: []Route{
+			{
+				Prefixes: []string{"claude-", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.8-flash"},
+				BaseURL:  "https://opencode.ai/inference/anthropic",
+				APIType:  config.APITypeAnthropic,
+			},
+			{
+				Prefixes: []string{"gpt-", "grok-", "muse-"},
+				BaseURL:  "https://opencode.ai/inference/openai/v1",
+				APIType:  config.APITypeResponses,
+			},
+			{
+				Prefixes: []string{"gemini-"},
+				BaseURL:  "https://opencode.ai/inference/google/v1beta",
+				APIType:  config.APITypeGoogle,
+			},
+		},
 		Unsupported: []UnsupportedModel{
-			{Prefix: "gpt-", Reason: "served on the OpenAI Responses API, which this client does not speak"},
-			{Prefix: "grok-", Reason: "served on the OpenAI Responses API, which this client does not speak"},
-			{Prefix: "muse-", Reason: "served on the OpenAI Responses API, which this client does not speak"},
-			{Prefix: "gemini-", Reason: "served on the Google Generative AI API, which this client does not speak"},
 			{Prefix: "jev-", Reason: "served on the System One API, which this client does not speak"},
 		},
 		// Token prices in USD per 1M as published for Go/Go Plus (2026-10);
@@ -509,6 +519,14 @@ func ThinkingStyleFor(mc config.ModelConfig) string {
 		if apiType == config.APITypeOpenAI && p.ThinkingStyle != "" {
 			return p.ThinkingStyle
 		}
+	}
+	// The aggregator dialects carry the thinking request themselves: the
+	// Responses API takes reasoning.effort, Google a thinkingConfig object.
+	switch apiType {
+	case config.APITypeResponses:
+		return "responses"
+	case config.APITypeGoogle:
+		return "google"
 	}
 	if apiType == "" {
 		apiType = config.APITypeAnthropic

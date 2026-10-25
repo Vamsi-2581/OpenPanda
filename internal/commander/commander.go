@@ -1186,8 +1186,15 @@ func (r *Router) agentTarget(name string, ag ledger.Agent) ProbeSpec {
 		apiType = k.ModelEnv.APIType
 		if apiType == "" {
 			// Polyglot agent (pi): the probe speaks the configured
-			// model's own protocol — that is what the run uses.
-			apiType = injModel.NormalizedAPIType()
+			// model's own protocol — that is what the run uses. A dialect
+			// only panda's client speaks (Responses/Google) is not an agent
+			// protocol, so the probe falls back to Chat Completions.
+			switch mt := injModel.NormalizedAPIType(); mt {
+			case config.APITypeAnthropic, config.APITypeOpenAI:
+				apiType = mt
+			default:
+				apiType = config.APITypeOpenAI
+			}
 		}
 	}
 	if dec := r.InjectionDecision(name, ag.Adapter); dec.Inject {

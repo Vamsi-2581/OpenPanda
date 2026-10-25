@@ -165,10 +165,8 @@ func buildProviderItems(loc i18n.Locale) []SelectionItem {
 		badge := ""
 		if p.NoAuth {
 			badge = i18n.T(loc, "tui.wizard.noKeyBadge")
-		} else if p.APIType == config.APITypeAnthropic {
-			badge = "anthropic"
 		} else {
-			badge = "openai"
+			badge = p.APIType
 		}
 		items = append(items, SelectionItem{
 			Index:   i + 1,

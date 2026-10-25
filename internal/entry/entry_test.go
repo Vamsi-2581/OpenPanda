@@ -1748,11 +1748,32 @@ func TestNewClientRoutesOpenCodeGo(t *testing.T) {
 		t.Fatalf("relay base = %s, want the user's endpoint", relay.baseURL)
 	}
 
-	// A family served on an unimplemented surface fails at construction with
-	// the reason, not with an opaque gateway error on every call.
-	if _, err := NewClient(config.ModelConfig{
+	// The GPT family rides the Responses API and Gemini the Google API; both
+	// are driven by this client now, not refused.
+	gpt, err := NewClient(config.ModelConfig{
 		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "gpt-6.1-sol",
-	}); err == nil || !strings.Contains(err.Error(), "Responses API") {
-		t.Fatalf("gpt model error = %v, want the Responses API reason", err)
+	})
+	if err != nil {
+		t.Fatalf("gpt client: %v", err)
+	}
+	if gpt.apiType != config.APITypeResponses || gpt.baseURL != "https://opencode.ai/inference/openai/v1" {
+		t.Fatalf("gpt client = %s %s, want the Responses surface", gpt.apiType, gpt.baseURL)
+	}
+	gem, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "gemini-4-argon",
+	})
+	if err != nil {
+		t.Fatalf("gemini client: %v", err)
+	}
+	if gem.apiType != config.APITypeGoogle || gem.baseURL != "https://opencode.ai/inference/google/v1beta" {
+		t.Fatalf("gemini client = %s %s, want the Google surface", gem.apiType, gem.baseURL)
+	}
+
+	// SystemOne has no client implementation; it still fails at construction
+	// with the reason rather than on every call.
+	if _, err := NewClient(config.ModelConfig{
+		Provider: "opencode-go", APIKey: "oc_sk_test", Model: "jev-1.13",
+	}); err == nil || !strings.Contains(err.Error(), "System One") {
+		t.Fatalf("jev model error = %v, want the System One reason", err)
 	}
 }

@@ -309,10 +309,11 @@ func TestAllReturnsCopy(t *testing.T) {
 }
 
 // TestOpenCodeGoGateway pins the OpenCode Go / Console row: one oc_sk_ key
-// serves two implemented wire surfaces (OpenAI chat for open models, Anthropic
-// Messages for Claude and the Anthropic-dialect Qwen ids), the families on
-// unimplemented surfaces are refused with a reason, pricing is per model, and
-// both catalogue endpoints resolve back to the same provider.
+// serves all four wire surfaces this client speaks (OpenAI chat for open
+// models, Anthropic Messages for Claude and the Anthropic-dialect Qwen ids,
+// Responses for GPT/Grok/Muse, Google for Gemini), the SystemOne family is
+// refused with a reason, pricing is per model, and every catalogue endpoint
+// resolves back to the same provider.
 func TestOpenCodeGoGateway(t *testing.T) {
 	p, ok := Lookup("opencode-go")
 	if !ok {
@@ -330,6 +331,13 @@ func TestOpenCodeGoGateway(t *testing.T) {
 	if anth.BaseURL != "https://opencode.ai/inference/anthropic" || anth.APIType != config.APITypeAnthropic {
 		t.Fatalf("claude model = %+v, want the Anthropic surface", anth)
 	}
+	gpt, _ := ModelConfig("opencode-go", "gpt-6.1-sol", "oc_sk_test")
+	if gpt.BaseURL != p.BaseURL || gpt.APIType != config.APITypeResponses {
+		t.Fatalf("gpt model = %+v, want the Responses surface", gpt)
+	}
+	if gem, _ := ModelConfig("opencode-go", "gemini-4-argon", "oc_sk_test"); gem.BaseURL != "https://opencode.ai/inference/google/v1beta" || gem.APIType != config.APITypeGoogle {
+		t.Fatalf("gemini model = %+v, want the Google surface", gem)
+	}
 	// Qwen3.8 Max is the chat-dialect exception in its family.
 	if qmax, _ := ModelConfig("opencode-go", "qwen3.8-max", "oc_sk_test"); qmax.APIType != config.APITypeOpenAI || qmax.BaseURL != p.BaseURL {
 		t.Fatalf("qwen3.8-max = %+v, want the default chat surface", qmax)
@@ -340,18 +348,19 @@ func TestOpenCodeGoGateway(t *testing.T) {
 		t.Fatalf("default model = %q, want kimi-k3", def.Model)
 	}
 
-	for _, want := range []string{"gpt-6.1-sol", "grok-4.7", "gemini-4-argon", "jev-1.13"} {
-		if p.UnsupportedReason(want) == "" {
-			t.Errorf("%s should be reported unsupported", want)
+	// Only the SystemOne family has no client implementation here.
+	if got := p.UnsupportedReason("jev-1.13"); got == "" {
+		t.Error("jev-1.13 should be reported unsupported")
+	}
+	for _, supported := range []string{"kimi-k3", "claude-sonnet-5-5", "gpt-6.1-sol", "grok-4.7", "gemini-4-argon"} {
+		if got := p.UnsupportedReason(supported); got != "" {
+			t.Errorf("%s reported unsupported: %q", supported, got)
 		}
 	}
-	if got := p.UnsupportedReason("kimi-k3"); got != "" {
-		t.Errorf("kimi-k3 reported unsupported: %q", got)
-	}
 
-	// Both catalogue endpoints (and only those) identify the provider — the
-	// chat URL embeds "openai" but is the gateway's.
-	for _, u := range []string{p.BaseURL, "https://opencode.ai/inference/anthropic"} {
+	// Every catalogue endpoint — including the gateways that embed another
+	// vendor's id — identifies this provider.
+	for _, u := range []string{p.BaseURL, "https://opencode.ai/inference/anthropic", "https://opencode.ai/inference/google/v1beta"} {
 		got, ok := Detect(u, "")
 		if !ok || got.ID != "opencode-go" {
 			t.Errorf("Detect(%q) = %v, %v; want opencode-go", u, got.ID, ok)
@@ -375,5 +384,11 @@ func TestOpenCodeGoGateway(t *testing.T) {
 	}
 	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "kimi-k3"}); got != "object" {
 		t.Errorf("kimi thinking style = %q, want object", got)
+	}
+	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "gpt-6.1-sol"}); got != "responses" {
+		t.Errorf("gpt thinking style = %q, want responses", got)
+	}
+	if got := ThinkingStyleFor(config.ModelConfig{Provider: "opencode-go", Model: "gemini-4-argon"}); got != "google" {
+		t.Errorf("gemini thinking style = %q, want google", got)
 	}
 }

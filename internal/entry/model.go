@@ -46,9 +46,10 @@ const defaultMaxTokens = 4096
 // stream unbounded memory into the process.
 const maxModelBodyBytes = 64 << 20
 
-// Client talks to an Anthropic-compatible Messages API or an OpenAI-compatible
-// Chat Completions API, selected by the config's api_type. It is small and
-// dependency-free so the core daemon does not pull in an SDK.
+// Client talks to one of four wire dialects, selected by the config's
+// api_type: Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, or
+// Google Generative AI. Small and dependency-free so the core daemon does not
+// pull in an SDK.
 type Client struct {
 	apiType string
 	baseURL string
@@ -304,7 +305,10 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 			apiType = provType
 		}
 	}
-	if apiType != config.APITypeOpenAI {
+	switch apiType {
+	case config.APITypeOpenAI, config.APITypeResponses, config.APITypeGoogle:
+		// each has its own request/response implementation
+	default:
 		apiType = config.APITypeAnthropic
 	}
 	c := &Client{
@@ -807,9 +811,21 @@ func (c *Client) applyAuth(ctx context.Context, httpReq *http.Request) error {
 	if tok == "" {
 		return nil
 	}
-	if c.oauth || c.apiType == config.APITypeOpenAI {
+	switch {
+	case c.oauth:
+		// A subscription token is a Bearer credential on every dialect.
 		httpReq.Header.Set("authorization", "Bearer "+tok)
-	} else {
+	case c.apiType == config.APITypeGoogle:
+		// Google's own API takes the key in x-goog-api-key. OpenCode's
+		// gateway accepts that header too and additionally documents a
+		// bearer token, so a non-Google host carries both.
+		httpReq.Header.Set("x-goog-api-key", tok)
+		if !isGoogleHost(c.baseURL) {
+			httpReq.Header.Set("authorization", "Bearer "+tok)
+		}
+	case c.apiType == config.APITypeOpenAI || c.apiType == config.APITypeResponses:
+		httpReq.Header.Set("authorization", "Bearer "+tok)
+	default:
 		httpReq.Header.Set("x-api-key", tok)
 	}
 	return nil
@@ -853,6 +869,12 @@ func (c *Client) CompleteTurnsWithTools(ctx context.Context, system string, turn
 	}
 	if c.apiType == config.APITypeOpenAI {
 		return c.completeOpenAI(ctx, system, turns, tools)
+	}
+	if c.apiType == config.APITypeResponses {
+		return c.completeResponses(ctx, system, turns, tools)
+	}
+	if c.apiType == config.APITypeGoogle {
+		return c.completeGoogle(ctx, system, turns, tools)
 	}
 	req := messagesRequest{Model: c.model, MaxTokens: c.maxTokens, System: c.systemPayload(system), Messages: turnsToMessages(turns)}
 	if len(tools) > 0 {
@@ -915,51 +937,9 @@ func (c *Client) completeOpenAI(ctx context.Context, system string, turns []Turn
 	if c.passback.Load() {
 		msgs = injectReasoningPassback(msgs)
 	}
-	var lastErr error
-	probed := false
-	thinkingProbed := false
-	noBackoff := false
-	for attempt := 0; attempt <= c.maxRetry; attempt++ {
-		if attempt > 0 && !noBackoff {
-			notifyRetry(ctx, attempt, c.maxRetry, c.retryDelay(attempt), lastErr)
-			if err := sleepCtx(ctx, c.retryDelay(attempt)); err != nil {
-				return Response{}, err
-			}
-		}
-		noBackoff = false
-		resp, err := c.completeOnceOpenAI(ctx, system, msgs, tools)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		if !probed && passbackRequired(err) {
-			probed = true
-			c.passback.Store(true)
-			msgs = injectReasoningPassback(msgs)
-			attempt-- // the correction retries at once, off the transport budget
-			continue
-		}
-		if !thinkingProbed && thinkingRejected(err) {
-			thinkingProbed = true
-			c.thinkingDenied.Store(true)
-			attempt-- // drop the thinking field and retry off the transport budget
-			continue
-		}
-		if !retryable(err) {
-			return Response{}, err
-		}
-		// A dead link is not a failed attempt: wait for it and replay at once
-		// (offline.go). The caller's cancellation surfaces from here.
-		waited, werr := c.awaitNetwork(ctx, err)
-		if werr != nil {
-			return Response{}, werr
-		}
-		if waited {
-			attempt--        // the outage costs no retry attempt
-			noBackoff = true // ...nor an extra backoff before the replay
-		}
-	}
-	return Response{}, lastErr
+	return c.completeWithRetryFn(ctx, func() (Response, error) {
+		return c.completeOnceOpenAI(ctx, system, msgs, tools)
+	}, func() { msgs = injectReasoningPassback(msgs) })
 }
 
 func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []oaiMessage, tools []ToolSpec) (Response, error) {
@@ -1119,6 +1099,17 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 	if c.passback.Load() {
 		req.Messages = injectThinkingPassback(req.Messages)
 	}
+	return c.completeWithRetryFn(ctx, func() (Response, error) {
+		return c.completeOnce(ctx, req)
+	}, func() { req.Messages = injectThinkingPassback(req.Messages) })
+}
+
+// completeWithRetryFn is the shared non-streaming ladder every dialect uses:
+// transport backoff, one passback probe (when fixPassback is supplied), one
+// thinking-rejection probe, and the offline gate. call sends one request and
+// parses it; fixPassback rewrites the captured payload so the next call
+// carries the placeholder history.
+func (c *Client) completeWithRetryFn(ctx context.Context, call func() (Response, error), fixPassback func()) (Response, error) {
 	var lastErr error
 	probed := false
 	thinkingProbed := false
@@ -1131,15 +1122,15 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 			}
 		}
 		noBackoff = false
-		resp, err := c.completeOnce(ctx, req)
+		resp, err := call()
 		if err == nil {
 			return resp, nil
 		}
 		lastErr = err
-		if !probed && passbackRequired(err) {
+		if fixPassback != nil && !probed && passbackRequired(err) {
 			probed = true
 			c.passback.Store(true)
-			req.Messages = injectThinkingPassback(req.Messages)
+			fixPassback()
 			attempt-- // the correction retries at once, off the transport budget
 			continue
 		}
@@ -1150,7 +1141,7 @@ func (c *Client) completeWithRetry(ctx context.Context, req messagesRequest) (Re
 			continue
 		}
 		if !retryable(err) {
-			break
+			return Response{}, err
 		}
 		// A dead link is not a failed attempt: wait for it and replay at once
 		// (offline.go). The caller's cancellation surfaces from here.
@@ -1356,9 +1347,14 @@ type ModelInfo struct {
 }
 
 // listModelsResponse is the OpenAI /models shape — { "data": [ { "id": … } ] }
-// — which Anthropic-compatible relays emit as well.
+// — which Anthropic-compatible relays emit as well. Google answers
+// { "models": [ { "name": "models/gemini-…" } ] }, mapped onto Data by
+// ListModels.
 type listModelsResponse struct {
-	Data []ModelInfo `json:"data"`
+	Data   []ModelInfo `json:"data"`
+	Models []struct {
+		Name string `json:"name"`
+	} `json:"models"`
 }
 
 // ListModels fetches the provider's model catalogue. The endpoint is derived
@@ -1369,12 +1365,12 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if c.noCredential() {
 		return nil, ErrNoKey
 	}
-	url, bearer := c.listModelsEndpoint()
+	url, openAIStyle := c.listModelsEndpoint()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	if !bearer {
+	if !openAIStyle {
 		req.Header.Set("anthropic-version", anthropicVersion)
 	}
 	if err := c.applyAuth(ctx, req); err != nil {
@@ -1406,21 +1402,32 @@ func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err := json.Unmarshal(body, &lr); err != nil {
 		return nil, fmt.Errorf("entry: parse models: %w", err)
 	}
+	if len(lr.Data) == 0 && len(lr.Models) > 0 {
+		// Google names each entry "models/<id>"; the id is what the config
+		// and the generateContent path want.
+		for _, m := range lr.Models {
+			if id := strings.TrimPrefix(strings.TrimSpace(m.Name), "models/"); id != "" {
+				lr.Data = append(lr.Data, ModelInfo{ID: id})
+			}
+		}
+	}
 	return lr.Data, nil
 }
 
-// listModelsEndpoint resolves the list-models URL and whether it wants Bearer
-// auth (OpenAI surface) or x-api-key (Anthropic surface).
+// listModelsEndpoint resolves the list-models URL and whether the surface is
+// a non-Anthropic one (authentication itself is applyAuth's job — the flag
+// only decides the anthropic-version header and the URL derivation).
 func (c *Client) listModelsEndpoint() (string, bool) {
-	// Bearer auth is used for OpenAI-compatible surfaces, plus DeepSeek whose
-	// list-models endpoint lives on its OpenAI surface even when using the
-	// Anthropic Messages dialect for completions.
-	isBearer := c.apiType == config.APITypeOpenAI || c.provider == "deepseek" || isDeepSeekEndpoint(c.baseURL)
+	// Chat Completions, Responses and Google are non-Anthropic surfaces, as is
+	// DeepSeek whose list-models endpoint lives on its OpenAI surface even
+	// when using the Anthropic Messages dialect for completions.
+	openAIStyle := c.apiType != config.APITypeAnthropic || c.provider == "deepseek" || isDeepSeekEndpoint(c.baseURL)
 
 	if c.modelsURL != "" {
-		return c.modelsURL, isBearer
+		return c.modelsURL, openAIStyle
 	}
-	if c.apiType == config.APITypeOpenAI {
+	switch c.apiType {
+	case config.APITypeOpenAI, config.APITypeResponses:
 		// Mirror openAIURL's normalization: a base that already carries /vN
 		// keeps it, a bare host gains /v1, and an explicit /chat/completions
 		// tail is swapped for the models route.
@@ -1431,6 +1438,13 @@ func (c *Client) listModelsEndpoint() (string, bool) {
 			return base + "/models", true
 		}
 		return base + "/v1/models", true
+	case config.APITypeGoogle:
+		// Google's catalogue lives beside generateContent: <root>/models.
+		base := strings.TrimRight(c.baseURL, "/")
+		if strings.HasSuffix(base, "/models") {
+			return base, true
+		}
+		return base + "/models", true
 	}
 	// Anthropic dialect. DeepSeek's Anthropic endpoint has no list route, so
 	// fall through to its OpenAI surface even without a provider id.
