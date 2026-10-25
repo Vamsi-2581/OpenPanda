@@ -27,13 +27,13 @@ func platformBackend() string {
 // get masked (tmpfs for directories, /dev/null for files). --die-with-parent
 // keeps the jail's lifetime tied to ours so a detached child cannot outlive
 // the daemon's process-group kill.
-func wrapSubprocess(cmd *exec.Cmd, p Policy) {
+func wrapSubprocess(cmd *exec.Cmd, p Policy) error {
 	if p.Mode == ModeOff {
-		return
+		return nil
 	}
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
-		return
+		return backendMissing(p.Mode, "bwrap is not on PATH")
 	}
 	workDir := p.resolveWorkDir()
 	args := []string{
@@ -78,6 +78,7 @@ func wrapSubprocess(cmd *exec.Cmd, p Policy) {
 	args = append(args, cmd.Args[1:]...)
 	cmd.Path = bwrap
 	cmd.Args = append([]string{bwrap}, args...)
+	return nil
 }
 
 // ensureBindDir makes a missing writable directory exist so --bind has

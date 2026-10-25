@@ -7,9 +7,11 @@ package security
 import "os/exec"
 
 // platformBackend reports "" — no OS confinement on this platform (Windows's
-// Job Object / AppContainer surface is not wired). ModeOff and every other
-// mode therefore behave identically, and callers should surface the empty
-// backend rather than imply isolation exists.
+// Job Object / AppContainer surface is not wired). Callers surface the empty
+// backend rather than imply isolation exists, and a strict policy is refused
+// instead of run unconfined.
 func platformBackend() string { return "" }
 
-func wrapSubprocess(cmd *exec.Cmd, p Policy) {}
+func wrapSubprocess(cmd *exec.Cmd, p Policy) error {
+	return backendMissing(p.Mode, "no sandbox backend exists on this platform")
+}
