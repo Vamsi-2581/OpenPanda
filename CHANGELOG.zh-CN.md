@@ -42,6 +42,7 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ### 新增
 
+- **OpenCode Go / Console 成为内置模型供应商** —— `panda model add opencode-go oc_sk_…` 可注册这个网关：按量付费的 Console 目录与 Go/Go Plus 订阅共用同一把 key。每个模型都会路由到承载它的线面：开放模型走 OpenAI Chat，Claude 与 Anthropic 方言的 Qwen 走 Anthropic Messages，GPT/Grok/Muse 走 OpenAI Responses API，Gemini 走 Google Generative AI API——后两种方言是入口客户端新增的，含流式、工具调用与用量统计。只有 SystemOne（Jev）仍不支持，并在配置阶段直接说明，而不是每次调用才失败；定价按模型计价。
 - `OPENPANDA_UPDATE_BASE` 可把自更新的下载指向发布资产镜像——这是给"能连 `api.github.com`、连不上 `release-assets.githubusercontent.com`"的网络留的出口。安装脚本已支持的 `OPENPANDA_RELEASE_BASE` 作为别名一并接受，一个变量同时管安装与升级。
 - **同意卡片展示条款本身，而不是它的摘要** —— 引导向导与设置里的弹窗原先渲染十条压缩过的条款，那是同一份法律文本的第二份副本，随时可能与它所概括的文件脱节。现在两处都直接渲染 `TERMS.md` 本身——全部十七节，按控制台语言——走的是转写页同一个 Markdown 渲染器。正文完全不再复制进控制台：每份译本在构建时从仓库自己的文件内联进来，需要修改时只有一处。
 - **你选的团队就是派发预算** —— 每轮子代理上限原先是写死的 `3`，所以团队为 claude_code、codex、deepseek_harness 和 opencode 的会话只派出了三个任务，第四个在提交之前就被丢掉：没有卡片、没有报错、回执上什么都没有。上限现在由名单推导（每选一个 agent 一个任务），`task_budget` 让模型为没人枚举过的并行工作申报更大额度（上限 8），会话团队也进入入口提示词，模型会点名你选的 agent，而不是自己编。
@@ -57,6 +58,10 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 - **一轮的结论统计整批，而不是最后一份汇报** —— 两个完成、一个失败的轮次会被整条标红成「本轮工作已结束（已失败）」，而小结里的任务名把共同的派发模板按任务重复打印。现在小结统计每一份汇报并写明分布（「2 个完成、1 个失败」），混合结果用琥珀色，只有无人完成才用红色；共同的任务名前缀（以冒号结尾）只打印一次。
 - **替补者不再冒充被点名的 agent** —— 点名 `agent:claude_code` 的任务中途失败后由回退链跑完，转写里「DeepSeek Harness」出现在标题为 `连通性测试：agent:claude_code` 的任务上方，却没有任何解释。这次替换被记录了两处（`agent_fallback` 事件、结果载荷开头的说明），但会话两处都不打印——它只留一段收尾。现在汇报行会把两侧都写出来。
 - **注入提示缩成一行，并写明是哪种策略** —— 任务输出前的那行脚注原先中英各说一遍同一句话，把 agent 自己的回答压到后面，而且失败后的补救读起来像策略注入。现在这行只写 agent、模型、端点主机和策略（`auto` / `always` / `rescue`）；`model_injection` 事件带上同样字段供日志查看，`injection.model: never` 也不再允许补救——「never」就是 agent 永远用自己的模型。
+
+### 变更
+
+- **派发会吸取失败教训，探测不再重复** —— 适配器探测（`opencode models`、`api model.list`、`run --help`）现在按 CLI 与配置指纹缓存在进程之间，一批任务只需付一次探测开销；模型被拒时仍会强制重读。本机 agent 排序会把节点熔断器已判开的 agent 降权（仍保留为备选，绝不剔除），下一个任务不再从刚被判失败的 agent 上起步。模型熔断对连续失败逐级拉长（30 秒 → 5 分钟），并优先尝试健康备用模型；熔断键改为 provider/端点/模型，一个服务商故障不会连带冷却另一端点上的同名模型。
 
 ## [0.1.0] - 2026-10-23 — "Constellation"
 

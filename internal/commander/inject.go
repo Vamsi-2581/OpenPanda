@@ -189,6 +189,12 @@ func supportsModelInjection(name, adapter string, model config.ModelConfig) bool
 		return false
 	}
 	apiType := model.NormalizedAPIType()
+	// The agent CLIs speak Messages or Chat Completions. A model on a surface
+	// only panda's own client drives (Responses, Google) is never injected:
+	// the CLI would send the wrong request shape to a valid endpoint.
+	if apiType != config.APITypeAnthropic && apiType != config.APITypeOpenAI {
+		return false
+	}
 	if k.ModelEnv.APIType != "" && k.ModelEnv.APIType != apiType {
 		return false
 	}
@@ -270,10 +276,10 @@ func effectiveModelNameFor(name, adapter string, model config.ModelConfig) strin
 // the announcement and the injected env never diverge.
 func effectiveBaseURL(model config.ModelConfig) string {
 	if model.BaseURL == "" {
-		if model.NormalizedAPIType() == config.APITypeOpenAI {
-			return "https://api.openai.com/v1"
+		if model.NormalizedAPIType() == config.APITypeAnthropic {
+			return "https://api.deepseek.com/anthropic"
 		}
-		return "https://api.deepseek.com/anthropic"
+		return "https://api.openai.com/v1"
 	}
 	return model.BaseURL
 }
@@ -284,10 +290,10 @@ func effectiveModelName(model config.ModelConfig) string {
 		if p, ok := providers.Lookup(model.Provider); ok && p.DefaultModel != "" {
 			return p.DefaultModel
 		}
-		if model.NormalizedAPIType() == config.APITypeOpenAI {
-			return "gpt-6.1-sol"
+		if model.NormalizedAPIType() == config.APITypeAnthropic {
+			return deepseekFlashModel
 		}
-		return deepseekFlashModel
+		return "gpt-6.1-sol"
 	}
 	if name == deepseekProModel {
 		return deepseekFlashModel
