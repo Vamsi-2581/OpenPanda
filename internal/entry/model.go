@@ -560,6 +560,16 @@ func (c *Client) ModelName() string { return c.model }
 // Provider returns the provider catalogue ID, or empty for a custom endpoint.
 func (c *Client) Provider() string { return c.provider }
 
+// Key identifies this client for health bookkeeping: wire dialect, endpoint
+// and model. Two registry aliases of the same model id on different endpoints
+// (or dialects) are different keys, so one provider's outage does not cool
+// down the other. The provider label and the credential are deliberately
+// absent: neither changes what the request does to the endpoint, and a rotated
+// key must not alias or reset the record.
+func (c *Client) Key() string {
+	return c.apiType + "|" + c.baseURL + "|" + c.model
+}
+
 // ContextWindow returns the advertised context length in tokens, or 0 when unknown.
 func (c *Client) ContextWindow() int { return c.contextWindow }
 
