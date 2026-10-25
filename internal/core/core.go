@@ -2040,8 +2040,22 @@ func (c *Core) Listen(ctx context.Context, addr string) error {
 			c.handleInbound(ctx, conn)
 		})
 	})
+	// The bind may choose a different address than the one asked for — a
+	// ":0" listener gets an ephemeral port — and hello payloads plus
+	// discovery beacons must advertise what peers can actually dial. The
+	// configured address stays as the pre-bind value so a node that is still
+	// starting describes itself instead of advertising an empty string.
+	srv.OnBound(func(bound string) { c.listenAddr.Store(bound) })
 	srv.SetLimits(c.maxConns, c.maxConnsPerIP)
 	return srv.Listen(ctx)
+}
+
+// ListenAddr reports the address this node's WebSocket listener is bound to,
+// or the configured address before the bind has happened. It is what the
+// capability summary and discovery beacons advertise.
+func (c *Core) ListenAddr() string {
+	addr, _ := c.listenAddr.Load().(string)
+	return addr
 }
 
 // handleInbound runs the read loop for a connection (server- or client-

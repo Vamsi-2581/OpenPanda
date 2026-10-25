@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -25,8 +26,32 @@ ADAPTERS = ROOT / "adapters"
 
 
 def write_executable(path, body):
+    """Lay down a runnable fake CLI at `path`.
+
+    POSIX hands the shebang script straight to the kernel. Windows cannot:
+    CreateProcess ignores a shebang and the filesystem has no exec bit, so the
+    runnable file is a two-line .cmd launcher naming the interpreter and the
+    script. _harness._shim_exe resolves that pair to [interpreter, script], so
+    the fake still receives the adapter's argv verbatim instead of going
+    through cmd.exe's %* requoting — the same fidelity the POSIX script gets.
+    """
+    if sys.platform == "win32":
+        script = path.with_name(path.name + ".py")
+        script.write_bytes(("#!" + sys.executable + "\n" + body).encode("utf-8"))
+        shim = path.with_name(path.name + ".cmd")
+        shim.write_bytes(
+            ('@echo off\r\n"%s" "%%~dp0%s" %%*\r\n'
+             % (sys.executable, script.name)).encode("utf-8"))
+        return shim
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def source_path(path):
+    """The Python source backing a fake CLI, for callers that run it through
+    an interpreter rather than through the adapter's PATH resolution."""
+    return path.with_name(path.name + ".py") if sys.platform == "win32" else path
 
 
 def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=None):
@@ -60,7 +85,8 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
             req.update(extra_request)
         proc = subprocess.run(
             [sys.executable, str(ADAPTERS / name)],
-            input=json.dumps(req), text=True, capture_output=True,
+            input=json.dumps(req), text=True, encoding="utf-8", errors="replace",
+            capture_output=True,
             env=merged, cwd=str(ROOT), timeout=timeout,
         )
         lines = [line for line in proc.stderr.splitlines() if line.strip()]
@@ -100,6 +126,7 @@ def run_harness(body, stdin_data="", env=None, timeout=5):
         merged.update(env)
     proc = subprocess.run(
         [sys.executable, "-c", code], input=stdin_data, text=True,
+        encoding="utf-8", errors="replace",
         capture_output=True, env=merged, cwd=str(ROOT), timeout=timeout,
     )
     payload = json.loads(proc.stdout.strip()) if proc.stdout.strip() else None
@@ -116,7 +143,7 @@ assert "--output-format" in sys.argv and "stream-json" in sys.argv
 assert "--verbose" in sys.argv
 assert "--allowedTools" in sys.argv
 assert "--max-turns" in sys.argv and "30" in sys.argv
-assert os.getcwd().endswith("/work")
+assert os.path.basename(os.getcwd()) == "work"
 assert os.environ.get("ANTHROPIC_API_KEY") == "native-key"
 print(json.dumps({"type":"assistant", "message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}))
 print(json.dumps({"type":"result", "is_error":False, "result":"claude answer", "session_id":"sess-123", "usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":1}, "total_cost_usd":0.25}))
@@ -1180,6 +1207,12 @@ print("appended")
         self.assertFalse(payload["ok"], payload)
         self.assertEqual(payload["exit_code"], 127)
 
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "Windows has no exec bit: an unrunnable file is indistinguishable from "
+        "a missing one there (CreateProcess refuses it with the same error), "
+        "so the 126 convention only exists on POSIX.",
+    )
     def test_generic_not_executable_is_126(self):
         # A binary on PATH that lacks the exec bit is a spawn failure, not a
         # missing binary: 126 follows the shell convention.
@@ -1218,9 +1251,9 @@ print("stdin:" + sys.stdin.read())
         # request carries them.
         payload, _, _ = run_adapter(
             "generic.py", "mimo", r'''
-import sys
+import os, sys
 args = sys.argv[1:]
-assert args[args.index("--dir") + 1].endswith("/work"), args
+assert os.path.basename(os.path.normpath(args[args.index("--dir") + 1])) == "work", args
 assert args[args.index("--session") + 1] == "sess-1", args
 assert args[args.index("--max-agent-turns") + 1] == "7", args
 assert "contract prompt" in args, args
@@ -1293,7 +1326,7 @@ assert "--approve" in args
 assert "--tools" in args and "read" in args[args.index("--tools") + 1]
 assert "--exclude-tools" in args and "mcp__*" in args
 assert args[-2:] == ["--", "contract prompt"], args
-assert os.getcwd().endswith("/work")
+assert os.path.basename(os.getcwd()) == "work"
 print(json.dumps({"type":"session","id":"pi-sess-1","version":1}))
 print(json.dumps({"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"pwd"}}))
 print(json.dumps({"type":"tool_execution_end","toolCallId":"t1","isError":False,"result":"/work"}))
@@ -1562,13 +1595,13 @@ class HarnessContractTest(unittest.TestCase):
     def test_run_simple_passes_exit_code_through(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = pathlib.Path(td)
-            write_executable(tmp / "failcli", r'''
+            failcli = write_executable(tmp / "failcli", r'''
 import sys
 print("boom output")
 sys.exit(3)
 ''')
             payload, _ = run_harness(
-                "_harness.run_simple([%r])" % str(tmp / "failcli"))
+                "_harness.run_simple([%r])" % str(failcli))
             self.assertFalse(payload["ok"], payload)
             self.assertEqual(payload["exit_code"], 3)
             self.assertEqual(payload["result"], "boom output")
@@ -1576,13 +1609,13 @@ sys.exit(3)
     def test_run_simple_falls_back_to_stderr_diagnosis(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = pathlib.Path(td)
-            write_executable(tmp / "errcli", r'''
+            errcli = write_executable(tmp / "errcli", r'''
 import sys
 sys.stderr.write("diagnosis text")
 sys.exit(1)
 ''')
             payload, _ = run_harness(
-                "_harness.run_simple([%r])" % str(tmp / "errcli"))
+                "_harness.run_simple([%r])" % str(errcli))
             self.assertFalse(payload["ok"], payload)
             self.assertEqual(payload["exit_code"], 1)
             self.assertEqual(payload["result"], "diagnosis text")
@@ -1652,13 +1685,13 @@ sys.exit(1)
         result."""
         with tempfile.TemporaryDirectory() as td:
             tmp = pathlib.Path(td)
-            write_executable(tmp / "okcli", r'''
+            okcli = write_executable(tmp / "okcli", r'''
 import sys
 print("cli output")
 ''')
             payload, proc = run_harness(
                 "_harness.run_simple([%r, 'a1'], label='okcli')"
-                % str(tmp / "okcli"))
+                % str(okcli))
             self.assertTrue(payload["ok"], payload)
             frames = [json.loads(l) for l in proc.stderr.splitlines()
                       if l.startswith("{")]
@@ -1688,15 +1721,15 @@ while True:
         f.write("tick\n")
     time.sleep(0.1)
 ''')
-            write_executable(tmp / "treecli", r'''
+            treecli = write_executable(tmp / "treecli", r'''
 import os, subprocess, sys, time
 subprocess.Popen([sys.executable, os.environ["TREE_CHILD"]])
 time.sleep(60)
 ''')
             payload, _ = run_harness(
                 "_harness.run_simple([%r], timeout=2, label='treecli')"
-                % str(tmp / "treecli"),
-                env={"TREE_CHILD": str(tmp / "treechild"),
+                % str(treecli),
+                env={"TREE_CHILD": str(source_path(tmp / "treechild")),
                      "TREE_HB": str(heartbeat)},
                 timeout=6,
             )
@@ -1792,6 +1825,26 @@ class ResolveArgvTest(unittest.TestCase):
                                 env={"APPDATA": td})
             self.assertEqual(out[0], str(npm / "node.exe"))
             self.assertEqual(out[1], str(script))
+            self.assertEqual(out[2:], ["run", "a prompt"])
+
+    def test_win32_launcher_shim_resolves_script_pair(self):
+        # The shape the contract suite writes on Windows: a .cmd launcher
+        # naming the interpreter and the script. Both halves resolve, so the
+        # fake CLI is spawned directly instead of through cmd.exe — whose %*
+        # forwarding would requote the prompt.
+        with tempfile.TemporaryDirectory() as td:
+            npm = pathlib.Path(td) / "npm"
+            npm.mkdir()
+            python = npm / "python.exe"
+            python.write_text("x")
+            with mock.patch.object(sys, "platform", "win32"), \
+                    mock.patch.object(sys, "executable", str(python)):
+                write_executable(npm / "zzfake", "print('hi')\n")
+            self.assertTrue((npm / "zzfake.py").is_file())
+            out = self._resolve(["zzfake", "run", "a prompt"],
+                                env={"APPDATA": td})
+            self.assertEqual(out[0], str(python))
+            self.assertEqual(out[1], str(npm / "zzfake.py"))
             self.assertEqual(out[2:], ["run", "a prompt"])
 
     def test_win32_cmdshim_via_comspec(self):

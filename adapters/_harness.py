@@ -366,6 +366,20 @@ def _shim_exe(shim_path):
         if not node:
             node = _win_which("node") or "node"
         return [node, script]
+    # A launcher shim — "<interpreter.exe>" "<script>" %* — the shape a
+    # hand-written wrapper or a venv's console script uses (and the shape the
+    # adapter contract tests generate on Windows). Both halves are quoted
+    # paths, so the pair resolves to [interpreter, script] and the spawn skips
+    # cmd.exe and its %* requoting. Without this branch the single-.exe scan
+    # below would return the interpreter alone and drop the script.
+    quoted = [resolve(m.group(1)) for m in re.finditer(r'"([^"]+)"', body)]
+    exes = [p for p in quoted
+            if p.lower().endswith(".exe") and os.path.isfile(p)]
+    scripts = [p for p in quoted
+               if not p.lower().endswith((".exe", ".cmd", ".bat"))
+               and os.path.isfile(p)]
+    if exes and scripts:
+        return [exes[0], scripts[0]]
     for match in re.finditer(r'"([^"]+\.exe)"', body):
         cand = resolve(match.group(1))
         if os.path.isfile(cand):
