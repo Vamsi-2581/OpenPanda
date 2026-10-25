@@ -140,8 +140,22 @@ jobs:
   # and copy) and whether the alternate-scroll flag follows a ctrl+t round trip
   # (miss the re-arm and the wheel is dead after the switch back). Drives the
   # real binary in a pty. Needs both Go and python3, so it is its own leg.
+  #
+  # Two contracts, not one: `tui-pty-exit-test` (the "chat saved / resume" note
+  # on the restored screen, and a failed turn persisted to the convo file) is
+  # part of `make gate-all` and was in no CI job at all — a check that only
+  # ever ran on a developer's laptop. Both run here now.
+  #
+  # macOS is in the matrix because `cmd/panda/term_darwin.go` takes the other
+  # branch of the terminal setup (term_unix.go is what Linux exercises), and
+  # the two scripts were written for macOS/Linux from the start. Windows has no
+  # pty, so it stays out.
   tui-pty:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -154,6 +168,8 @@ jobs:
           python-version: '3.x'
       - name: TUI mouse ownership (pty)
         run: make tui-pty-test
+      - name: TUI exit visibility (pty)
+        run: make tui-pty-exit-test
 
   race:
     runs-on: ubuntu-latest
