@@ -65,9 +65,13 @@ def run_adapter(name, cli_name, cli_body, env=None, timeout=10, extra_request=No
         # routing. Individual cases opt into overrides through env below.
         for key in (
             "OPENCODE_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL",
-            "OPENPANDA_INJECTED_MODEL",
+            "OPENPANDA_INJECTED_MODEL", "OPENPANDA_ADAPTER_CACHE",
+            "OPENPANDA_CACHE_DIR",
         ):
             merged.pop(key, None)
+        # Probes must answer from the fake CLI in every case, never from a
+        # developer machine's cache (one test turns the cache back on).
+        merged["OPENPANDA_ADAPTER_CACHE"] = "0"
         merged["PATH"] = str(tmp) + os.pathsep + merged.get("PATH", "")
         if env:
             merged.update(env)
@@ -340,6 +344,66 @@ print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text"
         self.assertFalse(events[1]["is_error"])
         # First sighting wins — the update does not re-emit a second row.
         self.assertEqual(events[2]["text"], "half")
+
+    def test_opencode_probe_cache_across_processes(self):
+        """Roster, catalog and flag probes survive between adapter processes.
+
+        Adapters are one process per task; before the cross-process cache a
+        burst of opencode tasks spawned `opencode models`, `api model.list`
+        and `run --help` every single time. Two runs sharing one cache must
+        pay each probe once, and the run itself must still work."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            work = tmp / "work"
+            work.mkdir()
+            hits = tmp / "probe-hits"
+            hits_repr = repr(str(hits))
+            body = (
+                "import json, sys\n"
+                "if '--help' in sys.argv:\n"
+                f"    open({hits_repr}, 'a').write('help\\n')\n"
+                "    print('opencode run [message..]')\n"
+                "    print('      --format  format: default (formatted) or json (raw JSON events)')\n"
+                "    print('      --auto    auto-approve permissions')\n"
+                "    print('      --agent   agent to use')\n"
+                "    sys.exit(0)\n"
+                "if sys.argv[1:2] == ['models']:\n"
+                f"    open({hits_repr}, 'a').write('models\\n')\n"
+                "    print('opencode/deepseek-v4-flash-free')\n"
+                "    sys.exit(0)\n"
+                "if sys.argv[1:3] == ['api', 'model.list']:\n"
+                f"    open({hits_repr}, 'a').write('catalog\\n')\n"
+                "    print(json.dumps({'data': [{'providerID': 'opencode', 'id': 'deepseek-v4-flash-free', 'enabled': True, 'status': 'active', 'capabilities': {'tools': True}}]}))\n"
+                "    sys.exit(0)\n"
+                "print(json.dumps({'type': 'text', 'sessionID': 's1',"
+                " 'part': {'id': 'p1', 'type': 'text', 'text': 'cached run'}}))\n"
+            )
+            write_executable(tmp / "opencode", body)
+
+            env = os.environ.copy()
+            for key in ("OPENCODE_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL",
+                        "OPENPANDA_INJECTED_MODEL", "OPENPANDA_CACHE_DIR"):
+                env.pop(key, None)
+            env["PATH"] = str(tmp) + os.pathsep + env.get("PATH", "")
+            env["HOME"] = str(tmp)  # no ambient opencode config in the identity
+            env["XDG_CACHE_HOME"] = str(tmp / "cache")
+            env["OPENPANDA_ADAPTER_CACHE"] = "1"
+            req = {"prompt": "contract prompt", "timeout_s": 30, "cwd": str(work)}
+
+            for _ in range(2):
+                proc = subprocess.run(
+                    [sys.executable, str(ADAPTERS / "opencode.py")],
+                    input=json.dumps(req), text=True, capture_output=True,
+                    env=env, cwd=str(ROOT), timeout=30,
+                )
+                payload = json.loads(proc.stdout.strip())
+                self.assertTrue(payload["ok"], payload)
+                self.assertEqual(payload["result"], "cached run")
+
+            lines = hits.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines.count("help"), 1, lines)
+            self.assertEqual(lines.count("models"), 1, lines)
+            self.assertEqual(lines.count("catalog"), 1, lines)
 
     def test_claude_injected_model_strips_settings_on_stream_only(self):
         # Credential rescue: an injected model/base URL disables the user's
