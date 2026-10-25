@@ -59,10 +59,21 @@ const group = (m: RegExpExecArray, n: number): string => m[n] ?? ''
 
 /** Parse a Markdown document into a block list. */
 export function parseBlocks(src: string): Block[] {
-  return parseLines(src.replace(/\r\n?/g, '\n').split('\n'))
+  return parseLines(src.replace(/\r\n?/g, '\n').split('\n'), 0)
 }
 
-function parseLines(lines: string[]): Block[] {
+/** Deepest block nesting this parser will build.
+ *
+ *  Both nesting constructs recurse: a block quote re-parses its body one `>`
+ *  shorter, and a list re-parses a more-indented run, so depth is bounded only
+ *  by the input — a line of ten thousand `>` markers, or one bullet indented a
+ *  thousand columns. Either is reachable from a model reply or a pasted file,
+ *  and blowing the JS stack there throws a RangeError that takes the whole
+ *  message view down instead of rendering one ugly paragraph. Twelve is far
+ *  past anything a person writes (a quote inside a list inside a quote is 3). */
+const MAX_DEPTH = 12
+
+function parseLines(lines: string[], depth: number): Block[] {
   const out: Block[] = []
   let i = 0
 
@@ -135,12 +146,12 @@ function parseLines(lines: string[]): Block[] {
         body.push(group(m, 1))
         i++
       }
-      out.push({ t: 'quote', kids: parseLines(body) })
+      out.push({ t: 'quote', kids: parseNested(body, depth) })
       continue
     }
 
     if (RE_UL.test(cur) || RE_OL.test(cur)) {
-      const [list, next] = parseList(lines, i)
+      const [list, next] = parseList(lines, i, depth)
       out.push(list)
       i = next
       continue
@@ -181,6 +192,18 @@ function isTableStart(lines: string[], i: number): boolean {
   )
 }
 
+/** Parse a nested body, or — at the nesting ceiling — keep its text as one
+ *  paragraph. Flattening beats recursing: the content stays readable and the
+ *  stack stays bounded, which is the whole point of the cap. */
+function parseNested(lines: string[], depth: number): Block[] {
+  if (depth >= MAX_DEPTH) {
+    const text = lines.join('\n').trim()
+    if (text === '') return []
+    return [{ t: 'para', kids: parseInline(text) }]
+  }
+  return parseLines(lines, depth + 1)
+}
+
 /** Whether the line at i opens a new block (ends an open paragraph). */
 function startsBlock(lines: string[], i: number): boolean {
   const cur = line(lines, i)
@@ -192,7 +215,7 @@ function startsBlock(lines: string[], i: number): boolean {
 /** Parse one list starting at lines[start]; returns it and the next index.
  *  Deeper indentation becomes a nested list on the enclosing item, so
  *  multi-level plans render as real nested lists. */
-function parseList(lines: string[], start: number): [Block, number] {
+function parseList(lines: string[], start: number, depth: number): [Block, number] {
   const first = RE_OL.exec(line(lines, start))
   const ordered = first !== null
   const baseIndent = itemIndent(line(lines, start)) ?? 0
@@ -213,8 +236,18 @@ function parseList(lines: string[], start: number): [Block, number] {
     const indent = itemIndent(cur)
 
     if (indent !== null && indent > baseIndent) {
-      // Deeper item: nest it under the item we just added.
-      const [nested, next] = parseList(lines, i)
+      // Deeper item: nest it under the item we just added — unless we are
+      // already at the nesting ceiling, where the text is kept and the extra
+      // structure dropped (see MAX_DEPTH).
+      if (depth >= MAX_DEPTH) {
+        const raw = cur.trim()
+        const owner = items[items.length - 1]
+        if (owner) owner.kids.push({ t: 'text', s: ' ' + raw })
+        else items.push({ kids: [{ t: 'text', s: raw }], children: [] })
+        i++
+        continue
+      }
+      const [nested, next] = parseList(lines, i, depth + 1)
       const owner = items[items.length - 1]
       if (owner) owner.children.push(nested)
       else items.push({ kids: [], children: [nested] })

@@ -221,3 +221,31 @@ test('a realistic reply parses into the expected block sequence', () => {
     'quote',
   ])
 })
+
+// A reply is untrusted input rendered synchronously, and both nesting
+// constructs in the parser recurse once per level. Depth here is bounded only
+// by the text: a model that answers with a wall of `>` markers, or a pasted
+// export with absurd indentation, would otherwise blow the JS stack — a
+// RangeError that takes the whole message view down instead of rendering one
+// slightly-flattened paragraph.
+test('a pathological quote depth is flattened, not fatal', () => {
+  const deep = '>'.repeat(5000) + ' still text'
+  const blocks = parseBlocks(deep)
+  assert.deepEqual(kinds(blocks), ['quote'])
+  assert.match(text((blocks[0] as { kids: Inline[] }).kids), /still text/)
+})
+
+test('a pathological list indent is kept as text, not nested forever', () => {
+  const lines: string[] = []
+  for (let i = 0; i < 400; i++) lines.push(' '.repeat(i) + '- level ' + i)
+  const blocks = parseBlocks(lines.join('\n'))
+  assert.deepEqual(kinds(blocks), ['list'])
+  assert.match(text((blocks[0] as { items: { kids: Inline[] }[] }).items[0]!.kids), /level 0/)
+})
+
+test('nesting below the ceiling still nests', () => {
+  const blocks = parseBlocks(['> outer', '> > inner', '> > > innermost'].join('\n'))
+  assert.deepEqual(kinds(blocks), ['quote'])
+  const outer = blocks[0] as { kids: Block[] }
+  assert.deepEqual(kinds(outer.kids), ['para', 'quote'])
+})

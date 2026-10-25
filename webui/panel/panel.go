@@ -325,19 +325,49 @@ func New(d Deps) http.Handler {
 // maxAPIBodyBytes bounds any mutating API request body. Every JSON decoder
 // in the handlers reads to EOF, so without a cap an authenticated client —
 // or anything past the Bearer check — could stream unbounded memory into
-// the process. 16 MiB covers the largest legitimate payload (a memory file
-// edit or a long task intent) with room to spare; SSE and reads are GETs
-// and pass through untouched.
+// the process. 16 MiB covers the largest legitimate JSON payload (a memory
+// file edit or a long task intent) with room to spare; SSE and reads are GETs
+// and pass through untouched. Uploads carry files, not JSON, and get their own
+// ceiling from bodyLimitFor.
 const maxAPIBodyBytes = 16 << 20
 
+// bodyLimitFor sizes the read cap for one request. A multipart upload is
+// measured in files, and its handler already caps each part; giving it the
+// JSON limit put the middleware's 16 MiB below the handler's own 25 MiB per
+// file, so a 16–25 MiB upload died inside io.Copy and surfaced as "save
+// failed" — an error that points at the disk and not at the limit that fired.
+func bodyLimitFor(path string) int64 {
+	if path == "/api/voice/transcribe" ||
+		(strings.HasPrefix(path, "/api/sessions/") && strings.HasSuffix(path, "/upload")) {
+		return maxUploadBodyBytes
+	}
+	return maxAPIBodyBytes
+}
+
+// readBodyTimeout bounds how long a request body may take to arrive. The size
+// cap alone bounds bytes, not time: a client dribbling a body keeps the
+// connection and its goroutine alive for as long as it likes.
+const readBodyTimeout = 60 * time.Second
+
 // maxRequestBody wraps mutating /api/* requests with a MaxBytesReader so a
-// decode hits a hard bound instead of growing the heap without limit.
+// decode hits a hard bound instead of growing the heap without limit, and with a
+// read deadline so the body cannot arrive arbitrarily slowly.
 func maxRequestBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") && r.Body != nil &&
 			(r.Method == http.MethodPost || r.Method == http.MethodPut ||
 				r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
-			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBodyBytes)
+			r.Body = http.MaxBytesReader(w, r.Body, bodyLimitFor(r.URL.Path))
+			// The deadline is scoped to requests that carry a body: SSE is a
+			// GET and never lands here, which is why it is set per request
+			// rather than as a server-wide ReadTimeout (that one would kill
+			// every long-lived event stream at the deadline). It is cleared
+			// afterwards so a keep-alive connection's next request starts
+			// from a fresh clock.
+			rc := http.NewResponseController(w)
+			if err := rc.SetReadDeadline(time.Now().Add(readBodyTimeout)); err == nil {
+				defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

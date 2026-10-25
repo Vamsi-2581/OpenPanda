@@ -32,7 +32,11 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := h.db.PingContext(ctx); err != nil {
-			dbStatus = "error: " + err.Error()
+			// This endpoint is anonymous, so the probe result is all it may
+			// report: err.Error() carries the database path and the SQL text of
+			// whatever failed, which is not something an unauthenticated caller
+			// gets to read. The detail stays in the process's own logs.
+			dbStatus = "error"
 			healthy = false
 		}
 	} else {

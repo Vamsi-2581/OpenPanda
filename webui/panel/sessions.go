@@ -870,6 +870,10 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 const (
 	maxUploadFileBytes  = 25 << 20  // 25 MiB per file
 	maxUploadTotalBytes = 128 << 20 // 128 MiB per session
+	// maxUploadBodyBytes bounds one multipart request: several files, each of
+	// which the handler caps at maxUploadFileBytes, plus envelope overhead and
+	// slack for the other form fields.
+	maxUploadBodyBytes = 4*maxUploadFileBytes + (1 << 20)
 )
 
 // sessionUploadDir returns the directory a session's uploads live in,
@@ -992,10 +996,18 @@ func (h *handler) uploadSessionFile(w http.ResponseWriter, r *http.Request) {
 		closeErr := dst.Close()
 		if copyErr != nil || closeErr != nil || n > maxUploadFileBytes {
 			_ = os.Remove(filepath.Join(dir, stamped))
-			if n > maxUploadFileBytes {
+			var over *http.MaxBytesError
+			switch {
+			case n > maxUploadFileBytes:
 				writeErr(w, http.StatusRequestEntityTooLarge,
 					fmt.Errorf("file exceeds %d MiB", maxUploadFileBytes>>20))
-			} else {
+			case errors.As(copyErr, &over):
+				// The request as a whole went past the body cap (several files
+				// in one call). Saying "save failed" pointed at the disk for a
+				// limit the client can see and stay under.
+				writeErr(w, http.StatusRequestEntityTooLarge,
+					fmt.Errorf("upload exceeds %d MiB per request", over.Limit>>20))
+			default:
 				writeErr(w, http.StatusInternalServerError, errors.New("save failed"))
 			}
 			return

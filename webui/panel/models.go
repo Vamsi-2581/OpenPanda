@@ -14,8 +14,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/providers"
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // modelEntryJSON is the wire form of one registered (or active) model. The
@@ -183,10 +186,18 @@ func (h *handler) addModel(w http.ResponseWriter, r *http.Request) {
 
 	var mc config.ModelConfig
 	if strings.TrimSpace(req.Provider) == "custom" || strings.TrimSpace(req.Provider) == "" && req.BaseURL != "" {
+		base := strings.TrimSpace(req.BaseURL)
+		// The endpoint is persisted here and dialed later by the daemon, so
+		// it is checked at the moment it enters the config — a refused
+		// address never reaches the file.
+		if err := checkCustomBaseURL(base); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
 		mc = config.ModelConfig{
 			Provider:  "custom",
 			APIType:   normalizeAPIType(req.APIType),
-			BaseURL:   strings.TrimSpace(req.BaseURL),
+			BaseURL:   base,
 			Model:     strings.TrimSpace(req.Model),
 			MaxTokens: req.MaxTokens,
 			APIKey:    strings.TrimSpace(req.APIKey),
@@ -420,8 +431,19 @@ type modelRefRequest struct {
 // resolveModel: alias → registry, provider → catalogue + key. Returns false
 // when nothing usable was named.
 func (h *handler) resolveModelRef(req modelRefRequest) (config.ModelConfig, bool) {
+	mc, err := h.resolveModelRefErr(req)
+	if err != nil {
+		return config.ModelConfig{}, false
+	}
+	return mc, true
+}
+
+// resolveModelRefErr is resolveModelRef with the reason kept, so a caller can
+// tell "you named nothing usable" from "the endpoint you named must not be
+// dialed" — the second is a security refusal and deserves its own message.
+func (h *handler) resolveModelRefErr(req modelRefRequest) (config.ModelConfig, error) {
 	if req.Alias == "" && req.Provider == "" {
-		return h.engineModel(), true
+		return h.engineModel(), nil
 	}
 	if req.Alias != "" {
 		var match config.ModelConfig
@@ -440,34 +462,71 @@ func (h *handler) resolveModelRef(req modelRefRequest) (config.ModelConfig, bool
 			}
 		})
 		if found {
-			return match, true
+			return match, nil
 		}
 	}
 	pid := firstNonEmpty(strings.TrimSpace(req.Provider), strings.TrimSpace(req.Alias))
 	// A custom endpoint carries its wire shape inline — the catalogue entry
 	// is only the marker that the caller owns the fields.
 	if pid == "custom" && strings.TrimSpace(req.BaseURL) != "" {
+		base := strings.TrimSpace(req.BaseURL)
+		if err := checkCustomBaseURL(base); err != nil {
+			return config.ModelConfig{}, err
+		}
 		return config.ModelConfig{
 			Provider: "custom",
 			APIType:  normalizeAPIType(req.APIType),
-			BaseURL:  strings.TrimSpace(req.BaseURL),
+			BaseURL:  base,
 			Model:    strings.TrimSpace(req.Model),
 			APIKey:   strings.TrimSpace(req.APIKey),
-		}, true
+		}, nil
 	}
 	p, ok := providers.Lookup(pid)
 	if !ok {
-		return config.ModelConfig{}, false
+		return config.ModelConfig{}, errUnknownModel
 	}
 	key := strings.TrimSpace(req.APIKey)
 	if key == "" {
 		key = h.findProviderKey(p.ID)
 	}
 	if key == "" && !p.NoAuth {
-		return config.ModelConfig{}, false
+		return config.ModelConfig{}, errUnknownModel
 	}
 	mc, _ := providers.ModelConfig(p.ID, strings.TrimSpace(req.Model), key)
-	return mc, true
+	return mc, nil
+}
+
+// errUnknownModel is the "you named nothing usable" answer — the same text
+// the endpoints have always returned, kept as an error so the caller can
+// tell it apart from an endpoint refusal.
+var errUnknownModel = errors.New("unknown model/provider, or an api_key is required")
+
+// checkCustomBaseURL refuses a model endpoint the daemon must not dial.
+//
+// The console accepts a base_url in the request body and the daemon then
+// talks to it, so a caller who holds the panel token can aim the round trip
+// at the instance metadata service (169.254.169.254) and read the answer
+// back through the console's own "test this model" response. A token leak
+// would then be a cloud-credential leak.
+//
+// A private address stays allowed on purpose: a self-hosted model on the
+// LAN (an Ollama box, a vLLM server) is a normal setup, and the panel
+// already requires a token to get here.
+func checkCustomBaseURL(base string) error {
+	u, err := url.Parse(base)
+	if err != nil {
+		return fmt.Errorf("invalid base_url")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("base_url scheme must be http or https")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("base_url has no host")
+	}
+	if err := security.CheckEndpointHost(u.Hostname(), true); err != nil {
+		return err
+	}
+	return nil
 }
 
 // fetchModels serves POST /api/models/fetch — the provider's remote model
@@ -478,9 +537,9 @@ func (h *handler) fetchModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
 		return
 	}
-	mc, ok := h.resolveModelRef(req)
-	if !ok {
-		writeErr(w, http.StatusBadRequest, errors.New("unknown model/provider, or an api_key is required"))
+	mc, err := h.resolveModelRefErr(req)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	client, err := entry.NewClient(mc)
@@ -510,9 +569,9 @@ func (h *handler) testModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
 		return
 	}
-	mc, ok := h.resolveModelRef(req)
-	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "error": "unknown model/provider, or an api_key is required"})
+	mc, err := h.resolveModelRefErr(req)
+	if err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	client, err := entry.NewClient(mc)

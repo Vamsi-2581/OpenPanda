@@ -304,19 +304,14 @@ func (h *handler) clearProjectApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 // renameProjectMemory moves a project's memory directory. Copy-then-drop rather
-// than move, so a failure leaves the old file intact instead of losing the memory.
+// than move, so a failure leaves the old file intact instead of losing the
+// memory; the store holds its lock across the pair so an entry added mid-rename
+// is neither copied stale nor dropped.
 func (h *handler) renameProjectMemory(oldName, newName string) {
 	if h.projects == nil {
 		return
 	}
-	m, err := h.projects.Load(oldName)
-	if err != nil {
-		return
-	}
-	if err := h.projects.Save(newName, m); err != nil {
-		return
-	}
-	_ = h.projects.Delete(oldName)
+	_ = h.projects.Rename(oldName, newName)
 }
 
 // deleteProject serves DELETE /api/projects/{name}. ?keep_memory=1 leaves the

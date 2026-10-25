@@ -8,9 +8,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/ledger"
@@ -20,6 +22,15 @@ import (
 // fingerprint. One second keeps the web queue feeling live without loading
 // the store.
 const eventsPollInterval = time.Second
+
+// maxEventStreams bounds concurrent SSE connections. Each one costs a goroutine
+// and two tickers for as long as the client stays connected, and the client —
+// a browser tab or a CLI — holds the same token, so without a ceiling a single
+// authenticated caller can hold the process open indefinitely.
+const maxEventStreams = 64
+
+// openEventStreams counts the live connections checked against that ceiling.
+var openEventStreams atomic.Int64
 
 // traceEventTypes is the live-narrative visibility set pushed over SSE as
 // event: trace when the caller opts in with ?trace=1. The first eight are the
@@ -105,6 +116,13 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errNoFlusher)
 		return
 	}
+	if n := openEventStreams.Add(1); n > maxEventStreams {
+		openEventStreams.Add(-1)
+		writeErr(w, http.StatusTooManyRequests,
+			fmt.Errorf("too many event streams (limit %d)", maxEventStreams))
+		return
+	}
+	defer openEventStreams.Add(-1)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")

@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { PandaAscii } from './brand/panda'
-import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, subscribeEvents, type UpdateStatus } from './api/client'
+import { api, clearToken, displayVersion, getToken, onUnauthorized, setToken, type UpdateStatus } from './api/client'
 import { onLocaleChange, t } from './i18n'
-import { useAsync } from './hooks'
+import { useAsync, useChangeSignal } from './hooks'
 import { isSelfNodeUp } from './format/node-status'
 import { navigate, parseHash, type Route } from './nav'
 import { ControlView } from './views/control'
@@ -418,26 +418,23 @@ function SidebarNode() {
 }
 
 /** Pending-approval count for the Queue nav badge — the approval centre's
- *  ambient signal. Refreshes on the SSE change feed so it tracks the board
- *  without polling. */
+ *  ambient signal. Rides the shared event bus: this used to open its own
+ *  /api/events stream, which is exactly the one-connection-per-subscriber
+ *  design hooks.ts replaced (and it doubled the app's steady-state SSE
+ *  connections, against a server that caps them). */
 function useReviewCount(): number {
   const [n, setN] = useState(0)
+  const tick = useChangeSignal()
   useEffect(() => {
-    const ctl = new AbortController()
-    const load = () =>
-      api
-        .tasks({ state: 'review' })
-        .then((ts) => setN(ts.length))
-        .catch(() => {})
-    load()
-    subscribeEvents({
-      signal: ctl.signal,
-      onChange: (ev) => {
-        if (ev.kinds.includes('tasks') || ev.kinds.includes('reconnect')) load()
-      },
-    }).catch(() => {})
-    return () => ctl.abort()
-  }, [])
+    let alive = true
+    api
+      .tasks({ state: 'review' })
+      .then((ts) => alive && setN(ts.length))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [tick])
   return n
 }
 

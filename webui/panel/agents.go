@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/agents"
@@ -36,6 +37,13 @@ type agentJSON struct {
 // version. Some CLIs print their version on stderr or exit non-zero for
 // --version, so a failed probe still counts as installed when the binary
 // resolves.
+//
+// The version half is cached: resolving the path stays live (a LookPath is a
+// handful of stats) while spawning the CLI is what costs, and a Node-based
+// agent spends hundreds of milliseconds starting just to print one line. The
+// card is fetched by the settings page, the workspace, the node list and the
+// team picker, so without a cache one open of the console re-spawns every
+// installed agent several times over.
 func probeAgent(k agents.Known) agentJSON {
 	out := agentJSON{
 		Name:        k.Name,
@@ -57,10 +65,7 @@ func probeAgent(k agents.Known) agentJSON {
 		out.Binary = k.PrimaryBinary()
 		return out
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	version, _ := exec.CommandContext(ctx, out.Path, "--version").Output()
-	out.Version = firstLine(string(version))
+	out.Version, _ = probeVersion(out.Path, false)
 	return out
 }
 
@@ -71,6 +76,62 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	return strings.TrimSpace(s)
+}
+
+// versionTTL bounds how stale a cached version string may be. Long enough that
+// opening the console repeatedly costs one probe, short enough that an upgrade
+// shows up without a restart — and the explicit test button always bypasses it.
+const versionTTL = 5 * time.Minute
+
+// versionCache is keyed by resolved executable path, not by agent name: an
+// agent that was missing from PATH and has since been installed resolves to a
+// path it did not have before, which is a miss by construction. Failures are
+// cached too (empty version plus the error) — a CLI that hangs or exits
+// non-zero on --version is the one most worth not asking again.
+var (
+	versionCacheMu sync.Mutex
+	versionCache   = map[string]versionProbe{}
+)
+
+type versionProbe struct {
+	version string
+	err     error
+	at      time.Time
+}
+
+// probeVersion returns the CLI's --version first line, from cache when fresh.
+// force skips the read cache and always writes the result back, which is how
+// the explicit connectivity test refreshes the roster for the next open.
+//
+// The 5s ceiling is the reason for caching at all: a probe that hits it has
+// cost the caller five seconds to learn "this CLI does not answer", and the
+// roster is fetched by four views.
+func probeVersion(path string, force bool) (string, error) {
+	if !force {
+		versionCacheMu.Lock()
+		cached, ok := versionCache[path]
+		versionCacheMu.Unlock()
+		if ok && time.Since(cached.at) < versionTTL {
+			return cached.version, cached.err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// A --version banner goes to stderr for some CLIs, so both streams count as
+	// output; the error still decides whether the probe is reported as failed.
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	line := firstLine(string(out))
+	var exit *exec.ExitError
+	if line == "" && errors.As(err, &exit) {
+		// Some CLIs print the banner on stderr and exit non-zero; the roster
+		// still wants the line, and the error is kept for the test endpoint.
+		line = firstLine(string(exit.Stderr))
+	}
+
+	versionCacheMu.Lock()
+	versionCache[path] = versionProbe{version: line, err: err, at: time.Now()}
+	versionCacheMu.Unlock()
+	return line, err
 }
 
 // listAgents serves GET /api/agents — the known agent CLIs (from the
@@ -93,6 +154,11 @@ func (h *handler) listAgents(w http.ResponseWriter, r *http.Request) {
 
 // testAgent serves POST /api/agents/{name}/test — a connectivity check for one
 // agent: runs `<cli> --version` and reports the outcome.
+//
+// This one forces a fresh probe: the button exists to ask the CLI itself, and
+// answering from a cache would make a click that just fixed the agent still
+// report the old failure. The result is written back, so the roster reflects it
+// on the next open.
 func (h *handler) testAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	k, ok := agents.ByName(name)
@@ -105,13 +171,10 @@ func (h *handler) testAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"name": name, "ok": false, "error": agent.Binary + " not found on PATH"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, agent.Path, "--version")
-	version, err := cmd.Output()
+	version, err := probeVersion(agent.Path, true)
 	if err != nil {
 		writeJSON(w, map[string]any{"name": name, "ok": false, "path": agent.Path, "error": err.Error()})
 		return
 	}
-	writeJSON(w, map[string]any{"name": name, "ok": true, "path": agent.Path, "version": firstLine(string(version))})
+	writeJSON(w, map[string]any{"name": name, "ok": true, "path": agent.Path, "version": version})
 }
