@@ -275,7 +275,7 @@ jobs:
       - name: Build
         run: go build ./...
       # The internal/core e2e tests poll real loopback websockets on fixed
-      # deadlines, and shared-CPU macOS/Windows runners stall them often enough
+      # ports, and shared-CPU macOS/Windows runners stall them often enough
       # to flake dependabot PRs twice in a row (TestPlanThreeStagesThreeNodes,
       # TestDeclineTerminalizesLocalRow — both green on retry and locally).
       # `--rerun-fails` re-runs only the tests that failed, so a consistent
@@ -283,3 +283,21 @@ jobs:
       # the gate hostage. A data-race failure is never retried.
       - name: Test (rerun only failures — these runners stall the loopback e2e tests)
         run: go run gotest.tools/gotestsum@v1.13.0 --rerun-fails=3 --rerun-fails-abort-on-data-race --packages="./..."
+      # The adapters are Python and run on Windows/macOS nodes, but their
+      # black-box contract suite only ran on the Linux `adapters` job — the
+      # win32 branches in adapters/_harness.py (`.cmd` shim resolution, UTF-8
+      # stdio, taskkill /T) were exercised only through a patched
+      # sys.platform, never on a real Windows host. The suite lays down
+      # platform-appropriate fake CLIs and pins UTF-8 on both sides, so it can
+      # run as-is here.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      # Separate steps rather than one command: setup-python installs `python3`
+      # on Unix and `python` on Windows, and one spelling cannot cover both.
+      - name: Adapter contracts (POSIX)
+        if: runner.os != 'Windows'
+        run: python3 tests/adapter_contract_test.py
+      - name: Adapter contracts (Windows)
+        if: runner.os == 'Windows'
+        run: python tests/adapter_contract_test.py
