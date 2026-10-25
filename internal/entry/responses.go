@@ -145,6 +145,10 @@ type responsesStreamEvent struct {
 	Response    *responsesResponse `json:"response"`
 	Message     string             `json:"message"`
 	Error       *responsesError    `json:"error"`
+	// Refusal rides on response.refusal.done; the .delta events carry it in
+	// Delta. Non-streaming puts the same text in message content of type
+	// "refusal".
+	Refusal string `json:"refusal"`
 }
 
 // buildResponsesRequest assembles one request from the internal turns.
@@ -355,7 +359,7 @@ func (c *Client) completeOnceResponses(ctx context.Context, system string, turns
 func parseResponsesResponse(r *responsesResponse) Response {
 	var out Response
 	var texts, reasoning []string
-	for _, item := range r.Output {
+	for i, item := range r.Output {
 		switch item.Type {
 		case "message":
 			for _, c := range item.Content {
@@ -377,7 +381,7 @@ func parseResponsesResponse(r *responsesResponse) Response {
 				}
 			}
 		case "function_call":
-			out.ToolUses = append(out.ToolUses, responsesToolUse(item.CallID, item.Name, item.Arguments))
+			out.ToolUses = append(out.ToolUses, responsesToolUse(item.CallID, item.Name, item.Arguments, i))
 		}
 	}
 	out.Text = stripThinkingBlock(strings.Join(texts, ""))
@@ -388,9 +392,12 @@ func parseResponsesResponse(r *responsesResponse) Response {
 }
 
 // responsesToolUse builds one internal tool use from a Responses function call.
-func responsesToolUse(callID, name, arguments string) ToolUse {
+// seq disambiguates two parallel calls of the same name when the API omitted
+// call ids: "call_<name>_<seq>" stays unique, where "call_<name>" gave the
+// second call a duplicate id and the next request's input a 400.
+func responsesToolUse(callID, name, arguments string, seq int) ToolUse {
 	if callID == "" {
-		callID = "call_" + name
+		callID = fmt.Sprintf("call_%s_%d", name, seq)
 	}
 	var input map[string]any
 	if s := strings.TrimSpace(arguments); s != "" {
@@ -414,14 +421,18 @@ type responsesCall struct {
 type responsesAccumulator struct {
 	texts     []string
 	reasoning []string
-	calls     map[string]*responsesCall
-	order     []string
-	truncated bool
-	usageIn   int64
-	usageOut  int64
-	// fallback holds the completion envelope's own output items, used only
-	// when no deltas arrived (a proxy that streams the envelopes but not the
-	// incremental events) — never alongside deltas, which would duplicate.
+	// refusal is the model's own statement of why it declined; it is folded
+	// into the answer, because an empty answer reads as a failed generation.
+	refusal         []string
+	refusalStreamed bool
+	calls           map[string]*responsesCall
+	order           []string
+	truncated       bool
+	usageIn         int64
+	usageOut        int64
+	// fallback holds the completion envelope's own output items. Deltas and
+	// the envelope describe the same output, but a proxy may forward only one
+	// of the two, so result() fills each field the deltas left empty.
 	fallback *Response
 }
 
@@ -452,6 +463,27 @@ func (a *responsesAccumulator) feed(ev *responsesStreamEvent, onDelta, onReasoni
 			a.reasoning = append(a.reasoning, ev.Delta)
 			if onReasoning != nil {
 				onReasoning(ev.Delta)
+			}
+		}
+	case "response.refusal.delta":
+		// A refusal is the model's own explanation of why it declined, and
+		// the non-streaming path surfaces it as the answer. Dropping it here
+		// left the streamed result empty, which the caller reads as "the model
+		// said nothing" — and pays for a full replay to hear it again.
+		if ev.Delta != "" {
+			a.refusal = append(a.refusal, ev.Delta)
+			a.refusalStreamed = true
+			if onDelta != nil {
+				onDelta(ev.Delta)
+			}
+		}
+	case "response.refusal.done":
+		// The done event repeats the whole refusal; take it only when no
+		// delta arrived, so the text is never doubled.
+		if !a.refusalStreamed && ev.Refusal != "" {
+			a.refusal = append(a.refusal, ev.Refusal)
+			if onDelta != nil {
+				onDelta(ev.Refusal)
 			}
 		}
 	case "response.output_item.added":
@@ -526,15 +558,29 @@ func (a *responsesAccumulator) noteResponse(r *responsesResponse) {
 		(r.IncompleteDetails != nil && r.IncompleteDetails.Reason == "max_output_tokens") {
 		a.truncated = true
 	}
-	if len(a.texts) == 0 && len(a.reasoning) == 0 && len(a.calls) == 0 && len(r.Output) > 0 {
+	if len(r.Output) > 0 {
 		parsed := parseResponsesResponse(r)
 		a.fallback = &parsed
 	}
 }
 
+// unnamedCall reports the first function call whose name never arrived. A
+// gateway that forwards argument fragments but omits output_item.added leaves
+// nothing to dispatch; dropping the call silently turned a tool round into a
+// plausible "the model said nothing".
+func (a *responsesAccumulator) unnamedCall() string {
+	for _, key := range a.order {
+		if c := a.calls[key]; c != nil && c.name == "" {
+			return key
+		}
+	}
+	return ""
+}
+
 func (a *responsesAccumulator) result() Response {
 	var out Response
-	out.Text = strings.Join(a.texts, "")
+	texts := append(append([]string(nil), a.texts...), a.refusal...)
+	out.Text = strings.Join(texts, "")
 	out.Reasoning = strings.Join(a.reasoning, "")
 	out.Truncated = a.truncated
 	for _, key := range a.order {
@@ -542,12 +588,23 @@ func (a *responsesAccumulator) result() Response {
 		if c == nil || c.name == "" {
 			continue
 		}
-		out.ToolUses = append(out.ToolUses, responsesToolUse(c.id, c.name, c.args.String()))
+		out.ToolUses = append(out.ToolUses,
+			responsesToolUse(c.id, c.name, c.args.String(), len(out.ToolUses)))
 	}
-	if a.fallback != nil && out.Text == "" && out.Reasoning == "" && len(out.ToolUses) == 0 {
-		out.Text = a.fallback.Text
-		out.Reasoning = a.fallback.Reasoning
-		out.ToolUses = a.fallback.ToolUses
+	// Fill per field, not all-or-nothing: text deltas can arrive while the
+	// function-call events do not, and in that shape the old guard skipped the
+	// envelope too, losing the tool call on a round that otherwise looked
+	// successful. Deltas never carry tool calls, so the two cannot duplicate.
+	if a.fallback != nil {
+		if out.Text == "" {
+			out.Text = a.fallback.Text
+		}
+		if out.Reasoning == "" {
+			out.Reasoning = a.fallback.Reasoning
+		}
+		if len(out.ToolUses) == 0 {
+			out.ToolUses = a.fallback.ToolUses
+		}
 	}
 	return out
 }
@@ -632,7 +689,7 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 	var raw strings.Builder
 	sawData := false
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxEventBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		after, ok := strings.CutPrefix(line, "data:")
@@ -659,7 +716,7 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
+		return Response{}, sseReadError(err)
 	}
 	if !sawData {
 		var one responsesResponse
@@ -672,6 +729,15 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 			}
 			return parseResponsesResponse(&one), nil
 		}
+		// Neither SSE nor a JSON body (an HTML error page, a proxy notice):
+		// returning a zero Response with a nil error made the caller read it as
+		// "the model said nothing" and pay for a whole replay to find out.
+		return Response{}, fmt.Errorf("entry: unexpected response body: %.200s",
+			strings.TrimSpace(raw.String()))
+	}
+	if key := acc.unnamedCall(); key != "" && (acc.fallback == nil || len(acc.fallback.ToolUses) == 0) {
+		return Response{}, fmt.Errorf("entry: stream: function call %q carried arguments but no name "+
+			"(upstream sent no output_item.added)", key)
 	}
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil

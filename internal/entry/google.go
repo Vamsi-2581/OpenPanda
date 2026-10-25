@@ -24,9 +24,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // googleRequest is the generateContent request body.
@@ -105,6 +108,11 @@ type googleUsage struct {
 	PromptTokenCount     int64 `json:"promptTokenCount"`
 	CandidatesTokenCount int64 `json:"candidatesTokenCount"`
 	TotalTokenCount      int64 `json:"totalTokenCount"`
+	// ThoughtsTokenCount is thinking spend, which candidatesTokenCount does
+	// not include (only totalTokenCount does). applyGoogleThinking asks for a
+	// 4096-token budget, so ignoring it under-reported output and cost on
+	// exactly the models configured to think.
+	ThoughtsTokenCount int64 `json:"thoughtsTokenCount"`
 }
 
 // googleFeedback reports a prompt blocked before any candidate was produced.
@@ -216,7 +224,18 @@ func turnsToGoogle(turns []Turn) []googleContent {
 			case "tool_result":
 				name := names[b.ToolUseID]
 				if name == "" {
-					name = b.ToolUseID
+					// functionResponse.name must be one the request declared;
+					// the API rejects anything else with 400 INVALID_ARGUMENT,
+					// and a call id is not a name. A history whose tool_use was
+					// trimmed (or built by hand) cannot be expressed as a
+					// function response, so the output rides as text: the model
+					// still sees it and every later turn stays valid.
+					text := b.Content
+					if text == "" {
+						text = "(no output)"
+					}
+					userParts = append(userParts, googlePart{Text: text})
+					continue
 				}
 				userParts = append(userParts, googlePart{FunctionResponse: &googleFunctionResponse{
 					Name:     name,
@@ -288,7 +307,14 @@ func googleURL(base, model string, stream bool) string {
 // belongs in x-goog-api-key alone. A gateway such as OpenCode's Console also
 // accepts a bearer token, so it gets both headers.
 func isGoogleHost(base string) bool {
-	return strings.Contains(strings.ToLower(base), "googleapis.com")
+	// Host equality, not substring: "googleapis.com.example.net" and
+	// "evil-googleapis.com" are somebody else's server, and sending them only
+	// the Google header earned a 401 that looked like a bad key.
+	host := security.EndpointHost(base)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return host == "googleapis.com" || strings.HasSuffix(host, ".googleapis.com")
 }
 
 // completeGoogle runs one non-streaming generateContent call with retry.
@@ -347,7 +373,8 @@ func (c *Client) completeOnceGoogle(ctx context.Context, system string, turns []
 		return Response{}, fmt.Errorf("entry: api error: prompt blocked (%s)", gr.PromptFeedback.BlockReason)
 	}
 	if gr.UsageMetadata != nil {
-		c.addUsage(gr.UsageMetadata.PromptTokenCount, gr.UsageMetadata.CandidatesTokenCount)
+		c.addUsage(gr.UsageMetadata.PromptTokenCount,
+			gr.UsageMetadata.CandidatesTokenCount+gr.UsageMetadata.ThoughtsTokenCount)
 	}
 	return parseGoogleResponse(&gr), nil
 }
@@ -412,8 +439,10 @@ func (a *googleAccumulator) feed(r *googleResponse, onDelta, onReasoning func(st
 		if u.PromptTokenCount > a.usageIn {
 			a.usageIn = u.PromptTokenCount
 		}
-		if u.CandidatesTokenCount > a.usageOut {
-			a.usageOut = u.CandidatesTokenCount
+		// Chunks carry cumulative counters; thinking is billed as output but
+		// sits outside candidatesTokenCount.
+		if out := u.CandidatesTokenCount + u.ThoughtsTokenCount; out > a.usageOut {
+			a.usageOut = out
 		}
 	}
 	for _, cand := range r.Candidates {
@@ -518,7 +547,7 @@ func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, 
 	var raw strings.Builder
 	sawData := false
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxEventBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		after, ok := strings.CutPrefix(line, "data:")
@@ -546,7 +575,7 @@ func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, 
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
+		return Response{}, sseReadError(err)
 	}
 	if !sawData {
 		if err := feedGoogleJSON(strings.TrimSpace(raw.String()), acc, onDelta, onReasoning); err != nil {
@@ -557,10 +586,11 @@ func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, 
 	return acc.result(), nil
 }
 
-// feedGoogleJSON folds a non-SSE generateContent body into the accumulator:
-// an array of chunks (the native streaming shape without alt=sse) or one
-// object. A body that is neither is left alone — the caller's empty result is
-// then reported honestly rather than invented.
+// feedGoogleJSON folds a non-SSE generateContent body into the accumulator: an
+// array of chunks (the native streaming shape without alt=sse) or one object. A
+// body that is neither is reported instead of ignored — an ignored one left an
+// empty result, which the caller reads as "the model said nothing" and pays a
+// whole replay to discover otherwise.
 func feedGoogleJSON(raw string, acc *googleAccumulator, onDelta, onReasoning func(string)) error {
 	if raw == "" {
 		return nil
@@ -576,7 +606,7 @@ func feedGoogleJSON(raw string, acc *googleAccumulator, onDelta, onReasoning fun
 	}
 	var one googleResponse
 	if err := json.Unmarshal([]byte(raw), &one); err != nil {
-		return nil
+		return fmt.Errorf("entry: unexpected response body: %.200s", raw)
 	}
 	return acc.feed(&one, onDelta, onReasoning)
 }

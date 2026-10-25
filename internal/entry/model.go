@@ -25,6 +25,15 @@ import (
 // anthropicVersion is the header required by Anthropic-compatible endpoints.
 const anthropicVersion = "2023-06-01"
 
+// nonStreamingTimeout is the client ceiling for a whole non-streaming request.
+// It used to be 30s, which a thinking model passes easily: Gemini gets a 4096
+// token budget and Responses "high" effort, so the request timed out, the
+// timeout classified as transient, and the same request was paid for again
+// (up to six times) before the caller heard "unreachable". 120s matches the
+// header budget the streaming transport already uses; a request that needs
+// longer than that is streamed, not retried.
+const nonStreamingTimeout = 120 * time.Second
+
 // ErrNoModel is returned by NewClient when the config names neither a
 // built-in provider nor an endpoint: there is no default vendor, so an
 // unconfigured node must fail loudly instead of silently phoning one.
@@ -225,6 +234,10 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		routedBase, routedType = p.EndpointFor(name)
 	}
 	base := model.BaseURL
+	// routeSurface marks a base that came from the catalogue (or was left
+	// empty): only there does the route's dialect describe the endpoint we
+	// will actually call.
+	routeSurface := base == ""
 	if base == "" || (hasProvider && p.OwnsEndpoint(base)) {
 		// An empty base takes the catalogue's. A base that merely restated
 		// one of the provider's own endpoints is rebased onto the surface
@@ -233,6 +246,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		if routedBase != "" {
 			base = routedBase
 		}
+		routeSurface = true
 	}
 	if base == "" {
 		return nil, ErrNoModel
@@ -250,9 +264,10 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 			tuning, hasTuning = d, true
 		}
 	}
-	// A family served on a wire surface this client cannot speak (OpenAI
-	// Responses, Google Generative AI) fails here with the reason, rather
-	// than on every request with an opaque gateway 400.
+	// A family served on a wire surface this client cannot speak (the System
+	// One API behind jev-*) fails here with the reason, rather than on every
+	// request with an opaque gateway 400. Responses and Gemini have their own
+	// implementations, so they are not listed as unsupported.
 	if hasTuning {
 		if reason := tuning.UnsupportedReason(name); reason != "" {
 			return nil, fmt.Errorf("entry: %s via %s: %s", name, tuning.ID, reason)
@@ -295,8 +310,14 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		provType := strings.ToLower(strings.TrimSpace(p.APIType))
 		// The route's dialect wins when the config named none or merely
 		// restated the provider row's default: on an aggregator the model,
-		// not the row, decides which wire surface serves it.
-		if apiType == "" || apiType == provType {
+		// not the row, decides which wire surface serves it. That reasoning
+		// only holds for the provider's own endpoint, which is why the same
+		// routeSurface guard as base applies — on a relay the user pointed
+		// elsewhere the route names a surface we are not calling, and
+		// rewriting the dialect sent an Anthropic body to an
+		// OpenAI-compatible gateway (a 400 whose text says nothing about the
+		// config that caused it).
+		if routeSurface && (apiType == "" || apiType == provType) {
 			if routedType != "" {
 				apiType = strings.ToLower(strings.TrimSpace(routedType))
 			}
@@ -319,7 +340,7 @@ func NewClient(model config.ModelConfig) (*Client, error) {
 		maxTokens:      maxTokens,
 		maxTokensCap:   maxTokensCap,
 		contextWindow:  contextWindow,
-		hc:             &http.Client{Timeout: 30 * time.Second},
+		hc:             &http.Client{Timeout: nonStreamingTimeout, Transport: modelTransport()},
 		hcStream:       &http.Client{Transport: streamTransport()},
 		maxRetry:       resolveMaxRetries(model.MaxRetries),
 		retryBase:      500 * time.Millisecond,
@@ -525,16 +546,26 @@ func isDeepSeekModel(model string) bool {
 // every classify/answer, so that hang stalls the node rather than one request.
 // Once headers arrive, nothing here limits how long the body may take.
 func streamTransport() *http.Transport {
+	t := modelTransport()
+	// The gap between "request sent" and "first header byte" is the
+	// provider's queue + prefill. Generous, but finite.
+	t.ResponseHeaderTimeout = 120 * time.Second
+	return t
+}
+
+// modelTransport is the connection layer every model client shares. The dial
+// guard refuses cloud metadata addresses at connect time: the config checks see
+// a hostname as written, while a name that resolves to 169.254.169.254 — or a
+// redirect to one — only shows up here. Private and loopback addresses stay
+// dialable (a self-hosted model is a normal endpoint).
+func modelTransport() *http.Transport {
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
+		DialContext: security.GuardedDialContext(&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout: 10 * time.Second,
-		// The gap between "request sent" and "first header byte" is the
-		// provider's queue + prefill. Generous, but finite.
-		ResponseHeaderTimeout: 120 * time.Second,
+		}),
+		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		ForceAttemptHTTP2:     true,
@@ -1150,6 +1181,12 @@ func (c *Client) completeWithRetryFn(ctx context.Context, call func() (Response,
 			attempt-- // drop the thinking field and retry off the transport budget
 			continue
 		}
+		if requestTimedOut(err) {
+			// The client's own ceiling elapsed with no response. A replay
+			// spends the same budget on the same request and fails the same
+			// way, so it is reported once instead of paid for repeatedly.
+			return Response{}, err
+		}
 		if !retryable(err) {
 			return Response{}, err
 		}
@@ -1295,6 +1332,13 @@ func retryable(err error) bool {
 	}
 	var te *transientError
 	return errors.As(err, &te)
+}
+
+// requestTimedOut reports that the client's own deadline elapsed (a whole
+// request with no response) rather than that a connection was refused or reset.
+func requestTimedOut(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // defaultMaxRetries is the transport retry budget when model.max_retries is

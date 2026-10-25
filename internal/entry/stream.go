@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,26 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/config"
 )
+
+// sseMaxEventBytes bounds one line of a server-sent-event stream. A single
+// function-call argument block for a large file edit is one event and passes
+// 1 MiB easily; the old ceiling turned that into a "transient" read error, so
+// the identical oversized response was replayed — and billed — until the retry
+// budget ran out, ending in a message about tokens rather than about size.
+const sseMaxEventBytes = 4 << 20
+
+// sseReadError classifies a stream scanner's failure. An over-long event is
+// deterministic (a replay reproduces it byte for byte) and must not be retried;
+// anything else that ends a stream early is a transport drop and stays
+// transient, since streamWithRetry only replays it before the user has seen
+// text.
+func sseReadError(err error) error {
+	if errors.Is(err, bufio.ErrTooLong) {
+		return fmt.Errorf("entry: one stream event exceeds the %d MiB line buffer; "+
+			"the provider sent an event this client cannot parse", sseMaxEventBytes>>20)
+	}
+	return &transientError{err: fmt.Errorf("read stream: %w", err)}
+}
 
 // StreamTurnsWithTools runs one call with a conversation history, an optional
 // tool set, and a text-delta callback: answer text is delivered live as the
@@ -48,8 +69,8 @@ func (c *Client) StreamTurnsWithTools(ctx context.Context, system string, turns 
 // never retried. Delivery is judged by the deltaGuard, so a structured output
 // whose deltas were suppressed still counts as unseen and stays retryable.
 func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onReasoning func(string)) (Response, error), onDelta func(string), onReasoning func(string)) (Response, error) {
-	guard := newDeltaGuard(onDelta, onReasoning)
 	var lastErr error
+	delivered := false
 	noBackoff := false
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 && !noBackoff {
@@ -62,6 +83,14 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 			}
 		}
 		noBackoff = false
+		// One guard per attempt: its shape decision and the bytes it is
+		// holding back describe the response being streamed right now.
+		// Sharing one across attempts let a first response that opened on
+		// '{' — judged structured, then dropped mid-stream — suppress every
+		// delta of the retry too, so the answer arrived in one silent burst
+		// at the end. delivered stays outside: what the user has seen is
+		// cumulative across the call.
+		guard := newDeltaGuard(onDelta, onReasoning)
 		resp, err := stream(guard.on, guard.onReason)
 		if err == nil {
 			// The accumulators join every raw delta — including inlined
@@ -72,7 +101,8 @@ func (c *Client) streamWithRetry(ctx context.Context, stream func(onDelta, onRea
 			return resp, nil
 		}
 		lastErr = err
-		if guard.delivered || ctx.Err() != nil || !retryable(err) {
+		delivered = delivered || guard.delivered
+		if delivered || ctx.Err() != nil || !retryable(err) {
 			break
 		}
 		// A dead link is not a failed attempt: wait for it and replay at once
@@ -545,7 +575,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 
 	acc := &anthAccumulator{blocks: map[int]*ContentBlock{}, rawArgs: map[int]*strings.Builder{}}
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxEventBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if after, ok := strings.CutPrefix(line, "data:"); ok {
@@ -577,9 +607,7 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		// A mid-stream transport drop (unexpected EOF / reset) is transient;
-		// streamWithRetry only replays it when nothing was delivered yet.
-		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
+		return Response{}, sseReadError(err)
 	}
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
@@ -737,7 +765,7 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 
 	acc := &oaiAccumulator{calls: map[int]oaiToolCall{}}
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), sseMaxEventBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if after, ok := strings.CutPrefix(line, "data:"); ok {
@@ -759,9 +787,7 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		// A mid-stream transport drop (unexpected EOF / reset) is transient;
-		// streamWithRetry only replays it when nothing was delivered yet.
-		return Response{}, &transientError{err: fmt.Errorf("read stream: %w", err)}
+		return Response{}, sseReadError(err)
 	}
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
