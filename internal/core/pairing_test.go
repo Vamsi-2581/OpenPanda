@@ -110,13 +110,13 @@ func TestPairHandshakeDeliversSecret(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	srv := newCore(t, "pair-host", "127.0.0.1:18010")
+	srv := newCore(t, "pair-host")
 	if err := srv.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListen(t, ctx, srv, "127.0.0.1:18010")
+	srvAddr := startListen(t, ctx, srv, "127.0.0.1:0")
 
-	cli := dialPair(t, "127.0.0.1:18010")
+	cli := dialPair(t, srvAddr)
 	defer cli.ws.Close()
 	cli.awaitReady(t)
 
@@ -169,13 +169,13 @@ func TestPairRejectedByOperator(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	srv := newCore(t, "pair-host", "127.0.0.1:18011")
+	srv := newCore(t, "pair-host")
 	if err := srv.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListen(t, ctx, srv, "127.0.0.1:18011")
+	srvAddr := startListen(t, ctx, srv, "127.0.0.1:0")
 
-	cli := dialPair(t, "127.0.0.1:18011")
+	cli := dialPair(t, srvAddr)
 	defer cli.ws.Close()
 	cli.awaitReady(t)
 
@@ -204,17 +204,17 @@ func TestPairHelloOnBoundConnRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	a := newCore(t, "pair-a", "127.0.0.1:18012")
-	b := newCore(t, "pair-b", "127.0.0.1:18013")
+	a := newCore(t, "pair-a")
+	b := newCore(t, "pair-b")
 	if err := a.Register(ctx); err != nil {
 		t.Fatalf("register a: %v", err)
 	}
 	if err := b.Register(ctx); err != nil {
 		t.Fatalf("register b: %v", err)
 	}
-	startListen(t, ctx, a, "127.0.0.1:18012")
-	startListen(t, ctx, b, "127.0.0.1:18013")
-	if err := a.DialPeer(ctx, "127.0.0.1:18013"); err != nil {
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	waitPeer(t, a, "pair-b")

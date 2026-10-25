@@ -54,7 +54,7 @@ func TestResourceProfileCrossesTheWire(t *testing.T) {
 	pi.SetWorkDir(t.TempDir())
 	win.SetWorkDir(t.TempDir())
 
-	startPair(t, ctx, pi, win, "127.0.0.1:17994", "127.0.0.1:17995")
+	startPair(t, ctx, pi, win)
 
 	// The peer's declared hardware arrived with its capability summary.
 	nodes := pi.onlineEmployees(ctx)

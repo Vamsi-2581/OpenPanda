@@ -85,7 +85,7 @@ func TestChildResourceKeys(t *testing.T) {
 func TestEnqueueAdoptsScopeAndIsolate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	c := newCore(t, "enqueue-scope", "127.0.0.1:17943")
+	c := newCore(t, "enqueue-scope")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}

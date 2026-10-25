@@ -36,7 +36,7 @@ func actuatorCard(id string) ledger.Card {
 	}
 }
 
-func newCoreWithActuator(t *testing.T, id, addr string) *Core {
+func newCoreWithActuator(t *testing.T, id string) *Core {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("actuator e2e uses /bin/echo, a POSIX fixture")
@@ -56,7 +56,7 @@ const echoServoSpec = `{"action_spec":{"target_actuator":"hardware:echo_servo","
 // its stdout is the proof.
 func TestActuatorTaskExecutesDriverLocally(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithActuator(t, "act-local", "")
+	c := newCoreWithActuator(t, "act-local")
 
 	task, result, err := c.SubmitLocal(ctx, TaskInput{
 		Title:       "turn servo",
@@ -87,9 +87,9 @@ func TestActuatorTaskCrossDevice(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	root := newCore(t, "act-root", "127.0.0.1:18210")
-	leaf := newCoreWithActuator(t, "act-leaf", "127.0.0.1:18211")
-	startPair(t, ctx, root, leaf, "127.0.0.1:18210", "127.0.0.1:18211")
+	root := newCore(t, "act-root")
+	leaf := newCoreWithActuator(t, "act-leaf")
+	startPair(t, ctx, root, leaf)
 
 	task, result, err := root.Submit(ctx, TaskInput{
 		Title:       "turn servo",
@@ -133,7 +133,7 @@ func TestActuatorTaskCrossDevice(t *testing.T) {
 // spec's parameters.
 func TestActuatorTaskSpecMismatchRefuses(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithActuator(t, "act-mismatch", "")
+	c := newCoreWithActuator(t, "act-mismatch")
 
 	marker := filepath.Join(t.TempDir(), "ran")
 	spec := `{"action_spec":{"target_actuator":"hardware:other","action":"rotate","parameters":{"angle":90,"m":"` + marker + `"}}}`
@@ -158,7 +158,7 @@ func TestActuatorTaskSpecMismatchRefuses(t *testing.T) {
 // names the missing parameter instead of executing literal braces.
 func TestActuatorTaskMissingParamFails(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithActuator(t, "act-noparam", "")
+	c := newCoreWithActuator(t, "act-noparam")
 
 	task, result, err := c.SubmitLocal(ctx, TaskInput{
 		Title:       "no angle",
@@ -216,7 +216,7 @@ func TestActuatorSpecOnNonActuatorPlanFailsClosed(t *testing.T) {
 // TestLockActuatorSerializes pins the primitive behind the run()-level
 // device lock: same actuator id blocks, a different id does not.
 func TestLockActuatorSerializes(t *testing.T) {
-	c := newCoreWithActuator(t, "act-lock", "")
+	c := newCoreWithActuator(t, "act-lock")
 	release := c.lockActuator("hardware:echo_servo")
 	acquired := make(chan struct{})
 	go func() {

@@ -17,7 +17,7 @@ import (
 // task with detail, execute it via a native ability, and observe done + result.
 func TestSubmitLocalRunsNative(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "local-native", "", ledger.NativeAbility{
+	c := newCoreWithNative(t, "local-native", ledger.NativeAbility{
 		ID: "sys:echo", Command: "echo", Args: []string{"hello"},
 	})
 
@@ -61,7 +61,7 @@ func TestSubmitLocalRunsNative(t *testing.T) {
 // is failed (terminal), not left stuck in the queue.
 func TestSubmitLocalNoCapability(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "local-none", "")
+	c := newCore(t, "local-none")
 
 	task, _, err := c.SubmitLocal(ctx, TaskInput{
 		Title:       "unroutable",
@@ -110,7 +110,7 @@ func TestSetDetailRoundTrip(t *testing.T) {
 func TestSubmitKeepsFileTaskLocalWhenCapable(t *testing.T) {
 	ctx := context.Background()
 	localEcho := ledger.NativeAbility{ID: "code:edit", Command: "echo", Args: []string{"local done"}}
-	c := newCoreWithNative(t, "local-node", "", localEcho)
+	c := newCoreWithNative(t, "local-node", localEcho)
 
 	// Register a peer in ledger that has much higher capacity, which would otherwise win the score
 	peerCard := ledger.Card{
@@ -149,7 +149,7 @@ func TestSubmitKeepsFileTaskLocalWhenCapable(t *testing.T) {
 
 func TestSubmitFallsBackToDTNWhenTargetNonLive(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "local-node", "")
+	c := newCore(t, "local-node")
 
 	peerCard := ledger.Card{
 		Device:        "remote-worker",
@@ -191,7 +191,7 @@ func TestSubmitFallsBackToDTNWhenTargetNonLive(t *testing.T) {
 // long task that was provably alive.
 func TestWaitRemoteResultHonoursRenewedLease(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "origin", "")
+	c := newCore(t, "origin")
 	c.mu.Lock()
 	c.leaseTimeout = 900 * time.Millisecond
 	c.mu.Unlock()
@@ -238,7 +238,7 @@ func TestWaitRemoteResultHonoursRenewedLease(t *testing.T) {
 // returns a timeout — a dead executor cannot wedge the caller either.
 func TestWaitRemoteResultExpiresLapsedLease(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "origin", "")
+	c := newCore(t, "origin")
 	c.mu.Lock()
 	c.leaseTimeout = 900 * time.Millisecond
 	c.mu.Unlock()

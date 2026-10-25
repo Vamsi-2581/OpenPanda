@@ -25,7 +25,7 @@ func TestRemoteReviewStatePropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-review-wire", "127.0.0.1:17936")
+	entry := newCore(t, "entry-review-wire")
 	worker := newSuperviseCore(t, "worker-review-wire", 1)
 	worker.SetWorkDir(t.TempDir())
 	worker.SetSuperviseRounds(1)
@@ -34,7 +34,7 @@ func TestRemoteReviewStatePropagates(t *testing.T) {
 	}))
 	var calls atomic.Int32
 	worker.router.SetAdapterRunner(agentRunner(&calls))
-	startPair(t, ctx, entry, worker, "127.0.0.1:17936", "127.0.0.1:17937")
+	startPair(t, ctx, entry, worker)
 
 	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-review-wire", "review-wire-1", bus.TaskDelegatePayload{
 		TaskID: "review-wire-task", Title: "long task", Intent: "finish a multi-step change",
@@ -78,12 +78,12 @@ func TestRemoteResumeApprovedReRunsOnExecutor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-resume-wire", "127.0.0.1:17938")
+	entry := newCore(t, "entry-resume-wire")
 	worker := newSuperviseCore(t, "worker-resume-wire", 2)
 	worker.SetWorkDir(t.TempDir())
 	var calls atomic.Int32
 	worker.router.SetAdapterRunner(agentRunner(&calls))
-	startPair(t, ctx, entry, worker, "127.0.0.1:17938", "127.0.0.1:17939")
+	startPair(t, ctx, entry, worker)
 
 	// Unauthorized submit: the entry cannot match code:modify locally, so the
 	// task forwards to the worker, whose tier-2 gate refuses before the agent
@@ -137,12 +137,12 @@ func TestRemoteResumeAfterDelegatorRestart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entryA := newCore(t, "entry-restart-11111111", "127.0.0.1:17945")
+	entryA := newCore(t, "entry-restart-11111111")
 	worker := newSuperviseCore(t, "worker-restart-wire", 2)
 	worker.SetWorkDir(t.TempDir())
 	var calls atomic.Int32
 	worker.router.SetAdapterRunner(agentRunner(&calls))
-	startPair(t, ctx, entryA, worker, "127.0.0.1:17945", "127.0.0.1:17946")
+	_, workerAddr := startPair(t, ctx, entryA, worker)
 
 	task, _, err := entryA.Submit(ctx, TaskInput{
 		Title: "restart remote approval", Intent: "edit files", Requires: []string{"code:modify"},
@@ -157,7 +157,7 @@ func TestRemoteResumeAfterDelegatorRestart(t *testing.T) {
 	entryB := NewCore(entryA.db, "entry-restart-22222222", entryA.card, 5, verboseTestLogger(), config.ModelConfig{})
 	entryB.SetWorkDir(t.TempDir())
 	entryB.SetSharedSecret(testSharedSecret)
-	if err := entryB.DialPeer(ctx, "127.0.0.1:17946"); err != nil {
+	if err := entryB.DialPeer(ctx, workerAddr); err != nil {
 		t.Fatalf("replacement dial worker: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -184,7 +184,7 @@ func TestRemoteResumeCancellationConvergesBothCopies(t *testing.T) {
 	rootCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
 	defer stop()
 
-	entry := newCore(t, "entry-resume-cancel", "127.0.0.1:17943")
+	entry := newCore(t, "entry-resume-cancel")
 	worker := newSuperviseCore(t, "worker-resume-cancel", 2)
 	worker.SetWorkDir(t.TempDir())
 	started := make(chan struct{})
@@ -194,7 +194,7 @@ func TestRemoteResumeCancellationConvergesBothCopies(t *testing.T) {
 		<-ctx.Done()
 		return commander.AgentResult{OK: false, Stderr: ctx.Err().Error(), ExitCode: 1}
 	})
-	startPair(t, rootCtx, entry, worker, "127.0.0.1:17943", "127.0.0.1:17944")
+	startPair(t, rootCtx, entry, worker)
 
 	task, _, err := entry.Submit(rootCtx, TaskInput{
 		Title: "cancel resumed task", Intent: "edit files", Requires: []string{"code:modify"},
@@ -244,14 +244,14 @@ func TestRemoteResumeRejectedFromNonDelegator(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-resume-guard", "127.0.0.1:17940")
+	entry := newCore(t, "entry-resume-guard")
 	worker := newSuperviseCore(t, "worker-resume-guard", 2)
 	worker.SetWorkDir(t.TempDir())
-	stranger := newCore(t, "stranger-resume-guard", "127.0.0.1:17941")
+	stranger := newCore(t, "stranger-resume-guard")
 	var calls atomic.Int32
 	worker.router.SetAdapterRunner(agentRunner(&calls))
-	startPair(t, ctx, entry, worker, "127.0.0.1:17940", "127.0.0.1:17942")
-	if err := stranger.DialPeer(ctx, "127.0.0.1:17942"); err != nil {
+	_, workerAddr := startPair(t, ctx, entry, worker)
+	if err := stranger.DialPeer(ctx, workerAddr); err != nil {
 		t.Fatalf("stranger dial worker: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -297,11 +297,11 @@ func TestSubmitCancellationConvergesBothCopies(t *testing.T) {
 	rootCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
 	defer stop()
 
-	entry := newCore(t, "entry-submit-cancel", "127.0.0.1:17987")
-	worker := newCoreWithNative(t, "worker-submit-cancel", "127.0.0.1:17988", ledger.NativeAbility{
+	entry := newCore(t, "entry-submit-cancel")
+	worker := newCoreWithNative(t, "worker-submit-cancel", ledger.NativeAbility{
 		ID: "sys:sleep", Command: "sleep", Args: []string{"60"},
 	})
-	startPair(t, rootCtx, entry, worker, "127.0.0.1:17987", "127.0.0.1:17988")
+	startPair(t, rootCtx, entry, worker)
 
 	submitCtx, cancel := context.WithCancel(rootCtx)
 	type outcome struct {
@@ -571,7 +571,7 @@ func TestRemoteResultFencesStaleAttempt(t *testing.T) {
 }
 
 func TestCapabilitySummaryCarriesNodeIdentity(t *testing.T) {
-	c := newCore(t, "vm-node", "127.0.0.1:17986")
+	c := newCore(t, "vm-node")
 	c.card.NodeKind = "vm"
 	c.card.NodeIdentity = "vm-test-identity"
 	s := c.summary()
@@ -587,8 +587,8 @@ func TestTwoNodeProtocol(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry", "127.0.0.1:17836")
-	worker := newCore(t, "worker", "127.0.0.1:17837")
+	entry := newCore(t, "entry")
+	worker := newCore(t, "worker")
 
 	if err := entry.Register(ctx); err != nil {
 		t.Fatalf("register entry: %v", err)
@@ -597,10 +597,10 @@ func TestTwoNodeProtocol(t *testing.T) {
 		t.Fatalf("register worker: %v", err)
 	}
 
-	startListen(t, ctx, entry, "127.0.0.1:17836")
-	startListen(t, ctx, worker, "127.0.0.1:17837")
+	startListen(t, ctx, entry, "127.0.0.1:0")
+	workerAddr := startListen(t, ctx, worker, "127.0.0.1:0")
 
-	if err := entry.DialPeer(ctx, "127.0.0.1:17837"); err != nil {
+	if err := entry.DialPeer(ctx, workerAddr); err != nil {
 		t.Fatalf("dial worker: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -657,9 +657,9 @@ func TestDelegatePersistsDetail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-detail", "127.0.0.1:17866")
-	worker := newCore(t, "worker-detail", "127.0.0.1:17867")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17866", "127.0.0.1:17867")
+	entry := newCore(t, "entry-detail")
+	worker := newCore(t, "worker-detail")
+	startPair(t, ctx, entry, worker)
 
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-detail", "m1", bus.TaskDelegatePayload{
 		TaskID: "detail-task", Title: "refactor", ContextType: "file",
@@ -687,7 +687,7 @@ func TestDelegatePersistsDetail(t *testing.T) {
 	t.Fatalf("worker did not persist detail within deadline")
 }
 
-func newCore(t *testing.T, id, addr string) *Core {
+func newCore(t *testing.T, id string) *Core {
 	t.Helper()
 	db := openTestDB(t)
 	card := ledger.Card{
@@ -724,7 +724,7 @@ func waitState(t *testing.T, ctx context.Context, store *TaskStore, taskID, want
 // follow-up leaves behind: the worker executed and parked an AcceptWork
 // review, and the delegator's copy mirrors it over the wire. Returns the task
 // id both copies share.
-func parkReviewPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr, workerAddr string) string {
+func parkReviewPair(t *testing.T, ctx context.Context, entry, worker *Core) string {
 	t.Helper()
 	worker.SetWorkDir(t.TempDir())
 	worker.SetSuperviseRounds(1)
@@ -733,7 +733,7 @@ func parkReviewPair(t *testing.T, ctx context.Context, entry, worker *Core, entr
 	}))
 	var calls atomic.Int32
 	worker.router.SetAdapterRunner(agentRunner(&calls))
-	startPair(t, ctx, entry, worker, entryAddr, workerAddr)
+	startPair(t, ctx, entry, worker)
 
 	task, _, err := entry.Submit(ctx, TaskInput{
 		Title: "long task", Project: "proj", ContextType: "command",
@@ -765,9 +765,9 @@ func TestRemoteAcceptWorkMirrorsFromDelegator(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-accept-wire", "127.0.0.1:17940")
+	entry := newCore(t, "entry-accept-wire")
 	worker := newSuperviseCore(t, "worker-accept-wire", 1)
-	taskID := parkReviewPair(t, ctx, entry, worker, "127.0.0.1:17940", "127.0.0.1:17941")
+	taskID := parkReviewPair(t, ctx, entry, worker)
 
 	final, _, err := entry.ResumeApproved(ctx, taskID)
 	if err != nil {
@@ -786,9 +786,9 @@ func TestRemoteAcceptWorkMirrorsFromExecutor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-accept-rev", "127.0.0.1:17942")
+	entry := newCore(t, "entry-accept-rev")
 	worker := newSuperviseCore(t, "worker-accept-rev", 1)
-	taskID := parkReviewPair(t, ctx, entry, worker, "127.0.0.1:17942", "127.0.0.1:17943")
+	taskID := parkReviewPair(t, ctx, entry, worker)
 
 	final, _, err := worker.ResumeApproved(ctx, taskID)
 	if err != nil {
@@ -807,8 +807,8 @@ func TestRemoteAcceptWorkMirrorsFromExecutor(t *testing.T) {
 // and the periodic sweep delivers it once the peer is back.
 func TestParkedAcceptFlushesOnReconnect(t *testing.T) {
 	ctx := context.Background()
-	entry := newCore(t, "entry-accept-park", "127.0.0.1:17947")
-	worker := newCore(t, "worker-accept-park", "127.0.0.1:17948")
+	entry := newCore(t, "entry-accept-park")
+	worker := newCore(t, "worker-accept-park")
 	taskID := "accept-park-task"
 
 	drive := func(c *Core, step string, fn func() error) {
@@ -860,7 +860,7 @@ func TestParkedAcceptFlushesOnReconnect(t *testing.T) {
 	}
 
 	// The worker comes back; the periodic sweep must deliver the accept.
-	startPair(t, ctx, entry, worker, "127.0.0.1:17947", "127.0.0.1:17948")
+	startPair(t, ctx, entry, worker)
 	entry.sweepOutboxes(ctx)
 	waitState(t, ctx, worker.store, taskID, StateDone)
 
@@ -878,7 +878,7 @@ func TestParkedAcceptFlushesOnReconnect(t *testing.T) {
 // close the parked copy — the mirror of the cancel/resume authz rule.
 func TestAcceptFromUnauthorizedPeerIgnored(t *testing.T) {
 	ctx := context.Background()
-	worker := newCore(t, "worker-accept-authz", "")
+	worker := newCore(t, "worker-accept-authz")
 
 	drive := func(step string, fn func() error) {
 		t.Helper()

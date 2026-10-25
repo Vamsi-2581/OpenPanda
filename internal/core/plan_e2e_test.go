@@ -42,14 +42,14 @@ func TestPlanThreeStagesThreeNodes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	pi := newCoreWithNative(t, "pi", "127.0.0.1:17991", ledger.NativeAbility{
+	pi := newCoreWithNative(t, "pi", ledger.NativeAbility{
 		ID: "sys:report", Command: "sh", Args: []string{"-c", "cat metrics.txt"}, Tier: 1,
 	})
-	mac := newCoreWithNative(t, "mac", "127.0.0.1:17992", ledger.NativeAbility{
+	mac := newCoreWithNative(t, "mac", ledger.NativeAbility{
 		ID: "dev:code", Command: "sh",
 		Args: []string{"-c", "printf 'import torch\\nprint(1)\\n' > train.py"}, Tier: 1,
 	})
-	win := newCoreWithNative(t, "win", "127.0.0.1:17993", ledger.NativeAbility{
+	win := newCoreWithNative(t, "win", ledger.NativeAbility{
 		ID: "gpu:train", Command: "sh",
 		Args: []string{"-c", "wc -c < train.py | tr -d ' \t' > metrics.txt"}, Tier: 1,
 	})
@@ -71,11 +71,11 @@ func TestPlanThreeStagesThreeNodes(t *testing.T) {
 	must(pi.Register(ctx))
 	must(mac.Register(ctx))
 	must(win.Register(ctx))
-	startListen(t, ctx, pi, "127.0.0.1:17991")
-	startListen(t, ctx, mac, "127.0.0.1:17992")
-	startListen(t, ctx, win, "127.0.0.1:17993")
-	must(pi.DialPeer(ctx, "127.0.0.1:17992"))
-	must(pi.DialPeer(ctx, "127.0.0.1:17993"))
+	startListen(t, ctx, pi, "127.0.0.1:0")
+	macAddr := startListen(t, ctx, mac, "127.0.0.1:0")
+	winAddr := startListen(t, ctx, win, "127.0.0.1:0")
+	must(pi.DialPeer(ctx, macAddr))
+	must(pi.DialPeer(ctx, winAddr))
 	waitPeer(t, pi, "mac")
 	waitPeer(t, pi, "win")
 	waitPeer(t, mac, "pi")
@@ -230,7 +230,7 @@ func TestAdvancePlanPropagatesFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pi := newCoreWithNative(t, "pi", "127.0.0.1:17999", ledger.NativeAbility{
+	pi := newCoreWithNative(t, "pi", ledger.NativeAbility{
 		ID: "sys:report", Command: "echo", Args: []string{"ok"}, Tier: 1,
 	})
 	if err := pi.Register(ctx); err != nil {
@@ -283,7 +283,7 @@ func TestSpawnChildTaskSubMain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	core := newCoreWithNative(t, "mac", "127.0.0.1:17994", ledger.NativeAbility{
+	core := newCoreWithNative(t, "mac", ledger.NativeAbility{
 		ID: "dev:code", Command: "true", Tier: 1,
 	})
 	if err := core.Register(ctx); err != nil {
@@ -329,8 +329,8 @@ func TestPlanStageNodePin(t *testing.T) {
 	}
 	// Both nodes advertise dev:code: scored routing alone would keep the
 	// stage local (localBias); only the pin sends it to mac.
-	pi := newCoreWithNative(t, "pi", "127.0.0.1:17995", ability)
-	mac := newCoreWithNative(t, "mac", "127.0.0.1:17996", ability)
+	pi := newCoreWithNative(t, "pi", ability)
+	mac := newCoreWithNative(t, "mac", ability)
 	for _, c := range []*Core{pi, mac} {
 		withArtifactPool(t, c)
 		c.SetWorkDir(t.TempDir())
@@ -341,9 +341,9 @@ func TestPlanStageNodePin(t *testing.T) {
 	if err := mac.Register(ctx); err != nil {
 		t.Fatalf("register mac: %v", err)
 	}
-	startListen(t, ctx, pi, "127.0.0.1:17995")
-	startListen(t, ctx, mac, "127.0.0.1:17996")
-	if err := pi.DialPeer(ctx, "127.0.0.1:17996"); err != nil {
+	startListen(t, ctx, pi, "127.0.0.1:0")
+	macAddr := startListen(t, ctx, mac, "127.0.0.1:0")
+	if err := pi.DialPeer(ctx, macAddr); err != nil {
 		t.Fatalf("dial mac: %v", err)
 	}
 	waitPeer(t, pi, "mac")
@@ -386,7 +386,7 @@ func TestPlanStageNodePin(t *testing.T) {
 // through its dependents. The origin's own row (chain [self]) still releases.
 func TestPlanSweepSkipsDelegatedStageCopy(t *testing.T) {
 	ctx := context.Background()
-	worker := newCore(t, "worker-sweep", "127.0.0.1:17977")
+	worker := newCore(t, "worker-sweep")
 
 	must := func(err error) {
 		t.Helper()
@@ -427,8 +427,8 @@ func TestPlanPinnedStageWithSweepRunning(t *testing.T) {
 	ability := ledger.NativeAbility{
 		ID: "dev:code", Command: "sh", Args: []string{"-c", "true"}, Tier: 1,
 	}
-	pi := newCoreWithNative(t, "pi-sweep", "127.0.0.1:17994", ability)
-	mac := newCoreWithNative(t, "mac-sweep", "127.0.0.1:17995", ability)
+	pi := newCoreWithNative(t, "pi-sweep", ability)
+	mac := newCoreWithNative(t, "mac-sweep", ability)
 	for _, c := range []*Core{pi, mac} {
 		withArtifactPool(t, c)
 		c.SetWorkDir(t.TempDir())
@@ -439,9 +439,9 @@ func TestPlanPinnedStageWithSweepRunning(t *testing.T) {
 	if err := mac.Register(ctx); err != nil {
 		t.Fatalf("register mac: %v", err)
 	}
-	startListen(t, ctx, pi, "127.0.0.1:17994")
-	startListen(t, ctx, mac, "127.0.0.1:17995")
-	if err := pi.DialPeer(ctx, "127.0.0.1:17995"); err != nil {
+	startListen(t, ctx, pi, "127.0.0.1:0")
+	macAddr := startListen(t, ctx, mac, "127.0.0.1:0")
+	if err := pi.DialPeer(ctx, macAddr); err != nil {
 		t.Fatalf("dial mac: %v", err)
 	}
 	waitPeer(t, pi, "mac-sweep")
@@ -487,7 +487,7 @@ func TestPlanStageNodePinUnknown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pi := newCoreWithNative(t, "pi", "127.0.0.1:17997", ledger.NativeAbility{
+	pi := newCoreWithNative(t, "pi", ledger.NativeAbility{
 		ID: "dev:code", Command: "true", Tier: 1,
 	})
 	if err := pi.Register(ctx); err != nil {
@@ -520,7 +520,7 @@ func TestQueueKeysReleaseReacquire(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	c := newCore(t, "rel-reacq", "127.0.0.1:17978")
+	c := newCore(t, "rel-reacq")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}

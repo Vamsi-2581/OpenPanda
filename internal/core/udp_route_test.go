@@ -19,7 +19,7 @@ import (
 // "delivered" outbox row for deletion — and keeps the punch-maintain loop
 // from ever re-offering.
 func TestUDPRouteExpiry(t *testing.T) {
-	c := newCoreWithNative(t, "udp-exp", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "udp-exp", ledger.NativeAbility{ID: "x", Command: "true"})
 	defer c.Shutdown(context.Background())
 
 	live := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5001}
@@ -58,7 +58,7 @@ func TestUDPRouteExpiry(t *testing.T) {
 // an alien address must not keep the old binding alive — sends would still
 // go to the dead port.
 func TestUDPKeepaliveRefreshesRoute(t *testing.T) {
-	c := newCoreWithNative(t, "udp-ka", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "udp-ka", ledger.NativeAbility{ID: "x", Command: "true"})
 	defer c.Shutdown(context.Background())
 
 	ep := &net.UDPAddr{IP: net.ParseIP("10.0.0.9"), Port: 7777}
@@ -92,7 +92,7 @@ func TestUDPKeepaliveRefreshesRoute(t *testing.T) {
 // "no peer" — silently dropping the answer on NAT-bound links.
 func TestReplyFallsBackToUDP(t *testing.T) {
 	ctx := context.Background()
-	sender := newCoreWithNative(t, "rep-src", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	sender := newCoreWithNative(t, "rep-src", ledger.NativeAbility{ID: "x", Command: "true"})
 	if err := sender.ListenUDP(ctx, "127.0.0.1:0", nil); err != nil {
 		t.Fatal(err)
 	}

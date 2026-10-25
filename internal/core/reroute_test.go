@@ -25,9 +25,9 @@ func TestDeclineReroutesToAlternateNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	root := newCore(t, "root", "127.0.0.1:17931")
+	root := newCore(t, "root")
 
-	mkLeaf := func(id, addr string, maxConcurrent int) *Core {
+	mkLeaf := func(id string, maxConcurrent int) *Core {
 		db := openTestDB(t)
 		card := ledger.Card{
 			Device:        id,
@@ -42,8 +42,8 @@ func TestDeclineReroutesToAlternateNode(t *testing.T) {
 		c.SetSharedSecret(testSharedSecret)
 		return c
 	}
-	leafA := mkLeaf("leaf-a", "127.0.0.1:17932", 1)
-	leafB := mkLeaf("leaf-b", "127.0.0.1:17933", 3)
+	leafA := mkLeaf("leaf-a", 1)
+	leafB := mkLeaf("leaf-b", 3)
 
 	// Occupy leafA's only slot so it declines on capacity.
 	busy, err := leafA.store.Create(ctx, "", "", "busy", "leaf-a", []string{"leaf-a"})
@@ -69,11 +69,11 @@ func TestDeclineReroutesToAlternateNode(t *testing.T) {
 	must(root.Register(ctx))
 	must(leafA.Register(ctx))
 	must(leafB.Register(ctx))
-	startListen(t, ctx, root, "127.0.0.1:17931")
-	startListen(t, ctx, leafA, "127.0.0.1:17932")
-	startListen(t, ctx, leafB, "127.0.0.1:17933")
-	must(root.DialPeer(ctx, "127.0.0.1:17932"))
-	must(root.DialPeer(ctx, "127.0.0.1:17933"))
+	startListen(t, ctx, root, "127.0.0.1:0")
+	leafAAddr := startListen(t, ctx, leafA, "127.0.0.1:0")
+	leafBAddr := startListen(t, ctx, leafB, "127.0.0.1:0")
+	must(root.DialPeer(ctx, leafAAddr))
+	must(root.DialPeer(ctx, leafBAddr))
 	time.Sleep(300 * time.Millisecond)
 
 	// Preferred node forces the first attempt onto the saturated leafA; without
@@ -123,7 +123,7 @@ func TestDeclineRerouteExhaustedPropagates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	root := newCore(t, "root", "127.0.0.1:17941")
+	root := newCore(t, "root")
 
 	db := openTestDB(t)
 	card := ledger.Card{
@@ -159,9 +159,9 @@ func TestDeclineRerouteExhaustedPropagates(t *testing.T) {
 	if err := leaf.Register(ctx); err != nil {
 		t.Fatalf("register leaf: %v", err)
 	}
-	startListen(t, ctx, root, "127.0.0.1:17941")
-	startListen(t, ctx, leaf, "127.0.0.1:17942")
-	if err := root.DialPeer(ctx, "127.0.0.1:17942"); err != nil {
+	startListen(t, ctx, root, "127.0.0.1:0")
+	leafAddr := startListen(t, ctx, leaf, "127.0.0.1:0")
+	if err := root.DialPeer(ctx, leafAddr); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -190,7 +190,7 @@ func TestDeclineReroutesToLocalNode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	mk := func(id, addr string, maxConcurrent int) *Core {
+	mk := func(id string, maxConcurrent int) *Core {
 		db := openTestDB(t)
 		card := ledger.Card{
 			Device:        id,
@@ -205,8 +205,8 @@ func TestDeclineReroutesToLocalNode(t *testing.T) {
 		c.SetSharedSecret(testSharedSecret)
 		return c
 	}
-	root := mk("root-local", "127.0.0.1:17951", 2)
-	leaf := mk("leaf-busy", "127.0.0.1:17952", 1)
+	root := mk("root-local", 2)
+	leaf := mk("leaf-busy", 1)
 
 	// Saturate the leaf so it declines on capacity.
 	busy, err := leaf.store.Create(ctx, "", "", "busy", "leaf-busy", []string{"leaf-busy"})
@@ -228,9 +228,8 @@ func TestDeclineReroutesToLocalNode(t *testing.T) {
 			t.Fatalf("register %s: %v", c.nodeID, err)
 		}
 	}
-	startListen(t, ctx, root, "127.0.0.1:17951")
-	startListen(t, ctx, leaf, "127.0.0.1:17952")
-	if err := root.DialPeer(ctx, "127.0.0.1:17952"); err != nil {
+	leafAddr := startListen(t, ctx, leaf, "127.0.0.1:0")
+	if err := root.DialPeer(ctx, leafAddr); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)

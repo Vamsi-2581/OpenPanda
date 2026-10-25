@@ -17,11 +17,11 @@ import (
 // mid knows both root and leaf; leaf knows only mid. This exercises the
 // sub-scheduler forward path: root forwards to mid (no match, tier>1), mid
 // forwards to leaf (matches gpio:read).
-func startChain(t *testing.T, ctx context.Context, rootAddr, midAddr, leafAddr string) (root, mid, leaf *Core) {
+func startChain(t *testing.T, ctx context.Context) (root, mid, leaf *Core) {
 	t.Helper()
-	root = newCore(t, "opi3b", rootAddr)
-	mid = newCore(t, "mac", midAddr)
-	leaf = newCoreWithNative(t, "windows", leafAddr, ledger.NativeAbility{
+	root = newCore(t, "opi3b")
+	mid = newCore(t, "mac")
+	leaf = newCoreWithNative(t, "windows", ledger.NativeAbility{
 		ID: "gpio:read", Command: "echo", Args: []string{"gpio-ok"},
 	})
 
@@ -35,9 +35,9 @@ func startChain(t *testing.T, ctx context.Context, rootAddr, midAddr, leafAddr s
 	must(mid.Register(ctx))
 	must(leaf.Register(ctx))
 
-	startListen(t, ctx, root, rootAddr)
-	startListen(t, ctx, mid, midAddr)
-	startListen(t, ctx, leaf, leafAddr)
+	midAddr := startListen(t, ctx, mid, "127.0.0.1:0")
+	leafAddr := startListen(t, ctx, leaf, "127.0.0.1:0")
+	startListen(t, ctx, root, "127.0.0.1:0")
 
 	// root → mid and mid → leaf, so the chain is linear.
 	must(root.DialPeer(ctx, midAddr))
@@ -58,7 +58,7 @@ func TestThreeNodeForward(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	root, mid, leaf := startChain(t, ctx, "127.0.0.1:17901", "127.0.0.1:17902", "127.0.0.1:17903")
+	root, mid, leaf := startChain(t, ctx)
 
 	in := TaskInput{Title: "read gpio", Intent: "read gpio", Requires: []string{"gpio:read"}}
 	task, result, err := root.Submit(ctx, in)
@@ -96,7 +96,7 @@ func TestResultRelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	root, mid, _ := startChain(t, ctx, "127.0.0.1:17921", "127.0.0.1:17922", "127.0.0.1:17923")
+	root, mid, _ := startChain(t, ctx)
 
 	in := TaskInput{Title: "relay", Intent: "relay", Requires: []string{"gpio:read"}}
 	task, result, err := root.Submit(ctx, in)
@@ -126,9 +126,9 @@ func TestLoopGuard(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	entry := newCore(t, "entry-loop", "127.0.0.1:17911")
-	worker := newCore(t, "worker-loop", "127.0.0.1:17912")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17911", "127.0.0.1:17912")
+	entry := newCore(t, "entry-loop")
+	worker := newCore(t, "worker-loop")
+	startPair(t, ctx, entry, worker)
 
 	// Pre-create and dispatch a task at entry so the decline is observable as
 	// a dispatched → queued transition.
@@ -187,10 +187,10 @@ func TestDeclineTerminalizesLocalRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	entry := newCore(t, "entry-dec", "127.0.0.1:17941")
+	entry := newCore(t, "entry-dec")
 	// worker has only sys:info, so a gpio:read delegate is declined.
-	worker := newCore(t, "worker-dec", "127.0.0.1:17942")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17941", "127.0.0.1:17942")
+	worker := newCore(t, "worker-dec")
+	startPair(t, ctx, entry, worker)
 
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-dec", "m1", bus.TaskDelegatePayload{
 		TaskID: "dec-task", Title: "t", Intent: "x", Requires: []string{"gpio:read"},

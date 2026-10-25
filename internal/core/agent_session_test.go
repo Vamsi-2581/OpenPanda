@@ -120,7 +120,7 @@ func TestAgentSessionSeedOnRerun(t *testing.T) {
 // adapter actually owns that conversation.
 func TestResultRecordsRemoteSession(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "sess-origin", "127.0.0.1:18152")
+	c := newCore(t, "sess-origin")
 	tk := createTask(t, c.store, "", "delegated", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
 		t.Fatalf("queue: %v", err)
@@ -155,7 +155,7 @@ func TestResultRecordsRemoteSession(t *testing.T) {
 // points at self, not at the delegator that merely carried it.
 func TestDelegateAdoptsResumeHint(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "sess-adopter", "127.0.0.1:18151")
+	c := newCore(t, "sess-adopter")
 
 	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "parent", "d-resume", bus.TaskDelegatePayload{
 		TaskID:          "t-resume-hint",
@@ -321,7 +321,7 @@ func TestAgentSessionResumesOnFallback(t *testing.T) {
 // re-dispatch needs — not just the node it belongs to.
 func TestResultRecordsRemoteSessionAdapter(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "sess-origin-adapter", "127.0.0.1:18153")
+	c := newCore(t, "sess-origin-adapter")
 	tk := createTask(t, c.store, "", "delegated", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
 		t.Fatalf("queue: %v", err)

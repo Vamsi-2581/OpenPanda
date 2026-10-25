@@ -71,11 +71,11 @@ func TestArtifactTransferRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	consumer := newCoreWithNative(t, "mac", "127.0.0.1:17960", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	producer := newCoreWithNative(t, "win", "127.0.0.1:17961", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	consumer := newCoreWithNative(t, "mac", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	producer := newCoreWithNative(t, "win", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	consumerPool := withArtifactPool(t, consumer)
 	producerPool := withArtifactPool(t, producer)
-	startPair(t, ctx, consumer, producer, "127.0.0.1:17960", "127.0.0.1:17961")
+	startPair(t, ctx, consumer, producer)
 
 	// The producer packs its output; both nodes know the task, as they would
 	// after a delegation.
@@ -141,11 +141,11 @@ func TestArtifactTransferRejectsTamperedChunk(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	consumer := newCoreWithNative(t, "mac", "127.0.0.1:17962", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	producer := newCoreWithNative(t, "win", "127.0.0.1:17963", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	consumer := newCoreWithNative(t, "mac", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	producer := newCoreWithNative(t, "win", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	consumerPool := withArtifactPool(t, consumer)
 	producerPool := withArtifactPool(t, producer)
-	startPair(t, ctx, consumer, producer, "127.0.0.1:17962", "127.0.0.1:17963")
+	startPair(t, ctx, consumer, producer)
 
 	const taskID = "t-artifact-tampered"
 	participantTask(t, consumer, taskID, consumer.nodeID, []string{consumer.nodeID})
@@ -192,7 +192,7 @@ func TestArtifactTransferRejectsTamperedChunk(t *testing.T) {
 // enumerate and download another peer's work.
 func TestArtifactFetchFromNonParticipantRefused(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "holder", "127.0.0.1:17964")
+	c := newCore(t, "holder")
 	pool := withArtifactPool(t, c)
 
 	m, err := pool.PackDir(artifactTree(t, 4096))
@@ -237,7 +237,7 @@ func TestArtifactFetchFromNonParticipantRefused(t *testing.T) {
 // fail the stage, or with bytes of its own at the offset being awaited.
 func TestArtifactChunkFromNonSourceIgnored(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec", "127.0.0.1:17965")
+	c := newCore(t, "exec")
 	withArtifactPool(t, c)
 
 	tr := &artifactTransfer{source: "win", chunks: make(chan bus.ArtifactChunkPayload, 4)}
@@ -273,7 +273,7 @@ func TestArtifactChunkFromNonSourceIgnored(t *testing.T) {
 // can re-route, and leaves nothing behind in the pool.
 func TestArtifactFetchFromUnreachableSourceFails(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec", "127.0.0.1:17966")
+	c := newCore(t, "exec")
 	pool := withArtifactPool(t, c)
 
 	hash := strings.Repeat("cd", 32)
@@ -302,11 +302,11 @@ func TestArtifactFetchPastEndAnswersEOF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	consumer := newCoreWithNative(t, "cons", "127.0.0.1:17970", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	producer := newCoreWithNative(t, "prod", "127.0.0.1:17971", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	consumer := newCoreWithNative(t, "cons", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	producer := newCoreWithNative(t, "prod", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	withArtifactPool(t, consumer)
 	producerPool := withArtifactPool(t, producer)
-	startPair(t, ctx, consumer, producer, "127.0.0.1:17970", "127.0.0.1:17971")
+	startPair(t, ctx, consumer, producer)
 
 	const taskID = "t-past-end"
 	participantTask(t, consumer, taskID, consumer.nodeID, []string{consumer.nodeID})
@@ -378,18 +378,18 @@ func TestArtifactFetchRelaysAcrossHops(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	root := newCoreWithNative(t, "pin-root", "127.0.0.1:17980", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	relay := newCoreWithNative(t, "pin-relay", "127.0.0.1:17981", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	dest := newCoreWithNative(t, "pin-dest", "127.0.0.1:17982", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	root := newCoreWithNative(t, "pin-root", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	relay := newCoreWithNative(t, "pin-relay", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	dest := newCoreWithNative(t, "pin-dest", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	rootPool := withArtifactPool(t, root)
 	destPool := withArtifactPool(t, dest)
 	withArtifactPool(t, relay)
 
-	rootDone := registerAndListen(t, ctx, root, "127.0.0.1:17980")
-	relayDone := registerAndListen(t, ctx, relay, "127.0.0.1:17981")
-	destDone := registerAndListen(t, ctx, dest, "127.0.0.1:17982")
-	linkPair(t, ctx, root, relay, "127.0.0.1:17981", rootDone, relayDone)
-	linkPair(t, ctx, relay, dest, "127.0.0.1:17982", destDone)
+	rootDone, _ := registerAndListen(t, ctx, root, "127.0.0.1:0")
+	relayDone, relayAddr := registerAndListen(t, ctx, relay, "127.0.0.1:0")
+	destDone, destAddr := registerAndListen(t, ctx, dest, "127.0.0.1:0")
+	linkPair(t, ctx, root, relay, relayAddr, rootDone, relayDone)
+	linkPair(t, ctx, relay, dest, destAddr, destDone)
 
 	// The producer holds the artifact under its own row; every hop's row
 	// carries the same task id and chain, as a real delegation leaves them.
@@ -455,7 +455,7 @@ func TestArtifactFetchRelaysAcrossHops(t *testing.T) {
 // are denied, and the entry's tables never hold more than the cap.
 func TestRelayFetchOffsetCap(t *testing.T) {
 	ctx := context.Background()
-	relay := newCore(t, "relay-cap", "127.0.0.1:17798")
+	relay := newCore(t, "relay-cap")
 	const taskID = "t-relay-cap"
 	participantTask(t, relay, taskID, "pin-root", []string{"pin-root", "relay-cap", "pin-dest"})
 
@@ -494,7 +494,7 @@ func TestImportFatBundleArtifacts(t *testing.T) {
 		t.Fatalf("read packed artifact: %v", err)
 	}
 
-	receiver := newCore(t, "receiver", "127.0.0.1:17967")
+	receiver := newCore(t, "receiver")
 	recPool := withArtifactPool(t, receiver)
 
 	// Before import, receiver does not have it

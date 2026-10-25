@@ -22,7 +22,7 @@ import (
 // The reflexive address STUN hands back already carries the right port and
 // must be advertised verbatim.
 func TestUDPCandidatesCarryTheNATPort(t *testing.T) {
-	c := newCore(t, "cand-node", "127.0.0.1:17999")
+	c := newCore(t, "cand-node")
 	c.udpMu.Lock()
 	c.udpPort = 17837
 	// What a STUN answer looks like: the public host with the port the NAT

@@ -80,7 +80,7 @@ func TestResumeParksWhenExecutorUnreachable(t *testing.T) {
 	}
 
 	// The executor returns: its hello flushes the parked approval.
-	wireTwo(t, ctx, leaf, root, "127.0.0.1:18411", "127.0.0.1:18412")
+	wireTwo(t, ctx, leaf, root)
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		var n int
@@ -120,7 +120,7 @@ func TestSweepFlushesParkedResumeOnLiveLink(t *testing.T) {
 
 	root := pinCore(t, "pin-root", "x")
 	leaf := pinCore(t, "pin-leaf", "x")
-	wireTwo(t, ctx, leaf, root, "127.0.0.1:18421", "127.0.0.1:18422")
+	wireTwo(t, ctx, leaf, root)
 
 	root.resumeOutboxPersist(ctx, "pin-leaf", bus.TaskResumePayload{
 		TaskID: "t-parked", AttemptID: "a1", Answer: "yes",

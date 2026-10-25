@@ -37,7 +37,7 @@ func TestScheduledTaskRoutesByHardware(t *testing.T) {
 		ledger.ResourceProfile{CPU: 16, RAMGB: 32, GPUVRAMGB: 12, DurationHint: "long"}, 3)
 	pi.SetWorkDir(t.TempDir())
 	win.SetWorkDir(t.TempDir())
-	startPair(t, ctx, pi, win, "127.0.0.1:17996", "127.0.0.1:17997")
+	startPair(t, ctx, pi, win)
 
 	// enqueued returns the stored row for a task the Pi queued, which is what
 	// the queue scheduler hands to runScheduled.
@@ -176,7 +176,7 @@ func TestScheduledTaskWithWorkDirStaysLocal(t *testing.T) {
 		ledger.ResourceProfile{CPU: 16, RAMGB: 32, GPUVRAMGB: 12, DurationHint: "long"}, 3)
 	pi.SetWorkDir(t.TempDir())
 	win.SetWorkDir(t.TempDir())
-	startPair(t, ctx, pi, win, "127.0.0.1:17998", "127.0.0.1:17999")
+	startPair(t, ctx, pi, win)
 
 	dir := t.TempDir()
 	got, err := pi.Enqueue(ctx, TaskInput{

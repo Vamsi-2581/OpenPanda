@@ -41,7 +41,7 @@ func setupDispatchedTask(t *testing.T, c *Core, taskID, target string) Task {
 // task, even with a matching attempt id.
 func TestResultFromNonExecutorIgnored(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "victim", "127.0.0.1:17901")
+	c := newCore(t, "victim")
 	tk := setupDispatchedTask(t, c, "t-forge", "real-worker")
 
 	env, err := bus.NewEnvelope(bus.MsgTaskResult, "mallory", "m1", bus.TaskResultPayload{
@@ -68,7 +68,7 @@ func TestResultFromNonExecutorIgnored(t *testing.T) {
 // dispatch target's result is applied.
 func TestResultFromExecutorAccepted(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "parent", "127.0.0.1:17903")
+	c := newCore(t, "parent")
 	tk := setupDispatchedTask(t, c, "t-legit", "worker-b")
 
 	env, err := bus.NewEnvelope(bus.MsgTaskResult, "worker-b", "m2", bus.TaskResultPayload{
@@ -93,7 +93,7 @@ func TestResultFromExecutorAccepted(t *testing.T) {
 // including on the unknown-task reconstruction path.
 func TestResultEmptyAttemptRejected(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "parent", "127.0.0.1:17905")
+	c := newCore(t, "parent")
 
 	// Unknown task + empty attempt: must not reconstruct.
 	env, err := bus.NewEnvelope(bus.MsgTaskResult, "worker-b", "m3", bus.TaskResultPayload{
@@ -124,7 +124,7 @@ func TestResultEmptyAttemptRejected(t *testing.T) {
 // may bounce a dispatched task back to queued.
 func TestDeclineFromNonExecutorIgnored(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "parent", "127.0.0.1:17907")
+	c := newCore(t, "parent")
 	setupDispatchedTask(t, c, "t-decline", "worker-c")
 
 	env, err := bus.NewEnvelope(bus.MsgTaskDecline, "mallory", "m5", bus.TaskDeclinePayload{
@@ -155,7 +155,7 @@ func TestDeclineFromNonExecutorIgnored(t *testing.T) {
 // peer that was not dispatched to must not be able to claim the lease.
 func TestAcceptFromNonTargetIgnored(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "parent", "127.0.0.1:17909")
+	c := newCore(t, "parent")
 	setupDispatchedTask(t, c, "t-accept", "worker-d")
 
 	env, err := bus.NewEnvelope(bus.MsgTaskAccept, "mallory", "m7", bus.TaskAcceptPayload{TaskID: "t-accept"})
@@ -174,7 +174,7 @@ func TestAcceptFromNonTargetIgnored(t *testing.T) {
 // node other than the fetch target must not fail the parked task.
 func TestContextAckFromNonSourceIgnored(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec", "127.0.0.1:17911")
+	c := newCore(t, "exec")
 	tk := setupDispatchedTask(t, c, "t-ctx", "exec")
 	if err := c.store.SetWaitingContext(ctx, "t-ctx", c.nodeID); err != nil {
 		t.Fatalf("waiting: %v", err)
@@ -419,9 +419,9 @@ func TestWaitingContextCarriesLease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	src := newCore(t, "ctx-src", "127.0.0.1:17913")
-	dst := newCore(t, "ctx-dst", "127.0.0.1:17914")
-	startPair(t, ctx, src, dst, "127.0.0.1:17913", "127.0.0.1:17914")
+	src := newCore(t, "ctx-src")
+	dst := newCore(t, "ctx-dst")
+	startPair(t, ctx, src, dst)
 
 	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "ctx-src", "m10", bus.TaskDelegatePayload{
 		TaskID: "t-waitlease", Title: "needs ctx", ContextType: "file",

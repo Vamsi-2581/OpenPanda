@@ -15,8 +15,8 @@ func TestAgentNegotiationSignaling(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17971")
-	b := newCore(t, "node-b", "127.0.0.1:17972")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 
 	must := func(err error) {
 		t.Helper()
@@ -27,10 +27,10 @@ func TestAgentNegotiationSignaling(t *testing.T) {
 	must(a.Register(ctx))
 	must(b.Register(ctx))
 
-	startListen(t, ctx, a, "127.0.0.1:17971")
-	startListen(t, ctx, b, "127.0.0.1:17972")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
-	must(a.DialPeer(ctx, "127.0.0.1:17972"))
+	must(a.DialPeer(ctx, bAddr))
 	waitPeer(t, a, "node-b")
 	waitPeer(t, b, "node-a")
 	time.Sleep(200 * time.Millisecond)
@@ -139,7 +139,7 @@ func TestNegoRelease(t *testing.T) {
 // tasks at will.
 func TestAgentYieldOnlyFromArbitrator(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "holder", "127.0.0.1:18000")
+	c := newCore(t, "holder")
 
 	scope := bus.TargetScope{Repo: "r", File: "f.go"}
 	dec := c.negoDecide(time.Now(), bus.AgentNegotiatePayload{
@@ -193,7 +193,7 @@ func TestAgentYieldOnlyFromArbitrator(t *testing.T) {
 // MaxInt would otherwise preempt every lock in the mesh.
 func TestAgentNegotiateWeightClamped(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "arbiter", "127.0.0.1:18001")
+	c := newCore(t, "arbiter")
 	scope := bus.TargetScope{Repo: "r", File: "f.go"}
 
 	env, err := bus.NewEnvelope(bus.MsgAgentNegotiate, "peer-b", "n-weight", bus.AgentNegotiatePayload{

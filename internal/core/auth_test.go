@@ -28,33 +28,12 @@ func rawDial(t *testing.T, addr string) *websocket.Conn {
 	return ws
 }
 
-// startListener boots one core's WebSocket server and waits for it to accept.
-func startListener(t *testing.T, c *Core, addr string) {
+// startListener boots one core's WebSocket server and waits for it to
+// accept. It is the same contract as startListen (which the rest of the
+// package uses) — kept as a thin alias so the auth tests read in one piece.
+func startListener(t *testing.T, c *Core, addr string) string {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- c.Listen(ctx, addr) }()
-	// Cancel first, then wait, bounded, for Listen to return: the tests that
-	// follow reuse these ports, and a listener still draining its shutdown
-	// window keeps accepting (and answering hellos with the wrong node id)
-	// until it is actually gone.
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-		}
-	})
-	// Wait for the socket, never a guessed interval: the callers dial
-	// immediately, and a fixed 200ms sleep is a race on a loaded runner. A
-	// Listen that already failed is reported as itself instead of as a dial
-	// timeout ten seconds later.
-	select {
-	case err := <-done:
-		t.Fatalf("listen on %s: %v", addr, err)
-	default:
-	}
-	waitListening(t, addr)
+	return startListen(t, context.Background(), c, addr)
 }
 
 // isTimeout reports whether err is a read-deadline (no frame) error rather than
@@ -105,13 +84,13 @@ func taskEventsContain(c *Core, ctx context.Context, taskID, substr string) bool
 // P0-1) — without it the dialer saw "connected" then EOF and kept redialing.
 func TestRejectBadHelloSig(t *testing.T) {
 	ctx := context.Background()
-	worker := newCoreWithNative(t, "worker", "127.0.0.1:17970", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17970")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
-	ws := rawDial(t, "127.0.0.1:17970")
+	ws := rawDial(t, workerAddr)
 	ts := time.Now().Unix()
 	env, _ := bus.NewEnvelope(bus.MsgHello, "attacker", "h-1", bus.HelloPayload{
 		NodeID: "attacker", Ver: "t", Ts: ts, Nonce: "n-wrong",
@@ -141,11 +120,11 @@ func TestRejectBadHelloSig(t *testing.T) {
 // is unauthenticated remote code execution on the node.
 func TestRejectEd25519OnlyHello(t *testing.T) {
 	ctx := context.Background()
-	worker := newCoreWithNative(t, "worker", "127.0.0.1:17974", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17974")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
 	pub, priv, err := bus.GenerateNodeKey()
 	if err != nil {
@@ -168,7 +147,7 @@ func TestRejectEd25519OnlyHello(t *testing.T) {
 
 	// Shape 1: no HMAC at all — the Ed25519 pair alone must not admit. The
 	// verdict frame is hello_reject(auth), never a hello reply.
-	ws1 := rawDial(t, "127.0.0.1:17974")
+	ws1 := rawDial(t, workerAddr)
 	if err := ws1.WriteJSON(mkHello("")); err != nil {
 		t.Fatalf("write ed25519-only hello: %v", err)
 	}
@@ -177,7 +156,7 @@ func TestRejectEd25519OnlyHello(t *testing.T) {
 	}
 
 	// Shape 2: Ed25519 pair plus a wrong-secret HMAC — same verdict.
-	ws2 := rawDial(t, "127.0.0.1:17974")
+	ws2 := rawDial(t, workerAddr)
 	if err := ws2.WriteJSON(mkHello(bus.HelloSigN("wrong-secret", "attacker", ts, nonce))); err != nil {
 		t.Fatalf("write ed25519+wrong-hmac hello: %v", err)
 	}
@@ -200,13 +179,13 @@ func TestRejectEd25519OnlyHello(t *testing.T) {
 // id — the registry would then route "to self" traffic onto a foreign conn.
 func TestRejectHelloClaimingSelfID(t *testing.T) {
 	ctx := context.Background()
-	worker := newCoreWithNative(t, "worker-self", "127.0.0.1:17975", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker-self", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17975")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
-	ws := rawDial(t, "127.0.0.1:17975")
+	ws := rawDial(t, workerAddr)
 	ts := time.Now().Unix()
 	env, _ := bus.NewEnvelope(bus.MsgHello, "worker-self", "h-1", bus.HelloPayload{
 		NodeID: "worker-self", Ver: "t", Ts: ts, Nonce: "n-self",
@@ -232,11 +211,11 @@ func TestRejectHelloClaimingSelfID(t *testing.T) {
 // one: msg_id is not covered by the hello HMAC, so a dedup key that included
 // it would let a replay dodge detection by rewriting an unsigned field.
 func TestRejectReplayedHello(t *testing.T) {
-	worker := newCoreWithNative(t, "worker", "127.0.0.1:17972", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(context.Background()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17972")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
 	mkHello := func(msgID string) bus.Envelope {
 		ts := replayHelloTS
@@ -252,7 +231,7 @@ func TestRejectReplayedHello(t *testing.T) {
 
 	// First presentation: the signature is valid and unused, so it authenticates
 	// and earns a hello reply.
-	ws1 := rawDial(t, "127.0.0.1:17972")
+	ws1 := rawDial(t, workerAddr)
 	if err := ws1.WriteJSON(mkHello("h-1")); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}
@@ -266,7 +245,7 @@ func TestRejectReplayedHello(t *testing.T) {
 	}
 
 	// Replay verbatim on a second connection: same signature, same msg_id.
-	ws2 := rawDial(t, "127.0.0.1:17972")
+	ws2 := rawDial(t, workerAddr)
 	if err := ws2.WriteJSON(mkHello("h-1")); err != nil {
 		t.Fatalf("write verbatim replay: %v", err)
 	}
@@ -275,7 +254,7 @@ func TestRejectReplayedHello(t *testing.T) {
 	}
 
 	// Replay under a rewritten msg_id: the unsigned field must not matter.
-	ws3 := rawDial(t, "127.0.0.1:17972")
+	ws3 := rawDial(t, workerAddr)
 	if err := ws3.WriteJSON(mkHello("h-2-different")); err != nil {
 		t.Fatalf("write msgid-rewritten replay: %v", err)
 	}
@@ -294,13 +273,13 @@ var replayHelloTS = time.Now().Unix()
 // connection is closed (design §16 / P0-1 identity binding).
 func TestRejectSpoofedSender(t *testing.T) {
 	ctx := context.Background()
-	worker := newCoreWithNative(t, "worker", "127.0.0.1:17971", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17971")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
-	ws := rawDial(t, "127.0.0.1:17971")
+	ws := rawDial(t, workerAddr)
 
 	// Valid hello as "attacker".
 	ts := time.Now().Unix()
@@ -350,11 +329,11 @@ func TestDelegatedTier2CannotForgeAuthorization(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-t2", "127.0.0.1:17980")
-	worker := newCoreWithNative(t, "worker-t2", "127.0.0.1:17981", ledger.NativeAbility{
+	entry := newCore(t, "entry-t2")
+	worker := newCoreWithNative(t, "worker-t2", ledger.NativeAbility{
 		ID: "sys:tier2", Command: "echo", Args: []string{"hello"}, Tier: 2,
 	})
-	startPair(t, ctx, entry, worker, "127.0.0.1:17980", "127.0.0.1:17981")
+	startPair(t, ctx, entry, worker)
 
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-t2", "m1", bus.TaskDelegatePayload{
 		TaskID: "tier2-forged", Intent: "run tier2", Requires: []string{"sys:tier2"},
@@ -395,7 +374,7 @@ func TestDelegatedTier2CannotForgeAuthorization(t *testing.T) {
 // server-side state that only the local entry path can set.
 func TestLocalTier2AuthorizedRuns(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "local-t2", "", ledger.NativeAbility{
+	c := newCoreWithNative(t, "local-t2", ledger.NativeAbility{
 		ID: "sys:tier2", Command: "echo", Args: []string{"hello"}, Tier: 2,
 	})
 	task, result, err := c.SubmitLocal(ctx, TaskInput{
@@ -419,7 +398,7 @@ func TestLocalTier2AuthorizedRuns(t *testing.T) {
 // and the local submit path stays local.
 func TestDelegateStampsRemoteProvenance(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "victim-node", "127.0.0.1:17990")
+	c := newCore(t, "victim-node")
 
 	// A member writes chain=[us, sender] — claiming we authored the task —
 	// to dodge remote detection. The loop guard refuses it at intake.
@@ -471,7 +450,7 @@ func TestDelegateStampsRemoteProvenance(t *testing.T) {
 // trust tier. Once an identity has a key, the hello must present it.
 func TestRejectKeylessHelloForKnownNode(t *testing.T) {
 	ctx := context.Background()
-	worker := newCoreWithNative(t, "worker", "127.0.0.1:17978", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -486,9 +465,9 @@ func TestRejectKeylessHelloForKnownNode(t *testing.T) {
 		hex.EncodeToString(pub), "victim"); err != nil {
 		t.Fatalf("record victim key: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17978")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
-	ws := rawDial(t, "127.0.0.1:17978")
+	ws := rawDial(t, workerAddr)
 	ts := time.Now().Unix()
 	const nonce = "attacker-nonce"
 	env, err := bus.NewEnvelope(bus.MsgHello, "victim", "h-1", bus.HelloPayload{
@@ -521,8 +500,7 @@ func TestRejectKeylessHelloForKnownNode(t *testing.T) {
 // attacker holding the mesh secret would actually send.
 func TestRejectChangedKeyHelloForKnownNode(t *testing.T) {
 	ctx := context.Background()
-	worker := newCoreWithNative(t, "worker-changed", "127.0.0.1:17979",
-		ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "worker-changed", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -538,14 +516,14 @@ func TestRejectChangedKeyHelloForKnownNode(t *testing.T) {
 		hex.EncodeToString(pinnedPub), "victim"); err != nil {
 		t.Fatalf("record victim key: %v", err)
 	}
-	startListener(t, worker, "127.0.0.1:17979")
+	workerAddr := startListener(t, worker, "127.0.0.1:0")
 
 	// The attacker's own key, self-consistently signed for the victim id.
 	attackerPub, attackerPriv, err := bus.GenerateNodeKey()
 	if err != nil {
 		t.Fatalf("generate attacker key: %v", err)
 	}
-	ws := rawDial(t, "127.0.0.1:17979")
+	ws := rawDial(t, workerAddr)
 	ts := time.Now().Unix()
 	const nonce = "attacker-rekey"
 	env, err := bus.NewEnvelope(bus.MsgHello, "victim", "h-rekey", bus.HelloPayload{

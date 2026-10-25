@@ -26,8 +26,8 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17951")
-	b := newCore(t, "node-b", "127.0.0.1:17952")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	// Both arbiters distrust their incumbent. Zeroing only b's leaves a
 	// holding O1 ("live" in its own frame) over O2 — a closes the conn b
 	// just registered, and whether the edge survives depends on whose
@@ -40,11 +40,11 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, a, "127.0.0.1:17951")
-	startListen(t, ctx, b, "127.0.0.1:17952")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	// First connection.
-	if err := a.DialPeer(ctx, "127.0.0.1:17952"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial 1: %v", err)
 	}
 	var first *bus.Conn
@@ -60,7 +60,7 @@ func TestPeerReconnectReplacesStaleConn(t *testing.T) {
 	}
 
 	// Reconnect: same identity, new conn. b must replace, not ignore.
-	if err := a.DialPeer(ctx, "127.0.0.1:17952"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial 2: %v", err)
 	}
 	var second *bus.Conn
@@ -113,17 +113,17 @@ func TestPeerLiveSiblingHoldsEdge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17961")
-	b := newCore(t, "node-b", "127.0.0.1:17962")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, a, "127.0.0.1:17961")
-	startListen(t, ctx, b, "127.0.0.1:17962")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
-	if err := a.DialPeer(ctx, "127.0.0.1:17962"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial 1: %v", err)
 	}
 	// DialPeer returns on the hello REPLY, which b sends before ensurePeer
@@ -143,7 +143,7 @@ func TestPeerLiveSiblingHoldsEdge(t *testing.T) {
 	// A second same-id conn while the first is live: the incumbent holds.
 	// (In production the newcomer is a sibling process's socket; here a
 	// second DialPeer from the same test process exercises the same path.)
-	if err := a.DialPeer(ctx, "127.0.0.1:17962"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial 2: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -163,18 +163,18 @@ func TestPeerAuthoritativeNewcomerTakesEdge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17971")
-	b := newCore(t, "node-b", "127.0.0.1:17972")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, a, "127.0.0.1:17971")
-	startListen(t, ctx, b, "127.0.0.1:17972")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	// The stray sibling connects first: no authority, edge held by liveness.
-	if err := a.DialPeer(ctx, "127.0.0.1:17972"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("sibling dial: %v", err)
 	}
 	var first *bus.Conn
@@ -193,7 +193,7 @@ func TestPeerAuthoritativeNewcomerTakesEdge(t *testing.T) {
 	// authority. The incumbent is live, so only the authority bit opens the
 	// swap.
 	a.SetEdgeAuthority(true)
-	if err := a.DialPeer(ctx, "127.0.0.1:17972"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("authoritative dial: %v", err)
 	}
 	var second *bus.Conn

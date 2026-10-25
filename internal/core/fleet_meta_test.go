@@ -19,7 +19,7 @@ import (
 // beat (no field) leaves the stored stamp alone.
 func TestHeartbeatStampsPeerVersion(t *testing.T) {
 	ctx := context.Background()
-	s := newCoreWithNative(t, "fleet-a", "127.0.0.1:18241", ledger.NativeAbility{ID: "x", Command: "true"})
+	s := newCoreWithNative(t, "fleet-a", ledger.NativeAbility{ID: "x", Command: "true"})
 	seedNeighbor(t, s, "fleet-b", nil, true)
 
 	env, err := bus.NewEnvelope(bus.MsgHeartbeat, "fleet-b", "m-hb-v1", bus.HeartbeatPayload{
@@ -61,7 +61,7 @@ func TestHeartbeatStampsPeerVersion(t *testing.T) {
 // A peer reachable only through a punched datagram route advertises a udp
 // edge (RTT unmeasured); a ws peer would carry kind "ws" plus its ping.
 func TestLinkMetricsTransportKinds(t *testing.T) {
-	c := newCoreWithNative(t, "fleet-c", "127.0.0.1:18242", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "fleet-c", ledger.NativeAbility{ID: "x", Command: "true"})
 
 	c.udpMu.Lock()
 	c.udpRoutes = map[string]*net.UDPAddr{
@@ -78,7 +78,7 @@ func TestLinkMetricsTransportKinds(t *testing.T) {
 // The heartbeat's capacity snapshot reports the queued backlog so peers and
 // the fleet panel see depth, not just in-flight counts.
 func TestCapacitySnapshotQueuedDepth(t *testing.T) {
-	c := newCoreWithNative(t, "fleet-d", "127.0.0.1:18243", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "fleet-d", ledger.NativeAbility{ID: "x", Command: "true"})
 	ctx := context.Background()
 
 	for i, state := range []string{"queued", "queued", "running"} {

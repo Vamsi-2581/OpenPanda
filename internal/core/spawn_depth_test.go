@@ -21,7 +21,7 @@ func TestSpawnChildTaskDepthBound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c := newCore(t, "depth-node", "127.0.0.1:17931")
+	c := newCore(t, "depth-node")
 	c.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 4, MaxDepth: 2})
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
@@ -74,9 +74,9 @@ func TestDelegateDepthWireAdoption(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-depth", "127.0.0.1:17932")
-	worker := newCore(t, "worker-depth", "127.0.0.1:17933")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17932", "127.0.0.1:17933")
+	entry := newCore(t, "entry-depth")
+	worker := newCore(t, "worker-depth")
+	startPair(t, ctx, entry, worker)
 
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-depth", "m-depth", bus.TaskDelegatePayload{
 		TaskID: "depth-2-task", Title: "t", Intent: "x", Requires: []string{"sys:info"},
@@ -117,7 +117,7 @@ func TestDelegateChildrenFanOutBound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	c := newCoreWithNative(t, "fanout-node", "127.0.0.1:17934", ledger.NativeAbility{
+	c := newCoreWithNative(t, "fanout-node", ledger.NativeAbility{
 		ID: "slow:work", Command: "sleep", Args: []string{"1"}, Tier: 1,
 	})
 	c.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 2, MaxDepth: 3})
@@ -204,7 +204,7 @@ func TestAwaitPendingChildrenSilenceBound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	c := newCore(t, "fold-node", "127.0.0.1:17935")
+	c := newCore(t, "fold-node")
 	c.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 4, MaxDepth: 3})
 	c.leaseTimeout = 100 * time.Millisecond // silentCap below the 1s slice floor
 	if err := c.Register(ctx); err != nil {
@@ -244,7 +244,7 @@ func TestLateChildResultPostsBoard(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c := newCore(t, "late-node", "127.0.0.1:17936")
+	c := newCore(t, "late-node")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestSpawnCapInheritedBound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c := newCore(t, "cap-node", "127.0.0.1:17937")
+	c := newCore(t, "cap-node")
 	c.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 4, MaxDepth: 3})
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
@@ -334,10 +334,10 @@ func TestDelegateWireMaxDepthAdoption(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-cap", "127.0.0.1:17938")
-	worker := newCore(t, "worker-cap", "127.0.0.1:17939")
+	entry := newCore(t, "entry-cap")
+	worker := newCore(t, "worker-cap")
 	worker.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 4, MaxDepth: 3})
-	startPair(t, ctx, entry, worker, "127.0.0.1:17938", "127.0.0.1:17939")
+	startPair(t, ctx, entry, worker)
 
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-cap", "m-cap", bus.TaskDelegatePayload{
 		TaskID: "capped-task", Title: "t", Intent: "x", Requires: []string{"sys:info"},
@@ -368,7 +368,7 @@ func TestDelegationDisabledRefusesSpawn(t *testing.T) {
 	defer cancel()
 
 	off := false
-	c := newCore(t, "off-node", "127.0.0.1:17940")
+	c := newCore(t, "off-node")
 	c.SetDelegationLimits(config.DelegationConfig{MaxChildren: 8, FanOut: 4, MaxDepth: 3, Enabled: &off})
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
@@ -383,7 +383,7 @@ func TestDelegationDisabledRefusesSpawn(t *testing.T) {
 		t.Fatalf("disable refusal error = %v", err)
 	}
 	// A nil flag (pre-toggle config) keeps orchestration on.
-	on := newCore(t, "on-node", "127.0.0.1:17941")
+	on := newCore(t, "on-node")
 	if !on.delegationEnabled() {
 		t.Fatal("nil enabled flag reported disabled")
 	}
@@ -397,7 +397,7 @@ func TestSpawnChildTaskPersistsScopePaths(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c := newCore(t, "scope-persist", "127.0.0.1:17941")
+	c := newCore(t, "scope-persist")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestSpawnChildTaskPersistsIsolate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c := newCore(t, "iso-persist", "127.0.0.1:17942")
+	c := newCore(t, "iso-persist")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
