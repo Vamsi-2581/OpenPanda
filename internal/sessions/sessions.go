@@ -461,17 +461,20 @@ func (s *Store) CompactHistory(ctx context.Context, id string, budget int, summa
 		return sess, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// The write-back is a fresh read-modify-write of the same file every other
 	// surface edits: the file lock has to cover it, or an AppendTurn landing
 	// between this load and save is overwritten by the trimmed copy. It is
 	// taken only here — summarize above can run for seconds and holds nothing.
+	// File lock before the mutex, like every other writer in this package: the
+	// reverse order deadlocks against a SetTitle holding the mutex and waiting
+	// for the same lock.
 	unlock, lerr := lockStore(s.root)
 	if lerr != nil {
 		return nil, fmt.Errorf("sessions: lock: %w", lerr)
 	}
 	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	fresh, err := s.load(id)
 	if err != nil {
 		return nil, err
