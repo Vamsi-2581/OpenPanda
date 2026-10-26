@@ -183,8 +183,15 @@ func TestInlineAskFollowsQueuedTaskToOutcome(t *testing.T) {
 		}
 	})
 
+	// Progress reaches these from two goroutines: the submit path's in-flight
+	// event bridge and the wait's timeline bridge. Both run while the round is
+	// live, so the slices need their own lock — the race detector saw the
+	// interleaved appends as a real defect.
+	var progressMu sync.Mutex
 	var waitStates, toolNotes []string
 	cb := StreamCallbacks{OnProgress: func(p Progress) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
 		switch p.Kind {
 		case ProgressWait:
 			waitStates = append(waitStates, p.Name)
@@ -218,11 +225,15 @@ func TestInlineAskFollowsQueuedTaskToOutcome(t *testing.T) {
 	// the row from dispatched to done sees the end state alone. Which
 	// intermediate states a tick happens to catch is a scheduling detail, not
 	// a contract — the done result above already proves the wait followed it.
-	if !containsStr(waitStates, core.StateQueued) {
-		t.Errorf("wait progress = %v, want the parked state announced", waitStates)
+	progressMu.Lock()
+	waits := append([]string(nil), waitStates...)
+	notes := append([]string(nil), toolNotes...)
+	progressMu.Unlock()
+	if !containsStr(waits, core.StateQueued) {
+		t.Errorf("wait progress = %v, want the parked state announced", waits)
 	}
-	if !containsStr(toolNotes, "Bash: python3 -m http.server 8000") {
-		t.Errorf("tool notes = %v, want the relayed progress note", toolNotes)
+	if !containsStr(notes, "Bash: python3 -m http.server 8000") {
+		t.Errorf("tool notes = %v, want the relayed progress note", notes)
 	}
 	// The converged report must be the model's, about the real outcome: the
 	// follow-up call saw the settled observation, not "queued".
