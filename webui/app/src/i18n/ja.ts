@@ -121,6 +121,7 @@ const ja: Messages = {
   'queue.parallel.workdirLabel': '作業ディレクトリ',
   'queue.parallel.workdirPlaceholder': 'D:/proj/feat-auth',
   'queue.parallel.workdirHint': '固定したディレクトリはこのノードでのみ実行され、同じプロジェクトの他のタスクとロックを争いません。存在しない場合は作成されます。',
+  'queue.parallel.workdirRequired': '固定するディレクトリを入力するか、既定モードに戻してください。',
   'queue.create': 'タスクを作成',
   'queue.creating': '作成中…',
   'queue.priority.high': '高',

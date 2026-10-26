@@ -289,6 +289,13 @@ function NewTaskForm({ projects, onCreated }: { projects: string[]; onCreated():
   async function submit(e: Event) {
     e.preventDefault()
     if (busy || !title.trim()) return
+    // The directory IS the mode: sending none would run the task in the
+    // project's own tree while the form still reads "Own directory", which is
+    // the one thing a pin exists to rule out.
+    if (parallel === 'workdir' && !workdirText.trim()) {
+      setError(t('queue.parallel.workdirRequired'))
+      return
+    }
     setBusy(true)
     setError('')
     try {

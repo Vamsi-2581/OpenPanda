@@ -43,6 +43,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/trust"
@@ -1019,6 +1020,12 @@ func (c *Core) SpawnChildTask(ctx context.Context, parentID string, in TaskInput
 		t.Isolate = true
 	}
 	if in.WorkDir != "" {
+		// Same breadth rule as createTask: a child's pin is also a sandbox
+		// writable root, and a marker's workdir is generated rather than
+		// typed, so this is where a hallucinated "/" has to stop.
+		if err := projects.ValidateWorkDir(in.WorkDir); err != nil {
+			return fail("work dir", err)
+		}
 		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
 			return fail("work dir", err)
 		}
@@ -1628,7 +1635,6 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 	case dr.Isolate:
 		in.Paths = nil
 	case strings.TrimSpace(dr.WorkDir) != "":
-		in.Paths = nil
 		wd := strings.TrimSpace(dr.WorkDir)
 		if abs, aerr := filepath.Abs(wd); aerr == nil {
 			wd = abs
@@ -1636,10 +1642,14 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 		if parentDir, perr := c.projectWorkDir(parent.Project); perr == nil {
 			pw, wdd := queue.WorkDirKey(parentDir), queue.WorkDirKey(wd)
 			if pw == wdd {
+				// The pin is discarded, so the lanes it would have replaced
+				// stay: a marker carrying both means "run here, own these",
+				// and dropping paths too would widen the child's locks.
 				c.logger.Info("delegate workdir ignored: it is the parent's own tree",
 					"parent", parent.TaskID, "dir", wd)
 				break
 			}
+			in.Paths = nil
 			in.WorkDir = wd
 			// Real paths, not the identities: the identity is case-folded and
 			// cannot be resolved back to a tree (see relUnderDir).
@@ -1647,7 +1657,9 @@ func (c *Core) delegateChild(ctx context.Context, parent Task, dr delegateReques
 				in.Paths = []string{rel}
 			}
 		} else {
-			// No project tree to be relative to: the pin is the whole identity.
+			// No project tree to be relative to: the pin is the whole identity,
+			// and project-relative lanes have nothing to be relative to.
+			in.Paths = nil
 			in.WorkDir = wd
 		}
 	}

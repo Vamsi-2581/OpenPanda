@@ -14,6 +14,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
+	"github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/scheduler"
 )
 
@@ -534,6 +535,16 @@ func (c *Core) createTask(ctx context.Context, in TaskInput) (Task, string, stri
 		return fail(fmt.Errorf("set authorized: %w", err))
 	}
 	if in.WorkDir != "" {
+		// The pin becomes the run's sandbox work dir (security.Policy.WorkDir),
+		// which is the writable root of everything the task launches — so it
+		// answers to the same breadth rule a project's work dir does. Pinning
+		// "/", the home directory or a system tree would hand one task the
+		// machine, and this is the single place the CLI's --workdir, the
+		// panel's POST /api/tasks and a delegated child's marker all pass
+		// through.
+		if err := projects.ValidateWorkDir(in.WorkDir); err != nil {
+			return fail(err)
+		}
 		if err := c.store.SetWorkDir(ctx, t.TaskID, in.WorkDir); err != nil {
 			return fail(fmt.Errorf("set work dir: %w", err))
 		}

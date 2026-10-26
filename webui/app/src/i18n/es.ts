@@ -122,6 +122,7 @@ const es: Messages = {
   'queue.parallel.workdirLabel': 'Directorio de trabajo',
   'queue.parallel.workdirPlaceholder': 'D:/proj/feat-auth',
   'queue.parallel.workdirHint': 'Un directorio fijado se ejecuta solo en este nodo y nunca espera detrás de las demás tareas del proyecto; se crea si no existe.',
+  'queue.parallel.workdirRequired': 'Indica el directorio que quieres fijar o vuelve al modo predeterminado.',
   'queue.create': 'Crear tarea',
   'queue.creating': 'Creando…',
   'queue.priority.high': 'Alta',

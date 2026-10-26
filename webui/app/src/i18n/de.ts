@@ -122,6 +122,7 @@ const de: Messages = {
   'queue.parallel.workdirLabel': 'Arbeitsverzeichnis',
   'queue.parallel.workdirPlaceholder': 'D:/proj/feat-auth',
   'queue.parallel.workdirHint': 'Ein festes Verzeichnis läuft nur auf diesem Knoten und wartet nie hinter den anderen Aufgaben des Projekts; es wird bei Bedarf angelegt.',
+  'queue.parallel.workdirRequired': 'Gib das festzulegende Verzeichnis ein oder wechsle zurück in den Standardmodus.',
   'queue.create': 'Aufgabe erstellen',
   'queue.creating': 'Wird erstellt…',
   'queue.priority.high': 'Hoch',
