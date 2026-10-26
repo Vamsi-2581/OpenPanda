@@ -55,7 +55,9 @@ func (m tuiModel) onDelta(msg deltaMsg) (tea.Model, tea.Cmd) {
 func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	p := msg.progress
 	label := progressNote(m.loc, p)
-	m.note = label
+	if p.Kind != askengine.ProgressAgentText {
+		m.note = label
+	}
 	now := time.Now()
 
 	var cmds []tea.Cmd
@@ -72,6 +74,12 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	case askengine.ProgressTool:
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
+		}
+	case askengine.ProgressAgentText:
+		// The delegated agent's own output: it belongs under the task card,
+		// not on the engine's status line.
+		if m.liveTask != nil {
+			m.liveTask.say(p.Detail)
 		}
 	case askengine.ProgressRetry, askengine.ProgressOffline:
 		// A model retry (or an outage being waited out) belongs on the status
@@ -112,10 +120,24 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		// error; that is a quiet "interrupted" note, not a red failure block.
 		done := m.turnEnded()
 		prompt := m.pendingPrompt
+		// Whatever had already streamed is work the user watched arrive. A
+		// transport drop or a provider error must not make it vanish: commit it
+		// as an answer block labelled partial, then report the failure beneath.
+		partial := strings.TrimSpace(m.liveAnswerText())
 		m.resetLive()
 		if errors.Is(msg.err, context.Canceled) {
 			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
 			return m.withPending(done, m.printBlock(note))
+		}
+		if partial != "" && m.chatHistory != nil {
+			// Appended directly rather than through printBlock: printBlock
+			// returns a command, and two batched commands may run in either
+			// order — the error could land above the text it truncated.
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{
+				kind: blockAnswer,
+				body: partial,
+				meta: i18n.T(m.loc, "tui.answer.partial"),
+			})
 		}
 		blk := block{kind: blockError, body: msg.err.Error()}
 		// A classified model failure carries its kind + provider detail into

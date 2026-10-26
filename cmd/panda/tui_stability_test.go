@@ -380,6 +380,44 @@ func TestTUIFailedTurnPersistsPair(t *testing.T) {
 	}
 }
 
+// TestTUIDoneErrKeepsPartialAnswer: a stream that dies mid-answer must not take
+// the text it already delivered with it. The transcript keeps what streamed,
+// labelled partial, and the failure block sits underneath it — losing twenty
+// seconds of visible output to a dropped connection is the "loading error eats
+// my answer" failure this guards.
+func TestTUIDoneErrKeepsPartialAnswer(t *testing.T) {
+	m := newIsolatedTUI(t)
+	s := &askStream{events: make(chan tea.Msg, 1), dropped: make(chan struct{})}
+	m.stream = s
+	m.mode = modeAsking
+	m.pendingPrompt = "explain the parser"
+	m.liveAnswerChunks = []string{"The parser walks the ", "token stream once."}
+
+	next, _ := m.onDone(doneMsg{stream: s, err: errors.New("entry: read stream: unexpected EOF")})
+	m = next.(tuiModel)
+
+	if len(m.chatHistory.blocks) == 0 {
+		t.Fatal("the failure must commit a block")
+	}
+	var partial *block
+	for i := range m.chatHistory.blocks {
+		b := m.chatHistory.blocks[i]
+		if b.kind == blockAnswer && strings.Contains(b.body, "walks the token stream") {
+			partial = &m.chatHistory.blocks[i]
+		}
+	}
+	if partial == nil {
+		t.Fatalf("streamed text was dropped on failure: %+v", m.chatHistory.blocks)
+	}
+	if !strings.Contains(partial.meta, "partial") {
+		t.Fatalf("partial text must say so, meta = %q", partial.meta)
+	}
+	last := m.chatHistory.blocks[len(m.chatHistory.blocks)-1]
+	if last.kind != blockError || !strings.Contains(last.body, "unexpected EOF") {
+		t.Fatalf("the failure block should close the turn, got %+v", last)
+	}
+}
+
 // TestTUIDoneErrRecordsPair is the onDone-level regression for the same
 // guarantee: resetLive clears pendingPrompt, so the error path must capture it
 // first or recordErrorTurn is handed "" and the bare-mode pair is silently

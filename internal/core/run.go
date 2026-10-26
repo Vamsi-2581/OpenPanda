@@ -2427,6 +2427,11 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	defer cancel()
 	if err := c.store.CompleteAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
 		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "files_changed": filesChanged,
+		// Who actually ran the work rides the row, not only the wire payload:
+		// a fallback can swap the agent, and `panda task show` (or the panel)
+		// must be able to name the one that executed instead of reporting the
+		// agent the plan intended.
+		"agent": res.Agent, "model": res.Model, "injected": res.Injected,
 	}); err != nil {
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 			return bus.TaskResultPayload{}, ErrCancelled

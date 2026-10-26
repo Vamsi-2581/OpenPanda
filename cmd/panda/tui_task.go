@@ -44,6 +44,11 @@ type taskProgress struct {
 	activeTool string
 	activeAt   time.Duration
 	curTools   int
+	// activity is the rolling tail of what the delegated agent is saying right
+	// now. A task can run for twenty minutes; without this the card shows the
+	// same "running" stage and a spinner while the agent reads files, runs
+	// tests and reasons, which reads as a hang.
+	activity []string
 }
 
 // newTaskProgress opens a card for a task the engine just submitted.
@@ -80,6 +85,24 @@ func (tp *taskProgress) recordTool(label string, now time.Time) {
 	tp.curTools++
 	tp.activeTool = label
 	tp.activeAt = now.Sub(tp.started)
+}
+
+// say records one line of the delegated agent's own output. Only the last few
+// lines stay on screen: the card is a live status, not a transcript, and the
+// full stream is persisted as the task's events for `panda task <id>`.
+func (tp *taskProgress) say(text string) {
+	line := truncate(oneLine(strings.TrimSpace(text)), 160)
+	if line == "" {
+		return
+	}
+	if n := len(tp.activity); n > 0 && tp.activity[n-1] == line {
+		return
+	}
+	const keep = 3
+	tp.activity = append(tp.activity, line)
+	if len(tp.activity) > keep {
+		tp.activity = tp.activity[len(tp.activity)-keep:]
+	}
 }
 
 // trail renders the finished stages as transcript lines, each with the time it
@@ -235,6 +258,11 @@ func (tp *taskProgress) renderLive(t theme, loc i18n.Locale, spin string, now ti
 			label = tp.activeTool
 		}
 		sb.WriteString(fmt.Sprintf("\n  %s  %s %s", arm, spin, label))
+	}
+	// The agent's own last words: the difference between "still running" and
+	// "hung" during a long task.
+	for _, line := range tp.activity {
+		sb.WriteString("\n     " + t.muted.Render("· "+line))
 	}
 	sb.WriteString("\n" + t.muted.Render(fmt.Sprintf("  (%s · %s)",
 		elapsed(total), i18n.T(loc, "cli.status.interrupt"))))

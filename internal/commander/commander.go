@@ -565,31 +565,15 @@ func (r *Router) Route(required []string) (Plan, error) {
 			tier = defense.TierReversible
 		}
 		plan := Plan{Kind: "agent", Ability: top.Name, Agent: top.Name, Adapter: top.Agent.Adapter, Tier: tier}
-		for _, c := range cands[1:] {
-			plan.Alternates = append(plan.Alternates, c.Name)
-		}
-		hasAgentPin := false
-		for _, req := range required {
-			if strings.HasPrefix(req, "agent:") {
-				hasAgentPin = true
-				break
-			}
-		}
-		if hasAgentPin && len(plan.Alternates) == 0 && len(r.card.Agents) > 1 {
-			for _, c := range r.RankAgents([]string{"coding", "shell", "file_edit"}) {
-				if c.Name != top.Name {
-					plan.Alternates = append(plan.Alternates, c.Name)
-				}
-			}
-			if len(plan.Alternates) == 0 {
-				names := make([]string, 0, len(r.card.Agents))
-				for name := range r.card.Agents {
-					if name != top.Name {
-						names = append(names, name)
-					}
-				}
-				sort.Strings(names)
-				plan.Alternates = names
+		// An explicit `agent:<name>` pin never gets alternates. A pin is a
+		// statement about WHO must do the work ("test that claude_code can
+		// run this"): silently re-running it on a different CLI turns a
+		// failed dispatch into a green pass for an agent that never started,
+		// and it is exactly how every failing agent used to end up on
+		// deepseek_harness. The run fails and names the reason instead.
+		if !agentPinned {
+			for _, c := range cands[1:] {
+				plan.Alternates = append(plan.Alternates, c.Name)
 			}
 		}
 		return plan, nil
@@ -817,9 +801,18 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 			return res
 		}
 
-		// Active Failover: if this agent failed and there are remaining alternates,
-		// log and record the failure then continue the loop to try the next alternate agent.
-		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, strings.TrimSpace(stderr)))
+		// Not every failure is a dispatch failure. An agent that ran, produced
+		// a result and reported a task-level failure (a failing test, a refused
+		// edit, a nonzero command) has done the work, and its outcome is the
+		// honest answer: re-running it on another CLI repeats the side effects
+		// and then reports the work under a different agent's name. Only a run
+		// that never got off the ground — the CLI is missing, the credential
+		// was rejected, the provider account is empty — may fall through to
+		// the next candidate.
+		if !agentFallbackEligible(ar) {
+			return res
+		}
+		unavailable = append(unavailable, fmt.Sprintf("%s (exec failed: %s)", name, describeAgentFailure(ar)))
 		// If this was the last attempt, return the failure result
 		if i == len(attempts)-1 {
 			return res
@@ -833,6 +826,79 @@ func (r *Router) execAgent(ctx context.Context, plan Plan, prompt string, cwd st
 		ExitCode: 1,
 		Stderr:   "no usable agent (tried " + strings.Join(unavailable, ", ") + "); install an agent CLI or route manually",
 	}
+}
+
+// agentDispatchFailurePatterns name the ways an agent run fails before the
+// work starts: the CLI is not signed in, the provider rejects the credential
+// or has no funds left, the model does not exist, the binary is missing, the
+// network is down. They are deliberately about DISPATCH, not about tasks — a
+// failed test, a refused edit or a nonzero command must never match, because
+// those are outcomes the caller needs to see rather than reasons to run the
+// same work on someone else's model.
+var agentDispatchFailurePatterns = []string{
+	"not logged in", "please run /login", "please log in", "login required",
+	"unauthorized", "authentication failed", "authentication error",
+	"invalid api key", "invalid_api_key", "incorrect api key",
+	"no api key", "missing api key", "missing credentials", "no credentials",
+	"insufficient", "quota exceeded", "insufficient_quota", "out of credits",
+	"billing", "account funds",
+	"model not found", "unknown model", "invalid model", "unrecognized_model",
+	"connection refused", "no such host", "network is unreachable",
+	"certificate", "tls handshake", "ssl", "x509",
+	"rate limit", "rate_limit", "429", "overloaded",
+	"bad gateway", "service unavailable", "upstream request failed",
+	"adapter output not json",
+}
+
+// agentFallbackEligible reports whether a failed agent run may be retried on
+// the next alternate. The evidence required is that no model work was billed
+// (Tokens == 0) plus a dispatch-level reason, so a run that actually did the
+// task — or that failed at the task — is returned to the caller instead of
+// being silently re-staffed. Output length is deliberately not part of the
+// test: a crashing CLI can dump a long stack trace before it ever reaches the
+// model. A timeout is never eligible: the work may be half done, and the
+// orchestration layer's retry/resume path owns that decision.
+func agentFallbackEligible(ar AgentResult) bool {
+	if ar.OK {
+		return false
+	}
+	if ar.SessionDead {
+		return true
+	}
+	if ar.ExitCode == 124 {
+		return false
+	}
+	if ar.ExitCode == 126 || ar.ExitCode == 127 {
+		return true
+	}
+	if ar.Tokens > 0 {
+		return false // the model ran: this is the task's outcome, not dispatch
+	}
+	msg := strings.ToLower(strings.TrimSpace(ar.Result + "\n" + ar.Stderr))
+	if msg == "" {
+		// The adapter said nothing at all: nothing ran, nothing reported.
+		return true
+	}
+	for _, pat := range agentDispatchFailurePatterns {
+		if strings.Contains(msg, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// describeAgentFailure keeps the reason a run failed visible in the fallback
+// note. An empty message ("exec failed: " with nothing after it) is what made
+// silent substitutions unreadable; name the exit code instead.
+func describeAgentFailure(ar AgentResult) string {
+	msg := strings.TrimSpace(ar.Stderr)
+	if msg == "" {
+		msg = strings.TrimSpace(ar.Result)
+	}
+	if msg == "" {
+		return fmt.Sprintf("no output (exit %d)", ar.ExitCode)
+	}
+	return msg
 }
 
 // Result is the normalized execution result (design doc P0-33).

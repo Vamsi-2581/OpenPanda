@@ -284,14 +284,21 @@ func runAsk(args []string) {
 			fmt.Println(renderCliMd(reportTail))
 		}
 		if out.OK {
-			if stdoutText != "" && !strings.Contains(answerText, stdoutText) {
-				if reportTail != "" {
-					fmt.Println()
-				}
+			// One outcome, one report. The synthesized answer already covers what
+			// happened; appending the raw agent transcript whenever the model
+			// paraphrased rather than quoted printed the same result twice — once
+			// in the user's language and once in the agent's own English. The
+			// verbatim log stays one command away.
+			if answerText == "" && stdoutText != "" {
 				fmt.Print(renderCliMd(out.Stdout))
 				if !strings.HasSuffix(out.Stdout, "\n") {
 					fmt.Println()
 				}
+			} else if answerText != "" && stdoutText != "" && !strings.Contains(answerText, stdoutText) && out.TaskID != "" {
+				if reportTail != "" {
+					fmt.Println()
+				}
+				fmt.Println(pal().Muted(i18n.Tf(loc, "tui.task.rawLogHint", "id", out.TaskID)))
 			}
 		} else {
 			if out.Stderr != "" {
@@ -523,8 +530,8 @@ func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDi
 			case askengine.ProgressTool:
 				st.Phase("exec", "executing")
 			}
-			if p.Kind == askengine.ProgressTool || lr.printed {
-				st.Note(note) // tool execution or mid-answer: ephemeral, never interrupts the text
+			if p.Kind == askengine.ProgressTool || p.Kind == askengine.ProgressAgentText || lr.printed {
+				st.Note(note) // tool execution, live agent chatter, or mid-answer: ephemeral, never interrupts the text
 				return
 			}
 			st.Log(pal().Muted(pal().MarkBullet() + " " + note))

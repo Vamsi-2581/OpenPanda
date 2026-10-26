@@ -158,6 +158,52 @@ func TestOnProgressOpensAndAdvancesCard(t *testing.T) {
 	}
 }
 
+// TestOnProgressStreamsAgentActivity: a delegated task can run for minutes, so
+// the card carries the agent's own last words. The tail is bounded, duplicates
+// collapse, and agent prose never hijacks the engine's status note (the note is
+// the lifecycle line; the card owns the agent's output).
+func TestOnProgressStreamsAgentActivity(t *testing.T) {
+	th := newTheme(i18n.English)
+	m := newTestTUI(t)
+	stream := newTestStream(new(bool))
+	m.stream = stream
+
+	next, _ := m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressExec, Name: "claude_code"}})
+	m = next.(tuiModel)
+	if m.note == "" {
+		t.Fatal("the exec milestone should set the status note")
+	}
+
+	next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressTask, Name: "Build site"}})
+	m = next.(tuiModel)
+	noteBefore := m.note
+	for _, text := range []string{
+		"Reading index.html",
+		"Reading index.html", // duplicate, collapsed
+		"Running the responsive check",
+		"Fixing the nav anchor",
+		"Verifying 375px width",
+	} {
+		next, _ = m.onProgress(progressMsg{stream: stream, progress: askengine.Progress{Kind: askengine.ProgressAgentText, Detail: text}})
+		m = next.(tuiModel)
+	}
+	if m.liveTask == nil {
+		t.Fatal("agent activity needs the task card")
+	}
+	if len(m.liveTask.activity) != 3 {
+		t.Fatalf("activity tail = %v, want the last 3 lines", m.liveTask.activity)
+	}
+	if got := m.liveTask.activity[2]; got != "Verifying 375px width" {
+		t.Fatalf("tail[2] = %q, want the newest line", got)
+	}
+	if m.note != noteBefore {
+		t.Fatalf("agent prose leaked into the status note: %q", m.note)
+	}
+	if out := m.liveTask.renderLive(th, "en", "SPIN", time.Now()); !strings.Contains(out, "Verifying 375px width") {
+		t.Fatalf("card should render the agent's latest line: %q", out)
+	}
+}
+
 // TestOnProgressWaitAdvancesCard pins the settle-wait milestone: a task the
 // queue parked keeps the card advancing — the session follows the sub-agent's
 // task state — instead of freezing at the dispatch until the outcome lands.
