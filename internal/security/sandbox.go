@@ -11,6 +11,8 @@
 package security
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -88,17 +90,36 @@ func (s *Sandbox) Env(extra ...string) []string {
 }
 
 // Apply configures cmd with the sandboxed working directory and environment.
-func (s *Sandbox) Apply(cmd *exec.Cmd, extra ...string) {
-	s.ApplyPolicy(cmd, DefaultPolicy(s.dir), extra...)
+func (s *Sandbox) Apply(cmd *exec.Cmd, extra ...string) error {
+	return s.ApplyPolicy(cmd, DefaultPolicy(s.dir), extra...)
 }
 
 // ApplyPolicy is Apply plus the OS confinement layer: it installs the
 // environment and cwd first, then wraps the command under the platform's
-// sandbox mechanism when the policy's mode asks for one. With ModeOff — or on
-// a platform with no backend installed — it degenerates to the plain
-// Apply behavior, so callers need no fallback path.
-func (s *Sandbox) ApplyPolicy(cmd *exec.Cmd, p Policy, extra ...string) {
+// sandbox mechanism when the policy's mode asks for one. With ModeOff it
+// degenerates to the plain Apply behavior.
+//
+// It returns an error for a strict policy on a host with no backend: that mode
+// exists to deny reads of credential paths, and running the child anyway would
+// leave the operator believing in a boundary that is not there. Standard mode
+// keeps running (bubblewrap is a separate package on most Linux distributions)
+// and reports the same missing backend as a failure in doctor.
+func (s *Sandbox) ApplyPolicy(cmd *exec.Cmd, p Policy, extra ...string) error {
 	cmd.Dir = p.resolveWorkDir()
 	cmd.Env = s.Env(extra...)
-	wrapSubprocess(cmd, p)
+	return wrapSubprocess(cmd, p)
+}
+
+// ErrSandboxUnavailable reports a policy that asks for OS confinement the host
+// cannot provide.
+var ErrSandboxUnavailable = errors.New("security: sandbox backend unavailable")
+
+// backendMissing decides what a policy without a backend means. strict fails
+// closed; standard proceeds (see ApplyPolicy), and doctor flags the same
+// condition so the degradation is never silent.
+func backendMissing(mode Mode, why string) error {
+	if mode == ModeStrict {
+		return fmt.Errorf("%w: sandbox.mode is %q but %s", ErrSandboxUnavailable, mode, why)
+	}
+	return nil
 }

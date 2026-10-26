@@ -423,12 +423,9 @@ func TestRelayedPunchWantReachesTheRequester(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	requester := newCoreWithNative(t, "zz-want-req", "127.0.0.1:0",
-		ledger.NativeAbility{ID: "x", Command: "true"})
-	relay := newCoreWithNative(t, "mm-want-relay", "127.0.0.1:0",
-		ledger.NativeAbility{ID: "x", Command: "true"})
-	offerer := newCoreWithNative(t, "aa-want-off", "127.0.0.1:0",
-		ledger.NativeAbility{ID: "x", Command: "true"})
+	requester := newCoreWithNative(t, "zz-want-req", ledger.NativeAbility{ID: "x", Command: "true"})
+	relay := newCoreWithNative(t, "mm-want-relay", ledger.NativeAbility{ID: "x", Command: "true"})
+	offerer := newCoreWithNative(t, "aa-want-off", ledger.NativeAbility{ID: "x", Command: "true"})
 	defer requester.Shutdown(ctx)
 	defer relay.Shutdown(ctx)
 	defer offerer.Shutdown(ctx)
@@ -437,23 +434,20 @@ func TestRelayedPunchWantReachesTheRequester(t *testing.T) {
 	// re-mints the envelope and loses the requester.
 	requester.SetNetworkPolicy(config.NetworkConfig{Transit: false})
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayAddr := l.Addr().String()
-	_ = l.Close()
 	for _, c := range []*Core{requester, relay, offerer} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, relay, relayAddr)
+	// The kernel picks the port; probing one and closing it before the
+	// listener takes it is a race with the rest of the test binary.
+	relayAddr := startListen(t, ctx, relay, "127.0.0.1:0")
 	dial := func(c *Core) {
 		t.Helper()
 		deadline := time.Now().Add(10 * time.Second)
 		for {
-			if err := c.DialPeer(ctx, relayAddr); err == nil {
+			err := c.DialPeer(ctx, relayAddr)
+			if err == nil {
 				return
 			}
 			if time.Now().After(deadline) {

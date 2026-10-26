@@ -23,9 +23,9 @@ func TestDelegateIdempotent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-idem", "127.0.0.1:17846")
-	worker := newCore(t, "worker-idem", "127.0.0.1:17847")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17846", "127.0.0.1:17847")
+	entry := newCore(t, "entry-idem")
+	worker := newCore(t, "worker-idem")
+	startPair(t, ctx, entry, worker)
 
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-idem", "m1", bus.TaskDelegatePayload{
 		TaskID: "idem-task", Title: "t", Intent: "x", Requires: []string{"sys:info"},
@@ -682,13 +682,13 @@ func TestCancelPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-cancel", "127.0.0.1:17856")
+	entry := newCore(t, "entry-cancel")
 	// Worker has a slow native command so the task stays running long
 	// enough to receive the cancel.
-	worker := newCoreWithNative(t, "worker-cancel", "127.0.0.1:17857", ledger.NativeAbility{
+	worker := newCoreWithNative(t, "worker-cancel", ledger.NativeAbility{
 		ID: "sys:sleep", Command: "sleep", Args: []string{"5"},
 	})
-	startPair(t, ctx, entry, worker, "127.0.0.1:17856", "127.0.0.1:17857")
+	startPair(t, ctx, entry, worker)
 
 	// Delegate a task.
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-cancel", "m1", bus.TaskDelegatePayload{
@@ -726,9 +726,9 @@ func TestRejectPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-reject", "127.0.0.1:17966")
-	worker := newCore(t, "worker-reject", "127.0.0.1:17967")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17966", "127.0.0.1:17967")
+	entry := newCore(t, "entry-reject")
+	worker := newCore(t, "worker-reject")
+	startPair(t, ctx, entry, worker)
 
 	must := func(err error) {
 		t.Helper()
@@ -788,7 +788,7 @@ func TestRejectPropagates(t *testing.T) {
 // running while the executor parked back in review.
 func TestResultFromRotatedAttemptLands(t *testing.T) {
 	ctx := context.Background()
-	entry := newCore(t, "entry-rot", "127.0.0.1:17976")
+	entry := newCore(t, "entry-rot")
 	if err := entry.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -888,9 +888,9 @@ func TestAcceptMirrorsToSiblingCopy(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-accept", "127.0.0.1:17996")
-	worker := newCore(t, "worker-accept", "127.0.0.1:17997")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17996", "127.0.0.1:17997")
+	entry := newCore(t, "entry-accept")
+	worker := newCore(t, "worker-accept")
+	startPair(t, ctx, entry, worker)
 
 	const taskID = "accept-task"
 	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
@@ -924,9 +924,9 @@ func TestAcceptMirrorsFromExecutorSide(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-accept2", "127.0.0.1:17990")
-	worker := newCore(t, "worker-accept2", "127.0.0.1:17991")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17990", "127.0.0.1:17991")
+	entry := newCore(t, "entry-accept2")
+	worker := newCore(t, "worker-accept2")
+	startPair(t, ctx, entry, worker)
 
 	const taskID = "accept-task2"
 	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
@@ -962,8 +962,8 @@ func TestAcceptParksForOfflineExecutor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-park", "127.0.0.1:17998")
-	worker := newCore(t, "worker-park", "127.0.0.1:17999")
+	entry := newCore(t, "entry-park")
+	worker := newCore(t, "worker-park")
 
 	const taskID = "accept-parked"
 	seedAcceptWorkPair(t, ctx, entry, worker, taskID)
@@ -987,7 +987,7 @@ func TestAcceptParksForOfflineExecutor(t *testing.T) {
 
 	// The executor comes online: its hello flushes the parked accept and the
 	// copy closes without a second human decision.
-	startPair(t, ctx, entry, worker, "127.0.0.1:17998", "127.0.0.1:17999")
+	startPair(t, ctx, entry, worker)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		tk, err := worker.store.Get(ctx, taskID)
@@ -1010,7 +1010,7 @@ func TestAcceptParksForOfflineExecutor(t *testing.T) {
 // bookkeeping conflict. A terminal row is the one real stand-down.
 func TestPrepareToleratesRacedQueue(t *testing.T) {
 	ctx := context.Background()
-	worker := newCore(t, "worker-prep", "127.0.0.1:17979")
+	worker := newCore(t, "worker-prep")
 	if err := worker.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -1046,7 +1046,7 @@ func TestPrepareToleratesRacedQueue(t *testing.T) {
 // anonymous task runs in its private per-task dir under the node work root.
 func TestExecWorkDirPersistedAndReported(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "ws-node", "127.0.0.1:17989", ledger.NativeAbility{
+	c := newCoreWithNative(t, "ws-node", ledger.NativeAbility{
 		ID: "sys:probe", Command: "echo", Args: []string{"hi"},
 	})
 	if err := c.Register(ctx); err != nil {
@@ -1088,9 +1088,9 @@ func TestResumeRaceAlreadyRunningDoesNotFailOrigin(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-race", "127.0.0.1:17970")
-	worker := newCore(t, "worker-race", "127.0.0.1:17971")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17970", "127.0.0.1:17971")
+	entry := newCore(t, "entry-race")
+	worker := newCore(t, "worker-race")
+	startPair(t, ctx, entry, worker)
 
 	const taskID = "race-task"
 	must := func(err error) {
@@ -1154,9 +1154,9 @@ func TestResumeRaceTerminalEchoesVerdict(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-echo", "127.0.0.1:17972")
-	worker := newCore(t, "worker-echo", "127.0.0.1:17973")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17972", "127.0.0.1:17973")
+	entry := newCore(t, "entry-echo")
+	worker := newCore(t, "worker-echo")
+	startPair(t, ctx, entry, worker)
 
 	const taskID = "echo-task"
 	must := func(err error) {
@@ -1213,8 +1213,8 @@ func TestHelloRejectAuthSurfaces(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	server := newCore(t, "srv-auth", "127.0.0.1:17986")
-	dialer := newCore(t, "cli-auth", "127.0.0.1:17987")
+	server := newCore(t, "srv-auth")
+	dialer := newCore(t, "cli-auth")
 	dialer.SetSharedSecret("wrong-secret")
 
 	if err := server.Register(ctx); err != nil {
@@ -1223,14 +1223,14 @@ func TestHelloRejectAuthSurfaces(t *testing.T) {
 	if err := dialer.Register(ctx); err != nil {
 		t.Fatalf("register dialer: %v", err)
 	}
-	startListen(t, ctx, server, "127.0.0.1:17986")
+	serverAddr := startListen(t, ctx, server, "127.0.0.1:0")
 
 	// The listener binds asynchronously; the first dial attempts may hit a
 	// not-yet-bound socket — real errors until the reject verdict arrives.
 	var merr error
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		merr = dialer.MaintainPeer(ctx, "127.0.0.1:17986")
+		merr = dialer.MaintainPeer(ctx, serverAddr)
 		if errors.Is(merr, ErrAuthRejected) {
 			break
 		}
@@ -1244,7 +1244,7 @@ func TestHelloRejectAuthSurfaces(t *testing.T) {
 	// this is what `panda doctor`/`nodes add` prints for the user.
 	_, err := ProbePeer(ctx, "probe-auth", ledger.Card{Device: "probe-auth"},
 		config.ModelConfig{}, config.NetworkConfig{SharedSecret: "wrong-secret"},
-		"127.0.0.1:17986", nil, nil)
+		serverAddr, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "rejected our authentication") {
 		t.Fatalf("ProbePeer err = %v, want the auth-rejection diagnosis", err)
 	}
@@ -1254,7 +1254,15 @@ func TestHelloRejectAuthSurfaces(t *testing.T) {
 // returning a channel that delivers the Listen result: a bind failure lands
 // in it as soon as it happens, for linkPair to surface. t.Cleanup drains the
 // channel, so a following test never dials a draining listener.
-func registerAndListen(t *testing.T, ctx context.Context, c *Core, addr string) <-chan error {
+//
+// The addr may end in ":0", which asks the kernel for a free port. The
+// address the listener actually bound is returned, so a caller can dial it —
+// the same contract startListen offers. Fixed ports are what made these
+// tests flaky: the whole package shares one port table, `go test ./...` runs
+// the packages in parallel, and a port another package (or the previous
+// -count iteration) still holds is a bind failure that has nothing to do
+// with the code under test.
+func registerAndListen(t *testing.T, ctx context.Context, c *Core, addr string) (<-chan error, string) {
 	t.Helper()
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("startup: %v", err)
@@ -1280,7 +1288,20 @@ func registerAndListen(t *testing.T, ctx context.Context, c *Core, addr string) 
 			t.Errorf("listener on %s did not stop", addr)
 		}
 	})
-	return done
+	// ":0" is the kernel's choice: the core publishes the port it actually
+	// bound (bus.Server.OnBound → ListenAddr), so a test can ask for an
+	// ephemeral listener and still know where to dial.
+	if strings.HasSuffix(addr, ":0") {
+		deadline := time.Now().Add(10 * time.Second)
+		for c.ListenAddr() == addr || c.ListenAddr() == "" {
+			if time.Now().After(deadline) {
+				t.Fatalf("core never published the port chosen for %s", addr)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		addr = c.ListenAddr()
+	}
+	return done, addr
 }
 
 // linkPair dials entry → workerAddr and waits until both directions see a
@@ -1347,11 +1368,20 @@ func linkPair(t *testing.T, ctx context.Context, entry, worker *Core, workerAddr
 // allows it, which is how such a double bind can pass every local run and
 // still break CI). To extend an existing pair, use registerAndListen for the
 // new core and linkPair for the edge.
-func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr, workerAddr string) {
+//
+// Both listeners take an ephemeral port and the addresses they bound are
+// returned, so a caller that needs to dial one (or point a third core at it)
+// uses the returned value rather than a hardcoded one. Fixed ports made this
+// package the flakiest in the repo: the port table was shared across every
+// test file, `go test ./...` runs the packages in parallel, and a port some
+// other package still held failed the test for reasons that had nothing to
+// do with the code.
+func startPair(t *testing.T, ctx context.Context, entry, worker *Core) (string, string) {
 	t.Helper()
-	ed := registerAndListen(t, ctx, entry, entryAddr)
-	wd := registerAndListen(t, ctx, worker, workerAddr)
+	ed, entryAddr := registerAndListen(t, ctx, entry, "127.0.0.1:0")
+	wd, workerAddr := registerAndListen(t, ctx, worker, "127.0.0.1:0")
 	linkPair(t, ctx, entry, worker, workerAddr, ed, wd)
+	return entryAddr, workerAddr
 }
 
 // waitListening blocks until addr accepts a TCP connection.
@@ -1361,6 +1391,19 @@ func startPair(t *testing.T, ctx context.Context, entry, worker *Core, entryAddr
 // bound long before the sleep ends, but with several packages running at
 // once the goroutine can be scheduled late enough that the next DialPeer
 // sees ECONNREFUSED. Polling removes the guess.
+// beaconPort returns the port half of a host:port pair in the shape a
+// discovery beacon carries it (":7836" — no host, because the receiver
+// substitutes the datagram's source IP). A test that binds an ephemeral
+// listener has to derive the port the kernel chose from the address the
+// core published.
+func beaconPort(address string) string {
+	if _, port, err := net.SplitHostPort(address); err == nil && port != "" {
+		return ":" + port
+	}
+	return ""
+}
+
+// waitListening blocks until addr accepts a TCP connection.
 func waitListening(t *testing.T, addr string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -1418,15 +1461,30 @@ func startListen(t *testing.T, ctx context.Context, c *Core, addr string) string
 	// ":0" is the kernel's choice: the core publishes the port it actually
 	// bound (bus.Server.OnBound → ListenAddr), so a test can ask for an
 	// ephemeral listener and still know where to dial.
+	//
+	// The wait is on the published value, never on the literal: a listener
+	// whose bind failed after the check above left this loop publishing ":0"
+	// and then dialing it, which surfaced as "nothing listening on
+	// 127.0.0.1:0" — a timeout about an address no one was meant to dial,
+	// with the real error sitting unread in done.
 	if strings.HasSuffix(addr, ":0") {
 		deadline := time.Now().Add(10 * time.Second)
-		for c.ListenAddr() == addr || c.ListenAddr() == "" {
+		for {
+			bound := c.ListenAddr()
+			if bound != "" && bound != addr && !strings.HasSuffix(bound, ":0") {
+				addr = bound
+				break
+			}
 			if time.Now().After(deadline) {
-				t.Fatalf("core never published the port chosen for %s", addr)
+				select {
+				case err := <-done:
+					t.Fatalf("listen on %s: %v", addr, err)
+				default:
+				}
+				t.Fatalf("core never published the port chosen for %s (last published %q)", addr, bound)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		addr = c.ListenAddr()
 	}
 	waitListening(t, addr)
 	return addr
@@ -1441,7 +1499,7 @@ func TestListenPublishesEphemeralPort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := newCore(t, "ephemeral-node", "127.0.0.1:0")
+	c := newCore(t, "ephemeral-node")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -1471,7 +1529,7 @@ func waitPeer(t *testing.T, c *Core, id string) {
 }
 
 // newCoreWithNative builds a Core whose card has the given native ability.
-func newCoreWithNative(t *testing.T, id, addr string, native ledger.NativeAbility) *Core {
+func newCoreWithNative(t *testing.T, id string, native ledger.NativeAbility) *Core {
 	t.Helper()
 	db := openTestDB(t)
 	card := ledger.Card{

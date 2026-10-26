@@ -82,7 +82,9 @@ type rpcError struct {
 // spawn+handshake; the child's lifetime is owned by Close.
 func NewStdioClient(ctx context.Context, command string, env []string, args ...string) (*Client, error) {
 	cmd := executil.CommandContext(context.Background(), command, args...)
-	security.NewSandbox("").Apply(cmd, env...)
+	if err := security.NewSandbox("").Apply(cmd, env...); err != nil {
+		return nil, fmt.Errorf("mcp: %w", err)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp: stdin pipe: %w", err)

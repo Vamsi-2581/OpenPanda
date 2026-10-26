@@ -46,7 +46,7 @@ func seedPeerPubKey(t *testing.T, c *Core, id, pub string) {
 
 func TestStablePeerIDResolution(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "node-outbox", "")
+	c := newCore(t, "node-outbox")
 
 	// Unknown peer and a peer with no recorded key: the instance id is its
 	// own stable key (pre-key peer behavior).
@@ -81,7 +81,7 @@ func TestStablePeerIDResolution(t *testing.T) {
 // custody parked under BOTH its stable key and its previous instance id.
 func TestOutboxClaimKeysAcrossInstances(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "node-outbox", "")
+	c := newCore(t, "node-outbox")
 
 	pubB := hex.EncodeToString([]byte("fedcba9876543210fedcba9876543210"))
 	seedPeerPubKey(t, c, "b-inst-1", pubB)
@@ -113,7 +113,7 @@ func TestOutboxClaimKeysAcrossInstances(t *testing.T) {
 // records only keys a hello actually proved).
 func TestOutboxFlushRejectsForeignIdentity(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "node-outbox", "")
+	c := newCore(t, "node-outbox")
 
 	pubB := hex.EncodeToString([]byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1"))
 	seedPeerPubKey(t, c, "victim", pubB)
@@ -145,7 +145,7 @@ func TestOutboxFlushRejectsForeignIdentity(t *testing.T) {
 
 func TestTaskOutboxPersistAndDrop(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "node-outbox", "")
+	c := newCore(t, "node-outbox")
 
 	p := bus.TaskDelegatePayload{
 		TaskID: "task-dtn-1",
@@ -184,8 +184,8 @@ func TestTaskOutboxFlushOnHello(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17961")
-	b := newCore(t, "node-b", "127.0.0.1:17962")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 
 	must := func(err error) {
 		t.Helper()
@@ -196,8 +196,8 @@ func TestTaskOutboxFlushOnHello(t *testing.T) {
 	must(a.Register(ctx))
 	must(b.Register(ctx))
 
-	startListen(t, ctx, a, "127.0.0.1:17961")
-	startListen(t, ctx, b, "127.0.0.1:17962")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	// Park task in a's outbox for b BEFORE b connects
 	taskID := "task-parked-1"
@@ -209,7 +209,7 @@ func TestTaskOutboxFlushOnHello(t *testing.T) {
 	a.taskOutboxPersist(ctx, "node-b", p, "dtn", 60000)
 
 	// Now connect a -> b
-	must(a.DialPeer(ctx, "127.0.0.1:17962"))
+	must(a.DialPeer(ctx, bAddr))
 	waitPeer(t, a, "node-b")
 	waitPeer(t, b, "node-a")
 	time.Sleep(300 * time.Millisecond)
@@ -234,8 +234,8 @@ func TestResultReconcileOnReconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:18031")
-	b := newCore(t, "node-b", "127.0.0.1:18032")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -244,8 +244,8 @@ func TestResultReconcileOnReconnect(t *testing.T) {
 	}
 	must(a.Register(ctx))
 	must(b.Register(ctx))
-	startListen(t, ctx, a, "127.0.0.1:18031")
-	startListen(t, ctx, b, "127.0.0.1:18032")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	taskID := "task-reconcile-1"
 	// a's delegator copy — stranded exactly as the silent-loss leaves it.
@@ -281,7 +281,7 @@ func TestResultReconcileOnReconnect(t *testing.T) {
 
 	// The link comes up after settlement. b's hello handler flushes its
 	// outbox AND runs the sweep; a's copy must reach done.
-	must(a.DialPeer(ctx, "127.0.0.1:18032"))
+	must(a.DialPeer(ctx, bAddr))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		got, err := a.store.Get(ctx, taskID)
@@ -304,7 +304,7 @@ func TestOutboxFlushAfterPeerRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17971")
+	a := newCore(t, "node-a")
 	bDB := openTestDB(t)
 	b1 := newCoreOnDB(t, bDB, "b-inst-1")
 
@@ -316,9 +316,9 @@ func TestOutboxFlushAfterPeerRestart(t *testing.T) {
 	}
 	must(a.Register(ctx))
 	must(b1.Register(ctx))
-	startListen(t, ctx, a, "127.0.0.1:17971")
+	aAddr := startListen(t, ctx, a, "127.0.0.1:0")
 
-	must(b1.DialPeer(ctx, "127.0.0.1:17971"))
+	must(b1.DialPeer(ctx, aAddr))
 	waitPeer(t, a, "b-inst-1")
 
 	// a must have recorded b's proven key before the park is keyed stably.
@@ -352,7 +352,7 @@ func TestOutboxFlushAfterPeerRestart(t *testing.T) {
 	// the same node identity — the exact shape of a daemon relaunch.
 	b2 := newCoreOnDB(t, bDB, "b-inst-2")
 	must(b2.Register(ctx))
-	must(b2.DialPeer(ctx, "127.0.0.1:17971"))
+	must(b2.DialPeer(ctx, aAddr))
 	waitPeer(t, a, "b-inst-2")
 
 	// The new instance's hello claims the old instance's parked rows.
@@ -376,7 +376,7 @@ func TestOutboxFlushAfterPeerRestart(t *testing.T) {
 // a human's decision and must ride through regardless.
 func TestCancelOutboxDropKeepsTreeCancel(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "cancel-drop", "")
+	c := newCore(t, "cancel-drop")
 
 	c.outboxCancelPersist(ctx, "peer-x", "t-disp", "attempt-a", "lease expired")
 	c.outboxCancelPersist(ctx, "peer-x", "t-tree", "", "user cancelled")

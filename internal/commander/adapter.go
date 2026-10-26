@@ -1305,9 +1305,13 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	// ApplyPolicy installs the filtered env/cwd and — when the configured
 	// sandbox mode is on — wraps the adapter in the OS confinement profile:
 	// workdir+toolchain writable, this agent's credential dirs writable,
-	// foreign credential dirs and OS secrets read-denied under strict.
-	security.NewSandbox(cwd).ApplyPolicy(cmd,
-		adapterSandboxPolicy(AgentName(ctx), name, cwd), env...)
+	// foreign credential dirs and OS secrets read-denied under strict. A
+	// refusal (strict mode, no backend) is reported as the run's failure
+	// rather than run unconfined.
+	if err := security.NewSandbox(cwd).ApplyPolicy(cmd,
+		adapterSandboxPolicy(AgentName(ctx), name, cwd), env...); err != nil {
+		return AgentResult{ExitCode: 127, Result: security.Redact(err.Error())}
+	}
 
 	if err := cmd.Run(); err != nil {
 		actMu.Lock()
@@ -1365,6 +1369,27 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 // failure that mentions a large number or a port must not read as provider 5xx.
 var transientStatusRE = regexp.MustCompile(`\b(?:500|502|503|504)\b`)
 
+// replayableFailure reports whether a failed run may be started over. Both
+// retry ladders — the transport retry in execAgent and the credential-injection
+// fallback in runAdapterDefault — re-run the whole task, so the decision may not
+// rest on the failure text alone: an agent that quoted a provider 429 from a log
+// line, a fetched page or its own error report after editing files was re-run,
+// and its side effects were applied twice.
+//
+// The envelope is the evidence that this attempt did nothing. Tokens billed are
+// the agent's own report of model work, and a result long enough to be task
+// output is not a provider envelope. A CLI that reports neither still falls back
+// on the text patterns below, unchanged — there is nothing better to key on.
+func replayableFailure(ar AgentResult) bool {
+	if ar.OK {
+		return false
+	}
+	if ar.Tokens > 0 {
+		return false
+	}
+	return len(ar.Result) <= 4000
+}
+
 // transientAgentFailure reports whether an adapter failure looks like
 // provider-side turbulence rather than the task itself failing: rate
 // limits, overload, 5xx/api errors, dropped connections. The patterns are
@@ -1372,7 +1397,7 @@ var transientStatusRE = regexp.MustCompile(`\b(?:500|502|503|504)\b`)
 // ("command not found", a failed test, a refused permission) never matches,
 // so a retry cannot silently duplicate side effects.
 func transientAgentFailure(ar AgentResult) bool {
-	if ar.OK {
+	if !replayableFailure(ar) {
 		return false
 	}
 	msg := strings.ToLower(ar.Result)
@@ -1691,8 +1716,11 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 	// WaitDelay matches the one-shot path: a detached grandchild inheriting
 	// the pipes must not wedge Wait (and with it the dead marker) forever.
 	cmd.WaitDelay = 5 * time.Second
-	security.NewSandbox(cwd).ApplyPolicy(cmd,
-		adapterSandboxPolicy(AgentName(turnCtx), name, cwd), env...)
+	if err := security.NewSandbox(cwd).ApplyPolicy(cmd,
+		adapterSandboxPolicy(AgentName(turnCtx), name, cwd), env...); err != nil {
+		cancel()
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, err

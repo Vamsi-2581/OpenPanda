@@ -21,7 +21,7 @@ import (
 // duplicate executor — and must not disturb the row the first runner owns.
 func TestRunRefusesSecondRunner(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec", "127.0.0.1:18002")
+	c := newCore(t, "exec")
 	tk := createTask(t, c.store, "", "dup-run", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
 		t.Fatalf("queue: %v", err)
@@ -59,7 +59,7 @@ func TestRunRefusesSecondRunner(t *testing.T) {
 // into the task record.
 func TestResultChainMustEndAtSender(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "origin", "127.0.0.1:18003")
+	c := newCore(t, "origin")
 
 	forged, err := bus.NewEnvelope(bus.MsgTaskResult, "mallory", "r-forged", bus.TaskResultPayload{
 		TaskID: "t-forged", AttemptID: "a1", State: StateDone, OK: true,
@@ -99,7 +99,7 @@ func TestResultChainMustEndAtSender(t *testing.T) {
 // reached the resume path — shows up as a count above one.
 func TestDuplicateContextAckResumesOnce(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec", "127.0.0.1:18005")
+	c := newCore(t, "exec")
 	tk := setupDispatchedTask(t, c, "t-ack-race", "exec")
 	if err := c.store.SetWaitingContext(ctx, tk.TaskID, c.nodeID); err != nil {
 		t.Fatalf("waiting: %v", err)
@@ -144,7 +144,7 @@ func TestDuplicateContextAckResumesOnce(t *testing.T) {
 // execution slot for as long as it named.
 func TestDelegateTimeoutClampedToLease(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec", "127.0.0.1:18004")
+	c := newCore(t, "exec")
 
 	env, err := bus.NewEnvelope(bus.MsgTaskDelegate, "parent", "d-timeout", bus.TaskDelegatePayload{
 		TaskID:    "t-timeout",

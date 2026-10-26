@@ -94,7 +94,7 @@ func TestClarificationCrossDevice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-clarify", "127.0.0.1:18020")
+	entry := newCore(t, "entry-clarify")
 	worker := newSuperviseCore(t, "worker-clarify", 1)
 	worker.SetWorkDir(t.TempDir())
 	var mu sync.Mutex
@@ -111,7 +111,7 @@ func TestClarificationCrossDevice(t *testing.T) {
 		}
 		return commander.AgentResult{OK: true, ExitCode: 0, Result: "deployed to staging"}
 	})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18020", "127.0.0.1:18021")
+	startPair(t, ctx, entry, worker)
 
 	task, result, err := entry.Submit(ctx, TaskInput{
 		Title: "deploy app", ContextType: "command",

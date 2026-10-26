@@ -23,20 +23,21 @@ func platformBackend() string {
 // wrapSubprocess prefixes the command with sandbox-exec -p <profile>. Anything
 // the profile denies fails at exec time inside the child (EPERM), which the
 // caller's stderr capture surfaces the same way it surfaces any tool error.
-// When the mode is off — or sandbox-exec is missing — the command is left
-// untouched so a non-off mode degrades to the historical env-filter behavior.
-func wrapSubprocess(cmd *exec.Cmd, p Policy) {
+// When the mode is off the command is left untouched; when sandbox-exec is
+// missing a strict policy is refused rather than run unconfined (backendMissing).
+func wrapSubprocess(cmd *exec.Cmd, p Policy) error {
 	if p.Mode == ModeOff {
-		return
+		return nil
 	}
 	sbx, err := exec.LookPath("sandbox-exec")
 	if err != nil {
-		return
+		return backendMissing(p.Mode, "sandbox-exec is not on PATH")
 	}
 	target := cmd.Path
 	cmd.Path = sbx
 	args := []string{sbx, "-p", seatbeltProfile(p), target}
 	cmd.Args = append(args, cmd.Args[1:]...)
+	return nil
 }
 
 // seatbeltProfile renders a deny-default SBPL profile. Everything not listed

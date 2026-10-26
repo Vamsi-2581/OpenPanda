@@ -29,21 +29,14 @@ func TestLadderDialKeepsItsConnectionAlive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// A probed ephemeral port, not a fixed number: a hardcoded one collides
-	// with a concurrent test run and then the ladder legitimately reports
-	// "no route" against a listener that is not ours.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	serverAddr := l.Addr().String()
-	_ = l.Close()
-
-	server := newCoreWithNative(t, "ladder-server", serverAddr,
-		ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	dialer := newCoreWithNative(t, "ladder-dialer", "127.0.0.1:0",
-		ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	registerAndListen(t, ctx, server, serverAddr)
+	// The kernel picks the port: a hardcoded one collides with a concurrent
+	// test run and then the ladder legitimately reports "no route" against a
+	// listener that is not ours. Probing a port and closing it before the
+	// listener takes it is the same race with extra steps — the address the
+	// core publishes after binding is the only one that is really ours.
+	server := newCoreWithNative(t, "ladder-server", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	dialer := newCoreWithNative(t, "ladder-dialer", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	_, serverAddr := registerAndListen(t, ctx, server, "127.0.0.1:0")
 	// registerAndListen starts Listen in a goroutine; wait until it actually
 	// accepts before dialing. On a slow Windows runner the first dial could
 	// land before the listener was up, get refused, and the ladder (which

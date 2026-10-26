@@ -37,7 +37,7 @@ func TestAwaitChildLeaseAwareWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	c := newCore(t, "wait-parent", "")
+	c := newCore(t, "wait-parent")
 	c.leaseTimeout = 1200 * time.Millisecond
 	parent, child := spawnWaitPair(t, c, ctx)
 
@@ -89,7 +89,7 @@ func TestAwaitChildSilentChildGoesPending(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	c := newCore(t, "wait-parent2", "")
+	c := newCore(t, "wait-parent2")
 	c.leaseTimeout = 800 * time.Millisecond
 	parent, child := spawnWaitPair(t, c, ctx)
 
@@ -116,7 +116,7 @@ func TestAwaitChildParentDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	c := newCore(t, "wait-parent3", "")
+	c := newCore(t, "wait-parent3")
 	c.leaseTimeout = 1200 * time.Millisecond
 	parent, child := spawnWaitPair(t, c, ctx)
 	// DeadlineUnix is whole seconds — +3s lands the bound ~2–3s out no
@@ -161,7 +161,7 @@ func TestFoldLateChildrenReadsRows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c := newCore(t, "fold-parent", "")
+	c := newCore(t, "fold-parent")
 	_, child := spawnWaitPair(t, c, ctx)
 
 	pending := []pendingChild{{id: child.TaskID, title: child.Title}}

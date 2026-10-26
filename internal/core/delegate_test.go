@@ -135,7 +135,7 @@ func TestParseDelegateRequestBoundary(t *testing.T) {
 
 func TestDelegationBudgetResolution(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "node-x", "127.0.0.1:0")
+	c := newCore(t, "node-x")
 	if err := c.Register(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -179,9 +179,9 @@ func TestDelegateBudgetWireCompat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCore(t, "entry-budget", "127.0.0.1:17848")
-	worker := newCore(t, "worker-budget", "127.0.0.1:17849")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17848", "127.0.0.1:17849")
+	entry := newCore(t, "entry-budget")
+	worker := newCore(t, "worker-budget")
+	startPair(t, ctx, entry, worker)
 
 	// Legacy shape: no delegation_budget key on the wire at all.
 	env, _ := bus.NewEnvelope(bus.MsgTaskDelegate, "entry-budget", "m-legacy", bus.TaskDelegatePayload{

@@ -83,7 +83,7 @@ func TestResolveBeaconAddr(t *testing.T) {
 // rows sweep.
 func TestOnBeaconRecordsPending(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 
 	pub, _, _ := bus.GenerateNodeKey()
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
@@ -132,7 +132,7 @@ func TestOnBeaconRecordsPending(t *testing.T) {
 // outright; sig-without-pub is malformed, not unsigned.
 func TestSignedBeaconVerified(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
 
 	pub, priv, _ := bus.GenerateNodeKey()
@@ -194,7 +194,7 @@ func TestSignedBeaconVerified(t *testing.T) {
 // fingerprint a signature actually proved.
 func TestPendingCapPrefersVerified(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
 	for i := 0; i < pendingCap; i++ {
 		c.onBeacon(ctx, marshalBeacon("junk-"+strconv.Itoa(i), ":7836", nil, nil), src)
@@ -225,7 +225,7 @@ func TestPendingCapPrefersVerified(t *testing.T) {
 // stalest row is the one evicted.
 func TestPendingCap(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
 	for i := 0; i < pendingCap+8; i++ {
 		c.onBeacon(ctx, marshalBeacon("flood-"+strconv.Itoa(i), ":7836", nil, nil), src)
@@ -258,7 +258,7 @@ func TestDiscoverySocketEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 	c.SetSharedSecret("x") // announcer eligibility; loopback advertise suppresses the send anyway
 
 	// Bind an ephemeral discovery port.
@@ -304,7 +304,7 @@ func TestDiscoverySocketEndToEnd(t *testing.T) {
 func TestDiscoveryBadBindAddr(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 	done := make(chan struct{})
 	go func() { c.RunDiscovery(ctx, ":not-a-port", ":9999", false); close(done) }()
 	// The malformed port still goes through a resolver lookup, and on loaded
@@ -325,18 +325,18 @@ func TestAutoDialConnects(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17971")
-	b := newCore(t, "node-b", "127.0.0.1:17972")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, b, "127.0.0.1:17972")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	a.autoDialOn.Store(true)
 	src := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 50000}
-	a.onBeacon(ctx, marshalBeacon("node-b", ":17972", nil, nil), src)
+	a.onBeacon(ctx, marshalBeacon("node-b", beaconPort(bAddr), nil, nil), src)
 
 	a.autoDialMu.Lock()
 	_, ok := a.autoDialCands["node-b"]
@@ -378,7 +378,7 @@ func TestAutoDialConnects(t *testing.T) {
 // broadcaster points).
 func TestAutoDialRefusesUnpinned(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "self", "127.0.0.1:0")
+	c := newCore(t, "self")
 	c.autoDialOn.Store(true)
 	src := &net.UDPAddr{IP: net.ParseIP("192.168.1.60"), Port: 50000}
 
@@ -408,14 +408,14 @@ func TestAutoDialStaleDirectoryRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17975")
-	b := newCore(t, "node-b", "127.0.0.1:17976")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, b, "127.0.0.1:17976")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	// The stale row: node-b was fleet once (a directory entry exists) but no
 	// connection stands.
@@ -425,7 +425,7 @@ func TestAutoDialStaleDirectoryRow(t *testing.T) {
 
 	a.autoDialOn.Store(true)
 	src := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 50000}
-	a.onBeacon(ctx, marshalBeacon("node-b", ":17976", nil, nil), src)
+	a.onBeacon(ctx, marshalBeacon("node-b", beaconPort(bAddr), nil, nil), src)
 
 	a.autoDialMu.Lock()
 	_, ok := a.autoDialCands["node-b"]
@@ -451,17 +451,17 @@ func TestAutoDialWrongSecret(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17973")
-	b := newCore(t, "node-b", "127.0.0.1:17974")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	b.SetSharedSecret("different-secret")
 	if err := b.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListen(t, ctx, b, "127.0.0.1:17974")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	a.autoDialOn.Store(true)
 	src := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 50000}
-	a.onBeacon(ctx, marshalBeacon("node-b", ":17974", nil, nil), src)
+	a.onBeacon(ctx, marshalBeacon("node-b", beaconPort(bAddr), nil, nil), src)
 	a.autoDialPass(ctx)
 
 	time.Sleep(500 * time.Millisecond) // let any handshake settle

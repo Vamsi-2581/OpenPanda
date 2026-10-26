@@ -40,11 +40,9 @@ func TestTrustOpenOriginDeclinedE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCoreWithNative(t, "entry-open", "127.0.0.1:18801",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
-	worker := newCoreWithNative(t, "worker-open", "127.0.0.1:18802",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18801", "127.0.0.1:18802")
+	entry := newCoreWithNative(t, "entry-open", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-open", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker)
 
 	// The operator pins the inbound peer to open: its pushes are refused.
 	if err := ledger.SetPeerTrust(worker.db, "entry-open", "open"); err != nil {
@@ -72,11 +70,9 @@ func TestTrustGuardedReviewParkE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCoreWithNative(t, "entry-rev", "127.0.0.1:18803",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
-	worker := newCoreWithNative(t, "worker-rev", "127.0.0.1:18804",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18803", "127.0.0.1:18804")
+	entry := newCoreWithNative(t, "entry-rev", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-rev", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker)
 
 	if err := ledger.SetPeerTrust(worker.db, "entry-rev", "guarded"); err != nil {
 		t.Fatalf("pin guarded: %v", err)
@@ -118,11 +114,9 @@ func TestReviewHoldKeepsDelegatorLease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCoreWithNative(t, "entry-hold", "127.0.0.1:18811",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
-	worker := newCoreWithNative(t, "worker-hold", "127.0.0.1:18812",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18811", "127.0.0.1:18812")
+	entry := newCoreWithNative(t, "entry-hold", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-hold", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker)
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -216,11 +210,9 @@ func TestAdmissionReviewIgnoresWireResume(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCoreWithNative(t, "entry-esc", "127.0.0.1:18821",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
-	worker := newCoreWithNative(t, "worker-esc", "127.0.0.1:18822",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18821", "127.0.0.1:18822")
+	entry := newCoreWithNative(t, "entry-esc", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-esc", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker)
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -289,11 +281,9 @@ func TestForeignConsentStripE2E(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCoreWithNative(t, "entry-fc", "127.0.0.1:18813",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
-	worker := newCoreWithNative(t, "worker-fc", "127.0.0.1:18814",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18813", "127.0.0.1:18814")
+	entry := newCoreWithNative(t, "entry-fc", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-fc", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker)
 
 	if err := ledger.SetPeerTrust(worker.db, "entry-fc", "guarded"); err != nil {
 		t.Fatalf("pin guarded: %v", err)
@@ -346,11 +336,9 @@ func TestAdmissionRejectRelaysVerdictUpstream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	entry := newCoreWithNative(t, "entry-rej", "127.0.0.1:18805",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
-	worker := newCoreWithNative(t, "worker-rej", "127.0.0.1:18806",
-		ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
-	startPair(t, ctx, entry, worker, "127.0.0.1:18805", "127.0.0.1:18806")
+	entry := newCoreWithNative(t, "entry-rej", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"entry"}})
+	worker := newCoreWithNative(t, "worker-rej", ledger.NativeAbility{ID: "sys:info", Command: "echo", Args: []string{"worker"}})
+	startPair(t, ctx, entry, worker)
 
 	if err := ledger.SetPeerTrust(worker.db, "entry-rej", "guarded"); err != nil {
 		t.Fatalf("pin guarded: %v", err)

@@ -19,18 +19,18 @@ func TestSessionEncryptionNegotiated(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	a := newCore(t, "enc-a", "127.0.0.1:17990")
-	b := newCore(t, "enc-b", "127.0.0.1:17991")
+	a := newCore(t, "enc-a")
+	b := newCore(t, "enc-b")
 	if err := a.Register(ctx); err != nil {
 		t.Fatalf("register a: %v", err)
 	}
 	if err := b.Register(ctx); err != nil {
 		t.Fatalf("register b: %v", err)
 	}
-	startListen(t, ctx, a, "127.0.0.1:17990")
-	startListen(t, ctx, b, "127.0.0.1:17991")
+	startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
-	if err := a.DialPeer(ctx, "127.0.0.1:17991"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	waitPeer(t, a, "enc-b")
@@ -69,13 +69,13 @@ func TestLegacyPeerFallsBackPlaintext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	c := newCore(t, "enc-host", "127.0.0.1:17994")
+	c := newCore(t, "enc-host")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListen(t, ctx, c, "127.0.0.1:17994")
+	hostAddr := startListen(t, ctx, c, "127.0.0.1:0")
 
-	ws, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:17994/ws", nil)
+	ws, _, err := websocket.DefaultDialer.Dial("ws://"+hostAddr+"/ws", nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -117,17 +117,17 @@ func TestCleartextPolicyRefusesLAN(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	a := newCore(t, "pol-a", "127.0.0.1:17995")
-	b := newCore(t, "pol-b", "127.0.0.1:17996")
+	a := newCore(t, "pol-a")
+	b := newCore(t, "pol-b")
 	if err := a.Register(ctx); err != nil {
 		t.Fatalf("register a: %v", err)
 	}
 	if err := b.Register(ctx); err != nil {
 		t.Fatalf("register b: %v", err)
 	}
-	startListen(t, ctx, b, "127.0.0.1:17996")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
-	if err := a.DialPeer(ctx, "127.0.0.1:17996"); err != nil {
+	if err := a.DialPeer(ctx, bAddr); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	waitPeer(t, a, "pol-b")

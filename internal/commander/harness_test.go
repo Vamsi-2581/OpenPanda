@@ -236,6 +236,26 @@ func TestTransientPatterns(t *testing.T) {
 	}
 }
 
+// TestTransientRequiresNoWork pins the replay guard: a retry re-runs the whole
+// task, so a failure that quotes a provider error after doing work must not
+// qualify. Tokens billed are the agent's own report that model work happened;
+// a transcript-sized result is task output, not a provider envelope.
+func TestTransientRequiresNoWork(t *testing.T) {
+	const limit = "API error: rate limit exceeded"
+	if transientAgentFailure(AgentResult{Result: limit, Tokens: 812}) {
+		t.Error("a run that billed tokens has side effects; it must not be replayed")
+	}
+	if transientAgentFailure(AgentResult{Result: limit + strings.Repeat("x", 5000)}) {
+		t.Error("a transcript-sized failure is task output; it must not be replayed")
+	}
+	if !transientAgentFailure(AgentResult{Result: limit}) {
+		t.Error("an empty-envelope provider error stays retryable")
+	}
+	if replayableFailure(AgentResult{OK: true}) {
+		t.Error("a successful run is never replayed")
+	}
+}
+
 // TestAgentSessionPoolReusesProcess drives the REAL session path: a stub
 // claude_code.py keeps stdin open after the request line and answers one
 // result envelope per turn line. Two Execute calls on the same execution

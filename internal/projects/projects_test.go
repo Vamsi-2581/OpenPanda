@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -333,5 +334,74 @@ func TestApprovalPolicyAdoptsMemoryOnlyProject(t *testing.T) {
 	}
 	if p.ApprovalMode != "never" || p.NormalizedScope() != ScopeOnce {
 		t.Fatalf("adopted policy = %+v", p)
+	}
+}
+
+// TestValidateWorkDir pins the breadth rule the web console relies on: a work
+// dir widens /api/fs/read's allow-list, so "the whole machine" must not be
+// expressible as one — while an ordinary project tree still is.
+func TestValidateWorkDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory to test against")
+	}
+	rejected := []string{
+		// The volume root: "/" on unix, "C:\" on Windows. The literal "/" is
+		// refused there as "not absolute", which tests the wrong branch.
+		filepath.VolumeName(home) + string(filepath.Separator),
+		home,
+		filepath.Dir(home),
+	}
+	if runtime.GOOS != "windows" {
+		// System trees are a unix list; Windows has no equivalent here.
+		rejected = append(rejected, "/etc", "/usr")
+	}
+	for _, dir := range rejected {
+		if err := ValidateWorkDir(dir); !errors.Is(err, ErrWorkDirTooBroad) {
+			t.Errorf("ValidateWorkDir(%q) = %v, want ErrWorkDirTooBroad", dir, err)
+		}
+	}
+	// A normal project tree passes, and so does one that does not exist yet:
+	// a project may be created before its directory.
+	if err := ValidateWorkDir(t.TempDir()); err != nil {
+		t.Errorf("temp project dir rejected: %v", err)
+	}
+	if err := ValidateWorkDir(filepath.Join(t.TempDir(), "not-created-yet")); err != nil {
+		t.Errorf("not-yet-created dir rejected: %v", err)
+	}
+	if err := ValidateWorkDir("relative/dir"); err == nil {
+		t.Error("a relative work dir must be refused")
+	}
+	if err := ValidateWorkDir(""); err != nil {
+		t.Errorf("empty work dir means 'no tree of its own': %v", err)
+	}
+}
+
+// TestValidateWorkDirSymlinkToRoot pins the resolved-path half of the rule: a
+// symlink is an ordinary directory by its own path, so the breadth check on the
+// path as written passes it; reads through it still reach the whole disk.
+func TestValidateWorkDirSymlinkToRoot(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink("/", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := ValidateWorkDir(link); !errors.Is(err, ErrWorkDirTooBroad) {
+		t.Fatalf("ValidateWorkDir(symlink to /) = %v, want ErrWorkDirTooBroad", err)
+	}
+}
+
+// TestCreateRefusesTooBroadWorkDir pins the enforcement point: the store is the
+// writer every caller (CLI, panel, bus) goes through, so the rule has to hold
+// here, not only in the web handler that happened to be reported.
+func TestCreateRefusesTooBroadWorkDir(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Create("wide", "/", ""); !errors.Is(err, ErrWorkDirTooBroad) {
+		t.Fatalf("create with / = %v, want ErrWorkDirTooBroad", err)
+	}
+	if _, err := s.Create("ok", t.TempDir(), ""); err != nil {
+		t.Fatalf("create with a project dir: %v", err)
+	}
+	if _, err := s.Update("ok", "/", ""); !errors.Is(err, ErrWorkDirTooBroad) {
+		t.Fatalf("update to / = %v, want ErrWorkDirTooBroad", err)
 	}
 }

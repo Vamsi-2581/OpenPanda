@@ -18,15 +18,14 @@ func TestDelegationMetricRecorded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	entryAddr, workerAddr := "127.0.0.1:17951", "127.0.0.1:17952"
 	// Entry must NOT have sys:info so the scheduler is forced to delegate.
-	entry := newCoreWithNative(t, "entry-metric", entryAddr, ledger.NativeAbility{
+	entry := newCoreWithNative(t, "entry-metric", ledger.NativeAbility{
 		ID: "noop", Command: "echo", Args: []string{"noop"},
 	})
-	worker := newCoreWithNative(t, "worker-metric", workerAddr, ledger.NativeAbility{
+	worker := newCoreWithNative(t, "worker-metric", ledger.NativeAbility{
 		ID: "sys:info", Command: "echo", Args: []string{"ok"},
 	})
-	startPair(t, ctx, entry, worker, entryAddr, workerAddr)
+	startPair(t, ctx, entry, worker)
 
 	in := TaskInput{Title: "metric task", Intent: "run sys:info", Requires: []string{"sys:info"}}
 	task, result, err := entry.Submit(ctx, in)
@@ -116,18 +115,13 @@ func TestDelegationMetricRecordsFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Unique ports: 17961/17962 are shared by maintain_loop and the reconnect
-	// tests — a previous test's listener can still be draining its ctx-cancel
-	// shutdown when this test dials, and the dial then lands on a dying
-	// listener that answers with a different node id.
-	entryAddr, workerAddr := "127.0.0.1:17761", "127.0.0.1:17762"
-	entry := newCoreWithNative(t, "entry-fail", entryAddr, ledger.NativeAbility{
+	entry := newCoreWithNative(t, "entry-fail", ledger.NativeAbility{
 		ID: "noop", Command: "echo", Args: []string{"noop"},
 	})
-	worker := newCoreWithNative(t, "worker-fail", workerAddr, ledger.NativeAbility{
+	worker := newCoreWithNative(t, "worker-fail", ledger.NativeAbility{
 		ID: "sys:info", Command: "false",
 	})
-	startPair(t, ctx, entry, worker, entryAddr, workerAddr)
+	startPair(t, ctx, entry, worker)
 
 	in := TaskInput{Title: "failing task", Intent: "run sys:info", Requires: []string{"sys:info"}}
 	task, result, err := entry.Submit(ctx, in)

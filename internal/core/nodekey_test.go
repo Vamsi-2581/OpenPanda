@@ -48,9 +48,9 @@ func TestHelloRecordsPeerPubKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	entry := newCore(t, "entry", "127.0.0.1:17970")
-	worker := newCore(t, "worker", "127.0.0.1:17971")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17970", "127.0.0.1:17971")
+	entry := newCore(t, "entry")
+	worker := newCore(t, "worker")
+	startPair(t, ctx, entry, worker)
 
 	// The pubkey lands from the hello handler's goroutine, not synchronously
 	// with the dial: under the race detector's load the write can trail the
@@ -111,9 +111,9 @@ func TestPeerKeyTofuLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	entry := newCore(t, "entry", "127.0.0.1:17976")
-	worker := newCore(t, "worker", "127.0.0.1:17977")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17976", "127.0.0.1:17977")
+	entry := newCore(t, "entry")
+	worker := newCore(t, "worker")
+	startPair(t, ctx, entry, worker)
 
 	// First use: the worker's key is on file but nobody has compared it.
 	nodes, err := ledger.Query(entry.db, "", "worker")
@@ -166,8 +166,8 @@ func TestPeerKeyTofuLifecycle(t *testing.T) {
 // under the wrong public key, or bound to a different task is rejected — and
 // an unsigned legacy flag still passes for mixed-version meshes.
 func TestConsentGrantVerification(t *testing.T) {
-	origin := newCore(t, "origin", "127.0.0.1:17972")
-	exec := newCore(t, "exec", "127.0.0.1:17973")
+	origin := newCore(t, "origin")
+	exec := newCore(t, "exec")
 
 	p := bus.TaskDelegatePayload{
 		TaskID:     "t-consent",
@@ -255,11 +255,11 @@ func TestArtifactGrantDirectHandoff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	consumer := newCoreWithNative(t, "consumer", "127.0.0.1:17974", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	producer := newCoreWithNative(t, "producer", "127.0.0.1:17975", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	consumer := newCoreWithNative(t, "consumer", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	producer := newCoreWithNative(t, "producer", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	consumerPool := withArtifactPool(t, consumer)
 	producerPool := withArtifactPool(t, producer)
-	startPair(t, ctx, consumer, producer, "127.0.0.1:17974", "127.0.0.1:17975")
+	startPair(t, ctx, consumer, producer)
 
 	// The producer's own stage row: plan-scoped, chain rooted at the
 	// orchestrator — exactly what a delegated stage leaves behind.

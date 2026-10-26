@@ -370,7 +370,7 @@ func ProbeModel(spec ProbeSpec) (ProbeVerdict, time.Duration) {
 	start := probeNow()
 	v := probeModelOnce(spec)
 	endpointMu.Lock()
-	endpointCache[spec.probeKey()] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, checked: probeNow()}
+	endpointCache[spec.probeKey()] = endpointVerdict{ok: v.OK, detail: v.Detail, rejected: v.Rejected, unknown: v.Unknown, checked: probeNow()}
 	endpointMu.Unlock()
 	return v, time.Since(start)
 }

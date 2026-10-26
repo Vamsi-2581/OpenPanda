@@ -262,6 +262,11 @@ type Engine struct {
 const (
 	breakerBaseCooldown = 30 * time.Second
 	breakerMaxCooldown  = 5 * time.Minute
+	// breakerResetAfter is how long a client must stay free of fatal failures
+	// before its consecutive-failure count is forgotten. Cooldown expiry alone
+	// must not reset it (a flapping endpoint would never escalate), but a
+	// failure a day later must not inherit yesterday's streak either.
+	breakerResetAfter = 30 * time.Minute
 )
 
 // modelBreaker is one client's cooldown state: when it may be tried again and
@@ -281,11 +286,12 @@ func (e *Engine) isModelHealthy(key string) bool {
 	if !ok {
 		return true
 	}
-	if time.Now().After(st.until) {
-		delete(e.breaker, key)
-		return true
-	}
-	return false
+	// An expired cooldown makes the model usable again but keeps its failure
+	// count: the escalation ladder (30s → 60s → 120s → 240s → 5m) only works
+	// if the streak survives the cooldown. Deleting the record here reset the
+	// count on every probe, so a flapping endpoint retried at the base delay
+	// forever and only a success cleared it.
+	return time.Now().After(st.until)
 }
 
 func (e *Engine) recordModelFailure(key string) {
@@ -298,6 +304,12 @@ func (e *Engine) recordModelFailure(key string) {
 		e.breaker = make(map[string]modelBreaker)
 	}
 	st := e.breaker[key]
+	// A failure long after the last cooldown ended starts a new streak: the
+	// record outlives the cooldown so the ladder can escalate, but not so long
+	// that a client which failed once yesterday opens today at the ceiling.
+	if !st.until.IsZero() && time.Since(st.until) > breakerResetAfter {
+		st.fails = 0
+	}
 	st.fails++
 	steps := st.fails - 1
 	if steps > 4 {
@@ -1181,6 +1193,15 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 	} else if errors.Is(err, nodeidentity.ErrAlreadyRunning) {
 		sched.SetOwnsNodeRow(false)
 		ownsRow = false
+	} else {
+		// Anything else (an unwritable lock directory, a filesystem error) is
+		// not evidence that this process owns the row. The permissive default
+		// made it consume the same queue as the daemon — double claims, tasks
+		// run twice — so an unknown state is treated as "borrowed" and logged
+		// rather than assumed to be ours.
+		sched.SetOwnsNodeRow(false)
+		ownsRow = false
+		e.logger.Warn("askengine: node identity lock unavailable; scheduling as a borrowed engine", "err", err)
 	}
 	sched.SetRouterPolicy(e.cfg.Injection, e.cfg.Routing)
 	sched.AttachSupervisor(e.cfg.Model)

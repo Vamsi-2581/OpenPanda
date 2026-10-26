@@ -21,21 +21,21 @@ func TestTaskMessageTravelsTheWire(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	origin := newCore(t, "msg-origin", "127.0.0.1:18230")
-	leafA := newCore(t, "msg-leaf-a", "127.0.0.1:18231")
-	leafB := newCore(t, "msg-leaf-b", "127.0.0.1:18232")
+	origin := newCore(t, "msg-origin")
+	leafA := newCore(t, "msg-leaf-a")
+	leafB := newCore(t, "msg-leaf-b")
 	for _, c := range []*Core{origin, leafA, leafB} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register %s: %v", c.nodeID, err)
 		}
 	}
-	startListen(t, ctx, origin, "127.0.0.1:18230")
-	startListen(t, ctx, leafA, "127.0.0.1:18231")
-	startListen(t, ctx, leafB, "127.0.0.1:18232")
-	if err := origin.DialPeer(ctx, "127.0.0.1:18231"); err != nil {
+	startListen(t, ctx, origin, "127.0.0.1:0")
+	leafAAddr := startListen(t, ctx, leafA, "127.0.0.1:0")
+	leafBAddr := startListen(t, ctx, leafB, "127.0.0.1:0")
+	if err := origin.DialPeer(ctx, leafAAddr); err != nil {
 		t.Fatalf("dial leaf a: %v", err)
 	}
-	if err := origin.DialPeer(ctx, "127.0.0.1:18232"); err != nil {
+	if err := origin.DialPeer(ctx, leafBAddr); err != nil {
 		t.Fatalf("dial leaf b: %v", err)
 	}
 	waitPeer(t, origin, "msg-leaf-a")
@@ -175,29 +175,29 @@ func TestTaskMessageTravelsMultiHop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	origin := newCore(t, "msg-origin", "127.0.0.1:18330")
-	relay := newCore(t, "msg-relay", "127.0.0.1:18331")
-	leafA := newCore(t, "msg-leaf-a", "127.0.0.1:18332")
-	leafB := newCore(t, "msg-leaf-b", "127.0.0.1:18333")
+	origin := newCore(t, "msg-origin")
+	relay := newCore(t, "msg-relay")
+	leafA := newCore(t, "msg-leaf-a")
+	leafB := newCore(t, "msg-leaf-b")
 	for _, c := range []*Core{origin, relay, leafA, leafB} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register %s: %v", c.nodeID, err)
 		}
 	}
-	startListen(t, ctx, origin, "127.0.0.1:18330")
-	startListen(t, ctx, relay, "127.0.0.1:18331")
-	startListen(t, ctx, leafA, "127.0.0.1:18332")
-	startListen(t, ctx, leafB, "127.0.0.1:18333")
+	originAddr := startListen(t, ctx, origin, "127.0.0.1:0")
+	relayAddr := startListen(t, ctx, relay, "127.0.0.1:0")
+	startListen(t, ctx, leafA, "127.0.0.1:0")
+	leafBAddr := startListen(t, ctx, leafB, "127.0.0.1:0")
 	// Chain topology: origin ↔ relay ↔ leafA, with leafB a direct leaf of
 	// origin. leafA and origin are NOT peers — every board post crossing
 	// between them must be relayed.
-	if err := relay.DialPeer(ctx, "127.0.0.1:18330"); err != nil {
+	if err := relay.DialPeer(ctx, originAddr); err != nil {
 		t.Fatalf("relay dial origin: %v", err)
 	}
-	if err := leafA.DialPeer(ctx, "127.0.0.1:18331"); err != nil {
+	if err := leafA.DialPeer(ctx, relayAddr); err != nil {
 		t.Fatalf("leaf a dial relay: %v", err)
 	}
-	if err := origin.DialPeer(ctx, "127.0.0.1:18333"); err != nil {
+	if err := origin.DialPeer(ctx, leafBAddr); err != nil {
 		t.Fatalf("dial leaf b: %v", err)
 	}
 	waitPeer(t, relay, "msg-origin")

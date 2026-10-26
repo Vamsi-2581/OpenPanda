@@ -435,9 +435,9 @@ var builtins = []Provider{
 			{Prefix: "jev-", Reason: "served on the System One API, which this client does not speak"},
 		},
 		// Token prices in USD per 1M as published for Go/Go Plus (2026-10);
-		// DeepSeek rows use the off-peak rate and tiered long-context rates
-		// their base tier. Console does not publish per model context windows
-		// here, so the rows carry pricing only and the client's flat
+		// DeepSeek rows use the off-peak rate and the base tier of their
+		// long-context schedule. Console does not publish per model context
+		// windows here, so the rows carry pricing only and the client's flat
 		// completion floor applies unless --ctx/--max-tokens is set.
 		Models: []ModelSpec{
 			{ID: "glm-5.3-flash", Pricing: Pricing{InputPerMillion: 0.15, OutputPerMillion: 0.50}},

@@ -132,7 +132,7 @@ func TestExecLocksStore(t *testing.T) {
 func TestExecDanceReleaseReacquire(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	c := newCoreWithNative(t, "exec-dance", "", ledger.NativeAbility{ID: "sys:echo", Command: "echo"})
+	c := newCoreWithNative(t, "exec-dance", ledger.NativeAbility{ID: "sys:echo", Command: "echo"})
 
 	tk := createTask(t, c.store, "", "dance", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
@@ -201,7 +201,7 @@ func TestExecDanceReleaseReacquire(t *testing.T) {
 // and must not touch the row.
 func TestDuplicateRunYieldsToInFlight(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "lock-dup", "", ledger.NativeAbility{ID: "sys:echo", Command: "echo", Args: []string{"dup"}})
+	c := newCoreWithNative(t, "lock-dup", ledger.NativeAbility{ID: "sys:echo", Command: "echo", Args: []string{"dup"}})
 	tk := createTask(t, c.store, "", "dup", c.nodeID)
 	if err := c.store.Queue(ctx, tk.TaskID, c.nodeID); err != nil {
 		t.Fatalf("queue: %v", err)
@@ -372,7 +372,7 @@ func TestStaleReleaseKeepsReacquiredRows(t *testing.T) {
 func TestRunWaitsOnForeignExecLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	c := newCoreWithNative(t, "lock-wait", "", ledger.NativeAbility{ID: "sys:echo", Command: "echo", Args: []string{"locked"}})
+	c := newCoreWithNative(t, "lock-wait", ledger.NativeAbility{ID: "sys:echo", Command: "echo", Args: []string{"locked"}})
 	must := func(err error) {
 		t.Helper()
 		if err != nil {

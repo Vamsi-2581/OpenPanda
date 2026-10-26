@@ -131,9 +131,11 @@ def _cli_flags():
                        "auto": auto, "agent": bool(cached.get("agent"))}
         return _FLAG_PROBE
     text = ""
+    ok = False
     try:
         argv = harness.resolve_argv(["opencode", "run", "--help"])
         proc = subprocess.run(argv, capture_output=True, timeout=15)
+        ok = proc.returncode == 0
         text = harness.decode_cli((proc.stdout or b"") + (proc.stderr or b""))
     except Exception:
         text = ""
@@ -144,9 +146,11 @@ def _cli_flags():
         auto = "--dangerously-skip-permissions"
     _FLAG_PROBE = {"format": bool(re.search(r"--format\b", text)), "auto": auto,
                    "agent": bool(re.search(r"--agent\b", text))}
-    # A failed probe produced no text: caching "no flags" would downgrade an
-    # hour of runs after one transient hang, so only a real answer is stored.
-    if text.strip():
+    # Only a successful probe is an answer worth caching. A failed one prints
+    # yargs usage or a stack trace, which reads as "this build has none of
+    # these flags" — pinning an hour of runs to the plain-text fallback and
+    # refusing restricted tasks with a diagnosis nobody ever observed.
+    if ok and text.strip():
         harness.cache_put("opencode-flags", identity, _FLAG_PROBE)
     return _FLAG_PROBE
 
@@ -431,22 +435,13 @@ def _retry_pick(model, tried, prefer_free, effort, err_text):
     return pick
 
 
-def _resolve_model(requested):
-    """Anchor `requested` against the live model list.
+def _match_model(requested, available):
+    """Match `requested` against a roster snapshot. Returns (model, note, err).
 
-    Returns (model, note, err):
-      model — the provider/model id to pass; "" means pass no --model flag
-      note  — a progress line when the request was substituted
-      err   — a fatal diagnosis when nothing available can honour the request
-
-    A failed probe or an empty request is a no-op (old behaviour). An exact
-    match passes through. Otherwise the requested slug's tokens are matched
-    against the live slugs (equal or prefix — "v4" matches "v4.1"); a full
-    match is used with a progress note, and no match fails fast with the
-    available roster instead of letting the CLI reject the model opaquely."""
-    available = _available_models()
-    if not available or not requested:
-        return requested, "", ""
+    An exact match passes through. Otherwise the requested slug's tokens are
+    matched against the snapshot's slugs (equal or prefix — "v4" matches
+    "v4.1"); a full match is used with a progress note, and no match returns
+    the diagnosis instead of guessing."""
     if requested in available:
         return requested, "", ""
     want = [t for t in requested.split("/")[-1].split("-") if t]
@@ -464,6 +459,33 @@ def _resolve_model(requested):
         pick = next((m for m in full if m.split("/")[0] == provider), full[0])
         return pick, f"model {requested} is not available; using {pick}", ""
     return "", "", "opencode has no model matching " + requested + "; available models: " + ", ".join(available)
+
+
+def _resolve_model(requested):
+    """Anchor `requested` against the live model list.
+
+    Returns (model, note, err):
+      model — the provider/model id to pass; "" means pass no --model flag
+      note  — a progress line when the request was substituted
+      err   — a fatal diagnosis when nothing available can honour the request
+
+    A failed probe or an empty request is a no-op (old behaviour). A miss in
+    the cached roster is re-probed before it is believed: the cache is a
+    snapshot, and "not in the snapshot" is not "not served" — a model that
+    shipped after the snapshot used to kill every task outright for up to its
+    TTL, because this runs before the run whose rejection would have forced a
+    re-probe. A failed re-probe proves nothing, so the requested slug is
+    passed through and the provider answers for itself."""
+    available = _available_models()
+    if not available or not requested:
+        return requested, "", ""
+    model, note, err = _match_model(requested, available)
+    if not err:
+        return model, note, ""
+    fresh = _available_models(force=True)
+    if not fresh:
+        return requested, "", ""
+    return _match_model(requested, fresh)
 
 
 # The provider id panda's injected model rides under. opencode resolves

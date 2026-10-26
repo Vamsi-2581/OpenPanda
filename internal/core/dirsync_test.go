@@ -461,10 +461,10 @@ func TestDirSyncEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	a := newCore(t, "da", "127.0.0.1:18140")
-	b := newCore(t, "db", "127.0.0.1:18141")
-	ad := registerAndListen(t, ctx, a, "127.0.0.1:18140")
-	linkPair(t, ctx, b, a, "127.0.0.1:18140", ad)
+	a := newCore(t, "da")
+	b := newCore(t, "db")
+	ad, aAddr := registerAndListen(t, ctx, a, "127.0.0.1:0")
+	linkPair(t, ctx, b, a, aAddr, ad)
 
 	// Seed a signed third-party row into A's directory. Identity pins travel
 	// only for self-certifying stable ids; a device-name id would need a

@@ -303,8 +303,8 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	root := newCore(t, "queue-root", "127.0.0.1:17881")
-	leaf := newCoreWithNative(t, "queue-leaf", "127.0.0.1:17882", ledger.NativeAbility{
+	root := newCore(t, "queue-root")
+	leaf := newCoreWithNative(t, "queue-leaf", ledger.NativeAbility{
 		ID: "gpio:read", Command: "echo", Args: []string{"queue-gpio-ok"},
 	})
 	if err := root.Register(ctx); err != nil {
@@ -313,9 +313,9 @@ func TestEnqueueRoutesToPeer(t *testing.T) {
 	if err := leaf.Register(ctx); err != nil {
 		t.Fatalf("leaf register: %v", err)
 	}
-	startListen(t, ctx, root, "127.0.0.1:17881")
-	startListen(t, ctx, leaf, "127.0.0.1:17882")
-	if err := root.DialPeer(ctx, "127.0.0.1:17882"); err != nil {
+	startListen(t, ctx, root, "127.0.0.1:0")
+	leafAddr := startListen(t, ctx, leaf, "127.0.0.1:0")
+	if err := root.DialPeer(ctx, leafAddr); err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	waitPeer(t, root, "queue-leaf")
@@ -496,7 +496,7 @@ func TestSameWorkDirSerializes(t *testing.T) {
 // stop routing new work here.
 func TestDrainFlagPausesQueueAndBeatsDraining(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "drain-node", "")
+	c := newCore(t, "drain-node")
 	if err := c.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}

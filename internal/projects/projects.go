@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -160,6 +161,74 @@ func ValidateName(name string) error {
 	return nil
 }
 
+// ErrWorkDirTooBroad reports a work dir that is a filesystem root, the home
+// directory, or a system tree — a tree no task "works in".
+var ErrWorkDirTooBroad = errors.New("projects: work dir is too broad")
+
+// ValidateWorkDir rejects a work dir that would make the project table a
+// read-anything switch. It exists because the web console treats every
+// project's work dir as a readable root (/api/fs/read, /api/fs/image), so
+// `{"work_dir": "/"}` used to turn one authenticated request into a viewer for
+// the whole disk. The panel's own comment calls that boundary the reason reads
+// stay inside the node's directories; a boundary the same credential can widen
+// is not a boundary.
+//
+// The rule is deliberately about breadth, not ownership or existence: any
+// directory deep enough to be somebody's project passes, while the roots that
+// mean "the entire machine" — a volume root, the home directory or one of its
+// ancestors, and the system trees every OS keeps — do not. A work dir that does
+// not exist yet stays legal, because a project may be created before its tree.
+func ValidateWorkDir(abs string) error {
+	if abs == "" {
+		return nil
+	}
+	clean := filepath.Clean(abs)
+	if !filepath.IsAbs(clean) {
+		return fmt.Errorf("projects: work dir %q is not absolute", abs)
+	}
+	if parent := filepath.Dir(clean); parent == clean {
+		return fmt.Errorf("%w: %s is a filesystem root", ErrWorkDirTooBroad, clean)
+	}
+	real, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		real = clean
+	}
+	// The same breadth rule on the resolved path: a symlink whose target is a
+	// volume root passes the check above (its own parent is an ordinary
+	// directory) while every read through it sees the whole disk.
+	if parent := filepath.Dir(real); parent == real {
+		return fmt.Errorf("%w: %s resolves to the filesystem root", ErrWorkDirTooBroad, clean)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if realHome, err := filepath.EvalSymlinks(home); err == nil {
+			home = realHome
+		}
+		// The home directory itself and every ancestor of it (which includes
+		// "/" and "C:\Users") are all wider than any single project.
+		if rel, err := filepath.Rel(real, home); err == nil &&
+			(rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+			return fmt.Errorf("%w: %s is the home directory or an ancestor of it", ErrWorkDirTooBroad, clean)
+		}
+	}
+	for _, sys := range systemTrees {
+		if strings.EqualFold(real, sys) {
+			return fmt.Errorf("%w: %s is a system directory", ErrWorkDirTooBroad, clean)
+		}
+	}
+	return nil
+}
+
+// systemTrees are the OS-managed trees that are never a project: naming one as
+// a work dir means "read the system", which is the shape this check exists to
+// refuse. Compare on the resolved path, so a symlink into one is caught too.
+var systemTrees = []string{
+	"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/boot",
+	"/dev", "/proc", "/sys", "/var", "/opt", "/System", "/Library",
+	"/private/etc", "/private/var",
+	`C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`,
+	`C:\ProgramData`, `C:\Users`, `C:\Windows\System32`,
+}
+
 // Create inserts a project. workDir is resolved to an absolute path so a project
 // created from one directory still points at the same tree when a task runs from
 // another — the daemon's cwd is not the cwd of whoever typed the command.
@@ -171,6 +240,9 @@ func (s *Store) Create(name, workDir, description string) (Project, error) {
 		abs, err := filepath.Abs(workDir)
 		if err != nil {
 			return Project{}, fmt.Errorf("projects: resolve work dir: %w", err)
+		}
+		if err := ValidateWorkDir(abs); err != nil {
+			return Project{}, err
 		}
 		workDir = abs
 	}
@@ -276,6 +348,9 @@ func (s *Store) Update(name, workDir, description string) (Project, error) {
 		abs, err := filepath.Abs(workDir)
 		if err != nil {
 			return Project{}, fmt.Errorf("projects: resolve work dir: %w", err)
+		}
+		if err := ValidateWorkDir(abs); err != nil {
+			return Project{}, err
 		}
 		workDir = abs
 	}

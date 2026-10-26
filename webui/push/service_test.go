@@ -236,3 +236,34 @@ func TestNotifyLogsRedactedEndpoint(t *testing.T) {
 		t.Fatalf("log leaked endpoint capability secret: %q", out)
 	}
 }
+
+// A push endpoint naming the cloud metadata service must be refused. The
+// scheme check alone does not catch it: https://169.254.169.254/ has the
+// right scheme and still reaches the instance credential service, so the
+// daemon would POST to it and the response would decide what happens next.
+func TestSubscribeRejectsMetadataEndpoint(t *testing.T) {
+	svc, _ := newTestService(t)
+	for _, endpoint := range []string{
+		"https://169.254.169.254/latest/meta-data/",
+		"https://100.100.100.200/latest/meta-data/",
+		"https://169.254.1.1/",
+	} {
+		_, sub := testSubscription(t, endpoint)
+		err := svc.Subscribe(context.Background(), sub)
+		if err == nil {
+			t.Fatalf("endpoint %s was accepted", endpoint)
+		}
+		if !strings.Contains(err.Error(), "metadata") {
+			t.Fatalf("endpoint %s: error = %v, want it to name the metadata address", endpoint, err)
+		}
+	}
+}
+
+// A public push service is the normal case and must still be accepted.
+func TestSubscribeAcceptsPublicEndpoint(t *testing.T) {
+	svc, _ := newTestService(t)
+	_, sub := testSubscription(t, "https://fcm.googleapis.com/fcm/send/abc123")
+	if err := svc.Subscribe(context.Background(), sub); err != nil {
+		t.Fatalf("public endpoint refused: %v", err)
+	}
+}

@@ -27,19 +27,19 @@ func TestDaemonStyleMutualDialNoStorm(t *testing.T) {
 
 	// Node ids mirror the real deployment: "macbook" < "orangepi3b", so the
 	// macbook-initiated conn wins the mutual-dial tie-break on both sides.
-	a := newTaggedCore(t, "A", "macbook", "127.0.0.1:17961")
-	b := newTaggedCore(t, "B", "orangepi3b", "127.0.0.1:17962")
+	a := newTaggedCore(t, "A", "macbook")
+	b := newTaggedCore(t, "B", "orangepi3b")
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, a, "127.0.0.1:17961")
-	startListen(t, ctx, b, "127.0.0.1:17962")
+	aAddr := startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	// Mac role: one MaintainPeer — its outbound conn is the dedup winner and
 	// the loop just blocks serving it.
-	go func() { _ = a.MaintainPeer(ctx, "127.0.0.1:17962") }()
+	go func() { _ = a.MaintainPeer(ctx, bAddr) }()
 	time.Sleep(300 * time.Millisecond)
 
 	// Pi role: the daemon loop — MaintainPeer; on nil return reconnect after
@@ -49,7 +49,7 @@ func TestDaemonStyleMutualDialNoStorm(t *testing.T) {
 	go func() {
 		defer close(stop)
 		for {
-			if err := b.MaintainPeer(ctx, "127.0.0.1:17961"); err != nil {
+			if err := b.MaintainPeer(ctx, aAddr); err != nil {
 				t.Errorf("maintain peer: %v", err)
 				return
 			}
@@ -72,7 +72,7 @@ func TestDaemonStyleMutualDialNoStorm(t *testing.T) {
 
 // newTaggedCore is newCore with a per-side log prefix so interleaved output
 // from both cores can be told apart while debugging the dial loop.
-func newTaggedCore(t *testing.T, tag, id, addr string) *Core {
+func newTaggedCore(t *testing.T, tag, id string) *Core {
 	t.Helper()
 	db := openTestDB(t)
 	card := ledger.Card{

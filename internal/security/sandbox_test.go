@@ -3,6 +3,7 @@
 package security
 
 import (
+	"errors"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -95,5 +96,25 @@ func TestSandboxApplySetsDirAndEnv(t *testing.T) {
 	}
 	if !hasPath {
 		t.Fatalf("PATH missing from sandbox env: %v", cmd.Env)
+	}
+}
+
+// TestBackendMissingFailsClosed pins what a missing backend means per mode:
+// strict promises denied reads of credential paths, so it must refuse rather
+// than run the child unconfined; standard keeps the historical behaviour, and
+// doctor reports the same condition as a failure.
+func TestBackendMissingFailsClosed(t *testing.T) {
+	if err := backendMissing(ModeStandard, "bwrap is not on PATH"); err != nil {
+		t.Fatalf("standard must keep running: %v", err)
+	}
+	err := backendMissing(ModeStrict, "bwrap is not on PATH")
+	if err == nil {
+		t.Fatal("strict must refuse a host without a backend")
+	}
+	if !errors.Is(err, ErrSandboxUnavailable) {
+		t.Fatalf("err = %v, want ErrSandboxUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), "bwrap") {
+		t.Fatalf("err = %v, want the missing binary named", err)
 	}
 }

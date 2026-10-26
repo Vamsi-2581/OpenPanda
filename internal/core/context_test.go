@@ -19,7 +19,7 @@ import (
 // explicit pre-packed hash+level).
 func TestPackContextLevels(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "pack", "")
+	c := newCore(t, "pack")
 	// packContext promotes a non-"." workDir into a workspace snapshot, so the
 	// summary branch under test only exists at the daemon's pre-config "."
 	// default — pin it rather than inherit the helper's temp dir.
@@ -60,11 +60,11 @@ func TestContextPointerHit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	root := newCore(t, "root-hit", "127.0.0.1:17941")
-	leaf := newCoreWithNative(t, "leaf-hit", "127.0.0.1:17942", ledger.NativeAbility{
+	root := newCore(t, "root-hit")
+	leaf := newCoreWithNative(t, "leaf-hit", ledger.NativeAbility{
 		ID: "gpio:read", Command: "echo", Args: []string{"gpio-ok"},
 	})
-	startPair(t, ctx, root, leaf, "127.0.0.1:17941", "127.0.0.1:17942")
+	startPair(t, ctx, root, leaf)
 
 	// Pre-pack a snapshot and seed it on the leaf, so the pointer resolves
 	// locally without a context_fetch round-trip.
@@ -110,11 +110,11 @@ func TestContextFetchMiss(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	root := newCore(t, "root-miss", "127.0.0.1:17951")
-	leaf := newCoreWithNative(t, "leaf-miss", "127.0.0.1:17952", ledger.NativeAbility{
+	root := newCore(t, "root-miss")
+	leaf := newCoreWithNative(t, "leaf-miss", ledger.NativeAbility{
 		ID: "gpio:read", Command: "echo", Args: []string{"gpio-ok"},
 	})
-	startPair(t, ctx, root, leaf, "127.0.0.1:17951", "127.0.0.1:17952")
+	startPair(t, ctx, root, leaf)
 
 	in := TaskInput{
 		Title: "fetch miss", ContextType: "file", RepoPath: "/repo/panda",
@@ -168,7 +168,7 @@ func TestContextFetchMiss(t *testing.T) {
 // leak when the task is cancelled mid-fetch (P2-7).
 func TestCancelClearsPendingContext(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "cancel-pending", "")
+	c := newCore(t, "cancel-pending")
 
 	// A task owned by a peer; the pending context entry mimics a task paused
 	// in waiting_context waiting for its full snapshot.
@@ -202,7 +202,7 @@ func TestCancelClearsPendingContext(t *testing.T) {
 // pending entry's stamped attempt, not to whatever the row holds now.
 func TestStaleContextAckCannotFailRotatedAttempt(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec-rot", "")
+	c := newCore(t, "exec-rot")
 	tk := createTask(t, c.store, "", "t-ctx-rot", "exec-rot")
 	if err := c.store.Queue(ctx, tk.TaskID, "exec-rot"); err != nil {
 		t.Fatalf("queue: %v", err)
@@ -250,7 +250,7 @@ func TestStaleContextAckCannotFailRotatedAttempt(t *testing.T) {
 // the verdict, it does not suppress it.
 func TestContextAckFailsMatchingAttempt(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "exec-own", "")
+	c := newCore(t, "exec-own")
 	tk := createTask(t, c.store, "", "t-ctx-own", "exec-own")
 	if err := c.store.Queue(ctx, tk.TaskID, "exec-own"); err != nil {
 		t.Fatalf("queue: %v", err)

@@ -289,11 +289,17 @@ func executeTool(ctx context.Context, reg *entry.Registry, call *entry.ToolCall,
 		}
 		return "工具执行失败：未知工具 " + call.Tool
 	}
-	if denied {
+	// A remembered "deny" answers the tier-2 gate for this scope, so it may
+	// only withhold the operations that gate guards. Applying it to every
+	// tool — as this check once did — stripped the model of its read-only
+	// observation tools (system_status, card_list) for the rest of the
+	// project's life, and the refusal named a decision the user could not
+	// connect to "the assistant suddenly stopped working".
+	if denied && t.Tier != defense.TierReversible {
 		if targetLoc == i18n.English {
 			return "Tool execution refused: the user previously denied tier-2 operations for this scope. Ask the user to clear the remembered denial before retrying."
 		}
-		return "工具执行被拒：该范围内已有 tier-2 操作的拒绝记录。请先让用户清除已记住的拒绝再重试。"
+		return "工具执行被拒：该范围内已有需授权操作的拒绝记录。请先让用户清除已记住的拒绝再重试。"
 	}
 	if err := defense.Authorize(t.Tier, authorized); err != nil {
 		if targetLoc == i18n.English {

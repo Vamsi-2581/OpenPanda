@@ -65,14 +65,14 @@ func TestDTNRelayMultiHopMovesCustody(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s := newCoreWithNative(t, "dtn-s", "127.0.0.1:17980", ledger.NativeAbility{ID: "x", Command: "true"})
-	r1 := newCoreWithNative(t, "dtn-r1", "127.0.0.1:17981", ledger.NativeAbility{ID: "x", Command: "true"})
-	r2 := newCoreWithNative(t, "dtn-r2", "127.0.0.1:17982", ledger.NativeAbility{ID: "x", Command: "true"})
-	startPair(t, ctx, s, r1, "127.0.0.1:17980", "127.0.0.1:17981")
+	s := newCoreWithNative(t, "dtn-s", ledger.NativeAbility{ID: "x", Command: "true"})
+	r1 := newCoreWithNative(t, "dtn-r1", ledger.NativeAbility{ID: "x", Command: "true"})
+	r2 := newCoreWithNative(t, "dtn-r2", ledger.NativeAbility{ID: "x", Command: "true"})
+	startPair(t, ctx, s, r1)
 	// r1 already listens from the pair above; only r2 needs a bind — a second
 	// startPair would rebind r1's port, which Linux refuses with EADDRINUSE.
-	rd := registerAndListen(t, ctx, r2, "127.0.0.1:17982")
-	linkPair(t, ctx, r1, r2, "127.0.0.1:17982", rd)
+	rd, r2Addr := registerAndListen(t, ctx, r2, "127.0.0.1:0")
+	linkPair(t, ctx, r1, r2, r2Addr, rd)
 
 	// R1's view: s and r2 live; d exists offline behind r2.
 	seedNeighbor(t, r1, s.nodeID, []string{r1.nodeID}, true)
@@ -120,9 +120,9 @@ func TestDTNRelayParksRatherThanEchoes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s := newCoreWithNative(t, "dtn-s2", "127.0.0.1:17983", ledger.NativeAbility{ID: "x", Command: "true"})
-	r1 := newCoreWithNative(t, "dtn-r1b", "127.0.0.1:17984", ledger.NativeAbility{ID: "x", Command: "true"})
-	startPair(t, ctx, s, r1, "127.0.0.1:17983", "127.0.0.1:17984")
+	s := newCoreWithNative(t, "dtn-s2", ledger.NativeAbility{ID: "x", Command: "true"})
+	r1 := newCoreWithNative(t, "dtn-r1b", ledger.NativeAbility{ID: "x", Command: "true"})
+	startPair(t, ctx, s, r1)
 
 	// R1's whole map to d leads back through s.
 	seedNeighbor(t, r1, s.nodeID, []string{r1.nodeID, "dtn-d2"}, true)
@@ -161,8 +161,8 @@ func TestDTNRelaySweepMovesParkedCustody(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	r1 := newCoreWithNative(t, "dtn-r1c", "127.0.0.1:17985", ledger.NativeAbility{ID: "x", Command: "true"})
-	r2 := newCoreWithNative(t, "dtn-r2c", "127.0.0.1:17986", ledger.NativeAbility{ID: "x", Command: "true"})
+	r1 := newCoreWithNative(t, "dtn-r1c", ledger.NativeAbility{ID: "x", Command: "true"})
+	r2 := newCoreWithNative(t, "dtn-r2c", ledger.NativeAbility{ID: "x", Command: "true"})
 	if err := r1.Register(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestDTNRelaySweepMovesParkedCustody(t *testing.T) {
 	r1.parkBundle(ctx, "ghost", "dtn-d3", bnd, blob)
 
 	// r2 comes online adjacent to r1 and advertises the last edge to d3.
-	startPair(t, ctx, r1, r2, "127.0.0.1:17985", "127.0.0.1:17986")
+	startPair(t, ctx, r1, r2)
 	seedNeighbor(t, r1, r2.nodeID, []string{r1.nodeID, "dtn-d3"}, true)
 	seedAdjacency(t, r1, []string{r2.nodeID})
 	seedNeighbor(t, r2, "dtn-d3", []string{r2.nodeID}, false)
@@ -202,7 +202,7 @@ func TestDTNRelaySweepMovesParkedCustody(t *testing.T) {
 // can be ping-ponged until the TTL.
 func TestRelayForwardOKBoundsLoops(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "dtn-bound", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "dtn-bound", ledger.NativeAbility{ID: "x", Command: "true"})
 	deadline := time.Now().Add(time.Hour).Unix()
 	for i := 0; i < dtnRelayMaxHops; i++ {
 		if !c.relayForwardOK(ctx, "b-loop", deadline) {
@@ -246,7 +246,7 @@ func TestRelayForwardOKBoundsLoops(t *testing.T) {
 // the loop bound's memory cannot outlive the bundle forever just because the
 // origin never set one.
 func TestRelayForwardOKBoundsDeadlinelessBundles(t *testing.T) {
-	c := newCoreWithNative(t, "dtn-bound", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "dtn-bound", ledger.NativeAbility{ID: "x", Command: "true"})
 	if !c.relayForwardOK(context.Background(), "b-nodeadline", 0) {
 		t.Fatal("deadline-less bundle refused")
 	}
@@ -264,7 +264,7 @@ func TestRelayForwardOKBoundsDeadlinelessBundles(t *testing.T) {
 // record. The park upsert updates via.
 func TestParkBundleUpdatesVia(t *testing.T) {
 	ctx := context.Background()
-	c := newCoreWithNative(t, "dtn-via", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	c := newCoreWithNative(t, "dtn-via", ledger.NativeAbility{ID: "x", Command: "true"})
 	bnd, blob := mkTestBundle(t, c, "bnd-via-1", "t-via-1", "dtn-d")
 
 	c.parkBundle(ctx, "peer-a", "dtn-d", bnd, blob)

@@ -37,11 +37,11 @@ func TestArtifactPushTransfersEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	sender := newCoreWithNative(t, "push-a", "127.0.0.1:17970", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	receiver := newCoreWithNative(t, "push-b", "127.0.0.1:17971", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	sender := newCoreWithNative(t, "push-a", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	receiver := newCoreWithNative(t, "push-b", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	senderPool := withArtifactPool(t, sender)
 	recvPool := withArtifactPool(t, receiver)
-	startPair(t, ctx, sender, receiver, "127.0.0.1:17970", "127.0.0.1:17971")
+	startPair(t, ctx, sender, receiver)
 
 	const taskID = "t-push-roundtrip"
 	participantTask(t, sender, taskID, sender.nodeID, []string{sender.nodeID})
@@ -101,11 +101,11 @@ func TestArtifactPushResumesFromReceiverOffset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	sender := newCoreWithNative(t, "push-c", "127.0.0.1:17972", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	receiver := newCoreWithNative(t, "push-d", "127.0.0.1:17973", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	sender := newCoreWithNative(t, "push-c", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	receiver := newCoreWithNative(t, "push-d", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	senderPool := withArtifactPool(t, sender)
 	recvPool := withArtifactPool(t, receiver)
-	startPair(t, ctx, sender, receiver, "127.0.0.1:17972", "127.0.0.1:17973")
+	startPair(t, ctx, sender, receiver)
 
 	const taskID = "t-push-resume"
 	participantTask(t, receiver, taskID, sender.nodeID, []string{sender.nodeID, receiver.nodeID})
@@ -171,11 +171,11 @@ func TestDtnTaskParksUntilPushedInputsArrive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	sender := newCoreWithNative(t, "push-e", "127.0.0.1:17974", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
-	worker := newCoreWithNative(t, "push-f", "127.0.0.1:17975", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	sender := newCoreWithNative(t, "push-e", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
+	worker := newCoreWithNative(t, "push-f", ledger.NativeAbility{ID: "sys:info", Command: "uname"})
 	senderPool := withArtifactPool(t, sender)
 	withArtifactPool(t, worker)
-	startPair(t, ctx, sender, worker, "127.0.0.1:17974", "127.0.0.1:17975")
+	startPair(t, ctx, sender, worker)
 
 	m, err := senderPool.PackDir(artifactTree(t, 512<<10))
 	if err != nil {
@@ -244,7 +244,7 @@ func TestDtnTaskParksUntilPushedInputsArrive(t *testing.T) {
 // cumulative, or a re-delegation would restart a nearly-finished transfer.
 func TestPushEnqueueKeepsProgressOnRepush(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "push-g", "")
+	c := newCore(t, "push-g")
 	pool := withArtifactPool(t, c)
 
 	m, err := pool.PackDir(artifactTree(t, 64<<10))

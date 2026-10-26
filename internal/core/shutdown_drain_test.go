@@ -15,7 +15,7 @@ import (
 // supervisor's stop timeout, whose SIGKILL mid-extract is the very outcome the
 // drain exists to prevent.
 func TestShutdownDeadlineBoundsArtifactDrain(t *testing.T) {
-	c := newCore(t, "drain-node", "127.0.0.1:17999")
+	c := newCore(t, "drain-node")
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -41,7 +41,7 @@ func TestShutdownDeadlineBoundsArtifactDrain(t *testing.T) {
 // counter 0 after Wait began is never awaited — and must not be dropped
 // either, or the adoption simply never happens. The work runs inline instead.
 func TestGoArtifactAfterShutdownRunsInline(t *testing.T) {
-	c := newCore(t, "drain-node2", "127.0.0.1:17998")
+	c := newCore(t, "drain-node2")
 	c.Shutdown(context.Background())
 
 	ran := false

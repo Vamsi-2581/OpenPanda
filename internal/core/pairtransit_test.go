@@ -24,11 +24,11 @@ func TestPairHelloTargetingSelfAnswersLocally(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	intro := newCore(t, "intro-self", "127.0.0.1:17983")
+	intro := newCore(t, "intro-self")
 	if err := intro.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListen(t, ctx, intro, "127.0.0.1:17983")
+	introAddr := startListen(t, ctx, intro, "127.0.0.1:0")
 
 	introPub, _, ok := intro.nodeKeyPair()
 	if !ok {
@@ -48,7 +48,7 @@ func TestPairHelloTargetingSelfAnswersLocally(t *testing.T) {
 	_, _ = rand.Read(nonce)
 	session := "sess-self-" + t.Name()
 
-	ws, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:17983/ws", nil)
+	ws, _, err := websocket.DefaultDialer.Dial("ws://"+introAddr+"/ws", nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -100,20 +100,20 @@ func TestPairOverTransitThroughContactPoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	intro := newCore(t, "intro", "127.0.0.1:17981")
-	contact := newCore(t, "contact", "127.0.0.1:17982")
+	intro := newCore(t, "intro")
+	contact := newCore(t, "contact")
 	if err := intro.Register(ctx); err != nil {
 		t.Fatalf("register intro: %v", err)
 	}
 	if err := contact.Register(ctx); err != nil {
 		t.Fatalf("register contact: %v", err)
 	}
-	startListen(t, ctx, intro, "127.0.0.1:17981")
-	startListen(t, ctx, contact, "127.0.0.1:17982")
+	introAddr := startListen(t, ctx, intro, "127.0.0.1:0")
+	contactAddr := startListen(t, ctx, contact, "127.0.0.1:0")
 
 	// The contact point must be a real member of the introducer's mesh —
 	// that authenticated edge is what carries the proxied handshake.
-	contact.SyncPeers(ctx, []string{"127.0.0.1:17981"})
+	contact.SyncPeers(ctx, []string{introAddr})
 	waitPeer(t, contact, "intro")
 	waitPeer(t, intro, "contact")
 
@@ -136,7 +136,7 @@ func TestPairOverTransitThroughContactPoint(t *testing.T) {
 	_, _ = rand.Read(nonce)
 	session := "sess-transit-" + t.Name()
 
-	ws, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:17982/ws", nil)
+	ws, _, err := websocket.DefaultDialer.Dial("ws://"+contactAddr+"/ws", nil)
 	if err != nil {
 		t.Fatalf("dial contact: %v", err)
 	}

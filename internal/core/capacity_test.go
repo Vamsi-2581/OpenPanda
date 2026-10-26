@@ -91,9 +91,9 @@ func TestWireHeartbeatRefreshesPeer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a := newCore(t, "hb-a", "127.0.0.1:17921")
-	b := newCore(t, "hb-b", "127.0.0.1:17922")
-	startPair(t, ctx, a, b, "127.0.0.1:17921", "127.0.0.1:17922")
+	a := newCore(t, "hb-a")
+	b := newCore(t, "hb-b")
+	startPair(t, ctx, a, b)
 
 	// Age b's view of a artificially, then broadcast a real heartbeat from a.
 	if _, err := b.db.Exec(`UPDATE employee_cache SET last_seen=? WHERE id=?`, time.Now().Unix()-7200, "hb-a"); err != nil {

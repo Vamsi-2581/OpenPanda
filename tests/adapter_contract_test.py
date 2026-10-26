@@ -387,6 +387,10 @@ print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text"
             env["PATH"] = str(tmp) + os.pathsep + env.get("PATH", "")
             env["HOME"] = str(tmp)  # no ambient opencode config in the identity
             env["XDG_CACHE_HOME"] = str(tmp / "cache")
+            # cache_dir() reads LOCALAPPDATA on win32, not XDG_CACHE_HOME: without
+            # this the test writes its fixtures into the developer's real cache.
+            env["LOCALAPPDATA"] = str(tmp / "localappdata")
+            env["APPDATA"] = str(tmp / "appdata")
             env["OPENPANDA_ADAPTER_CACHE"] = "1"
             req = {"prompt": "contract prompt", "timeout_s": 30, "cwd": str(work)}
 
@@ -394,7 +398,7 @@ print(json.dumps({"type":"text","sessionID":"s1","part":{"id":"px","type":"text"
                 proc = subprocess.run(
                     [sys.executable, str(ADAPTERS / "opencode.py")],
                     input=json.dumps(req), text=True, capture_output=True,
-                    env=env, cwd=str(ROOT), timeout=30,
+                    env=env, cwd=str(ROOT), timeout=30, encoding="utf-8",
                 )
                 payload = json.loads(proc.stdout.strip())
                 self.assertTrue(payload["ok"], payload)

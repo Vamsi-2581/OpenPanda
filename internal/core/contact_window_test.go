@@ -21,9 +21,9 @@ func TestDTNContactPlanMovesCustodyToScheduledHop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s := newCoreWithNative(t, "dtn-s5", "127.0.0.1:17990", ledger.NativeAbility{ID: "x", Command: "true"})
-	r1 := newCoreWithNative(t, "dtn-r5", "127.0.0.1:17991", ledger.NativeAbility{ID: "x", Command: "true"})
-	startPair(t, ctx, s, r1, "127.0.0.1:17990", "127.0.0.1:17991")
+	s := newCoreWithNative(t, "dtn-s5", ledger.NativeAbility{ID: "x", Command: "true"})
+	r1 := newCoreWithNative(t, "dtn-r5", ledger.NativeAbility{ID: "x", Command: "true"})
+	startPair(t, ctx, s, r1)
 
 	const dest = "dtn-d5"
 	now := time.Now().Unix()
@@ -87,7 +87,7 @@ func TestHeartbeatContactPlanClearSemantics(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	s := newCoreWithNative(t, "dtn-s6", "127.0.0.1:17992", ledger.NativeAbility{ID: "x", Command: "true"})
+	s := newCoreWithNative(t, "dtn-s6", ledger.NativeAbility{ID: "x", Command: "true"})
 	seedNeighbor(t, s, "dtn-peer6", nil, true)
 
 	window := []ledger.Contact{{Peer: "dtn-d6", Start: 1000, End: 2000}}

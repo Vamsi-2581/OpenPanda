@@ -31,8 +31,8 @@ func waitUDPRoute(t *testing.T, c *Core, id string) {
 // the ack confirms it. This is the two-NAT case reduced to loopback.
 func TestPunchHandshakeDirect(t *testing.T) {
 	ctx := context.Background()
-	a := newCoreWithNative(t, "punch-a", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
-	b := newCoreWithNative(t, "punch-b", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	a := newCoreWithNative(t, "punch-a", ledger.NativeAbility{ID: "x", Command: "true"})
+	b := newCoreWithNative(t, "punch-b", ledger.NativeAbility{ID: "x", Command: "true"})
 	if err := a.ListenUDP(ctx, "127.0.0.1:0", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +73,9 @@ func TestPunchHandshakeDirect(t *testing.T) {
 // A's advertised candidates.
 func TestPunchRelayedOffer(t *testing.T) {
 	ctx := context.Background()
-	a := newCoreWithNative(t, "pn-a", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
-	r := newCoreWithNative(t, "pn-r", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
-	b := newCoreWithNative(t, "pn-b", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	a := newCoreWithNative(t, "pn-a", ledger.NativeAbility{ID: "x", Command: "true"})
+	r := newCoreWithNative(t, "pn-r", ledger.NativeAbility{ID: "x", Command: "true"})
+	b := newCoreWithNative(t, "pn-b", ledger.NativeAbility{ID: "x", Command: "true"})
 	defer a.Shutdown(ctx)
 	defer r.Shutdown(ctx)
 	defer b.Shutdown(ctx)
@@ -169,7 +169,7 @@ func TestPunchRelayedOffer(t *testing.T) {
 // identity.
 func TestPunchSpoofedFromDropped(t *testing.T) {
 	ctx := context.Background()
-	a := newCoreWithNative(t, "pn-vb", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	a := newCoreWithNative(t, "pn-vb", ledger.NativeAbility{ID: "x", Command: "true"})
 	if err := a.ListenUDP(ctx, "127.0.0.1:0", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestPunchSpoofedFromDropped(t *testing.T) {
 // cannot open a route.
 func TestPunchBadSignature(t *testing.T) {
 	ctx := context.Background()
-	a := newCoreWithNative(t, "pn-va", "127.0.0.1:0", ledger.NativeAbility{ID: "x", Command: "true"})
+	a := newCoreWithNative(t, "pn-va", ledger.NativeAbility{ID: "x", Command: "true"})
 	if err := a.ListenUDP(ctx, "127.0.0.1:0", nil); err != nil {
 		t.Fatal(err)
 	}

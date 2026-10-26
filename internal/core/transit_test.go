@@ -115,15 +115,15 @@ func TestTransitDeliveryE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	a := newCore(t, "ta", "127.0.0.1:18120")
-	r := newCore(t, "tr", "127.0.0.1:18121")
-	b := newCore(t, "tb", "127.0.0.1:18122")
+	a := newCore(t, "ta")
+	r := newCore(t, "tr")
+	b := newCore(t, "tb")
 	// A↔R and B↔R edges only — no A↔B.
-	rd := registerAndListen(t, ctx, r, "127.0.0.1:18121")
-	ad := registerAndListen(t, ctx, a, "127.0.0.1:18120")
-	linkPair(t, ctx, a, r, "127.0.0.1:18121", ad, rd)
-	bd := registerAndListen(t, ctx, b, "127.0.0.1:18122")
-	linkPair(t, ctx, b, r, "127.0.0.1:18121", bd, rd)
+	rd, rAddr := registerAndListen(t, ctx, r, "127.0.0.1:0")
+	ad, _ := registerAndListen(t, ctx, a, "127.0.0.1:0")
+	linkPair(t, ctx, a, r, rAddr, ad, rd)
+	bd, _ := registerAndListen(t, ctx, b, "127.0.0.1:0")
+	linkPair(t, ctx, b, r, rAddr, bd, rd)
 
 	if a.connFor("tb") != nil || b.connFor("ta") != nil {
 		t.Fatal("fixture produced a direct A↔B edge; the transit path is untested")

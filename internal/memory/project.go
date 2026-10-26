@@ -3,6 +3,7 @@
 package memory
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -107,6 +108,48 @@ func (p *Projects) Save(name string, m MemFile) error {
 	if err != nil {
 		return err
 	}
+	release, err := lockRoot(p.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock project memory %q: %w", name, err)
+	}
+	defer release()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.saveLocked(name, path, m)
+}
+
+// Update runs fn against the project's current memory and writes the result
+// back as one critical section — the read-modify-write form Save cannot give a
+// caller, because the state fn has to reason about is the state on disk.
+func (p *Projects) Update(name string, fn func(*MemFile) error) error {
+	path, err := p.Path(name)
+	if err != nil {
+		return err
+	}
+	release, err := lockRoot(p.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock project memory %q: %w", name, err)
+	}
+	defer release()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, err := p.Load(name)
+	if err != nil {
+		return err
+	}
+	before := m.Bytes()
+	if err := fn(&m); err != nil {
+		return err
+	}
+	if bytes.Equal(before, m.Bytes()) {
+		return nil // nothing changed: no rewrite, no mtime churn
+	}
+	return p.saveLocked(name, path, m)
+}
+
+// saveLocked writes the file; the caller holds the project mutex and the
+// cross-process lock.
+func (p *Projects) saveLocked(name, path string, m MemFile) error {
 	limit := m.Limit
 	if limit <= 0 {
 		limit = p.limits.project()
@@ -119,16 +162,65 @@ func (p *Projects) Save(name string, m MemFile) error {
 			return ErrSeparator
 		}
 	}
-	// Serialize the write so concurrent saves of the same project cannot
-	// interleave into a torn file (P1-21); the write itself is atomic (P1-20).
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("memory: create project dir: %w", err)
 	}
 	_ = os.Chmod(filepath.Dir(path), 0o700)
 	if err := util.WriteFileAtomic(path, m.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("memory: write project memory %q: %w", name, err)
+	}
+	return nil
+}
+
+// Rename carries a project's memory over to a new name: copy, then drop the
+// old directory. It is copy-then-drop rather than a directory move so a failure
+// part-way leaves the old file intact — losing the memory is the one outcome
+// worth paying an extra write to avoid.
+//
+// The whole sequence holds the store's lock, because the alternative is a
+// read-write-delete triple with two windows in it: an entry added between the
+// read and the copy would be copied stale, and one added between the copy and
+// the drop would be erased by the drop.
+func (p *Projects) Rename(oldName, newName string) error {
+	if err := ValidateName(oldName); err != nil {
+		return err
+	}
+	if err := ValidateName(newName); err != nil {
+		return err
+	}
+	if oldName == newName {
+		return nil
+	}
+	path, err := p.Path(newName)
+	if err != nil {
+		return err
+	}
+	release, err := lockRoot(p.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock project memory %q: %w", oldName, err)
+	}
+	defer release()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Refuse an existing target: saveLocked would write over that project's
+	// memory and the RemoveAll below would erase the source, so a rename onto
+	// a name already in use loses both. The check is inside the lock so a
+	// concurrent create cannot slip between it and the write.
+	newDir := filepath.Join(p.root, newName)
+	if _, statErr := os.Stat(newDir); statErr == nil {
+		return fmt.Errorf("memory: project %q already exists", newName)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("memory: check project %q: %w", newName, statErr)
+	}
+	m, err := p.Load(oldName)
+	if err != nil {
+		return err
+	}
+	if err := p.saveLocked(newName, path, m); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Join(p.root, oldName)); err != nil {
+		return fmt.Errorf("memory: remove project %q after rename: %w", oldName, err)
 	}
 	return nil
 }
@@ -144,6 +236,14 @@ func (p *Projects) Delete(name string) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
+	// Cross-process first: an update of the same project's memory may be in
+	// flight from the CLI or the console, and deleting the directory under it
+	// would lose that writer's change after it reported success.
+	release, err := lockRoot(p.root)
+	if err != nil {
+		return fmt.Errorf("memory: lock project memory %q: %w", name, err)
+	}
+	defer release()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	dir := filepath.Join(p.root, name)

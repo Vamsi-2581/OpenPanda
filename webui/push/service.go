@@ -12,9 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/Xustalis/OpenPanda/internal/security"
 )
 
 // Subscription is a browser PushSubscription as serialized by
@@ -107,8 +110,22 @@ func NewService(keys *VAPIDKeys, store *Store, logger *slog.Logger) *Service {
 	return &Service{
 		keys:   keys,
 		store:  store,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{Timeout: 10 * time.Second, Transport: metadataGuardTransport()},
 		logger: logger,
+	}
+}
+
+// metadataGuardTransport wraps the default transport with a dialer that
+// refuses to connect to a cloud metadata address.
+//
+// The name check in validateEndpoint reads the hostname as written; a public
+// name whose DNS answer is 169.254.169.254 passes it. Checking at connect
+// time closes that gap, and because every redirect hop shares the transport,
+// a 302 to a metadata address fails the same way instead of following. The
+// same guard protects the model clients — see security.GuardedDialContext.
+func metadataGuardTransport() http.RoundTripper {
+	return &http.Transport{
+		DialContext: security.GuardedDialContext(&net.Dialer{Timeout: 10 * time.Second}),
 	}
 }
 
@@ -250,6 +267,18 @@ func redactEndpoint(endpoint string) string {
 // browser's push service is always https://; accepting an arbitrary scheme would
 // let a leaked panel token turn the daemon into an SSRF proxy (e.g. an
 // http://169.254.169.254/... metadata endpoint).
+//
+// The host check closes the other half of that: https://169.254.169.254/... has
+// the right scheme and still reaches the instance metadata service, so the
+// daemon would hand it a POST body and the response decides what happens next.
+// A metadata address is never a push service, so it is refused here.
+//
+// A *private* address is left alone on purpose: a self-hosted push service on
+// the LAN is a legitimate deployment, and the endpoint is only reachable by
+// someone who already holds the panel token. The send path additionally
+// refuses to dial a metadata address at connect time (see
+// metadataGuardTransport), which covers the case the name check cannot: a
+// public host whose DNS resolves to one.
 func validateEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -260,6 +289,9 @@ func validateEndpoint(endpoint string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("subscription endpoint: missing host")
+	}
+	if err := security.CheckEndpointHost(u.Hostname(), true); err != nil {
+		return fmt.Errorf("subscription endpoint: %w", err)
 	}
 	return nil
 }

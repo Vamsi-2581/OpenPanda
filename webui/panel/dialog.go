@@ -141,6 +141,14 @@ type listDirectoriesResponse struct {
 
 // listDirectories serves GET /api/fs/directories?path=...
 // Provides a fallback visual directory navigator in the web UI.
+//
+// Unlike /api/fs/read this endpoint is not bounded by allowedReadRoot, and that
+// is deliberate: it exists to pick a project work dir, which may live anywhere
+// the user keeps code, and a picker that can only see the node's own data tree
+// cannot pick one. It returns names and levels only — no file contents — so it
+// leaks no more than a directory listing; widening a work dir to "/" is refused
+// where it would matter (projects.ValidateWorkDir). The comment above
+// allowedReadRoot describes the read boundary, not this picker.
 func (h *handler) listDirectories(w http.ResponseWriter, r *http.Request) {
 	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
 	if reqPath == "" || reqPath == "~" {

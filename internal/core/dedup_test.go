@@ -23,20 +23,20 @@ func TestMutualDialDedup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	a := newCore(t, "node-a", "127.0.0.1:17961")
-	b := newCore(t, "node-b", "127.0.0.1:17962")
+	a := newCore(t, "node-a")
+	b := newCore(t, "node-b")
 	for _, c := range []*Core{a, b} {
 		if err := c.Register(ctx); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 	}
-	startListen(t, ctx, a, "127.0.0.1:17961")
-	startListen(t, ctx, b, "127.0.0.1:17962")
+	aAddr := startListen(t, ctx, a, "127.0.0.1:0")
+	bAddr := startListen(t, ctx, b, "127.0.0.1:0")
 
 	// Both sides dial each other, daemon-style (MaintainPeer loops).
 	done := make(chan error, 2)
-	go func() { done <- a.MaintainPeer(ctx, "127.0.0.1:17962") }()
-	go func() { done <- b.MaintainPeer(ctx, "127.0.0.1:17961") }()
+	go func() { done <- a.MaintainPeer(ctx, bAddr) }()
+	go func() { done <- b.MaintainPeer(ctx, aAddr) }()
 
 	// Wait for both handshakes to settle instead of a fixed sleep: a loaded
 	// CI runner (the whole suite running in parallel) can exceed any constant
@@ -78,11 +78,11 @@ func TestMutualDialDedup(t *testing.T) {
 	// count configured peers online; a binding written only on the winner
 	// left a healthy edge whose surviving conn is the peer's inbound one
 	// reading "0/1 online" forever.
-	if got, err := ledger.PeerAddrBindings(b.db); err != nil || got["127.0.0.1:17961"] != "node-a" {
-		t.Fatalf("b's peer_addrs = %v (err %v), want 127.0.0.1:17961 → node-a", got, err)
+	if got, err := ledger.PeerAddrBindings(b.db); err != nil || got[aAddr] != "node-a" {
+		t.Fatalf("b's peer_addrs = %v (err %v), want the dialed addr → node-a", got, err)
 	}
-	if got, err := ledger.PeerAddrBindings(a.db); err != nil || got["127.0.0.1:17962"] != "node-b" {
-		t.Fatalf("a's peer_addrs = %v (err %v), want 127.0.0.1:17962 → node-b", got, err)
+	if got, err := ledger.PeerAddrBindings(a.db); err != nil || got[bAddr] != "node-b" {
+		t.Fatalf("a's peer_addrs = %v (err %v), want the dialed addr → node-b", got, err)
 	}
 
 	// The capability directory must show both nodes online on both sides —

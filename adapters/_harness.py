@@ -105,16 +105,59 @@ def _cache_file(name, key):
     return os.path.join(cache_dir(), "adapter-%s-%s.json" % (safe, digest))
 
 
+def _private_dir(directory):
+    """Create the cache directory 0700, and distrust one already there that is
+    not ours. The cache holds model rosters and priced catalogues; the temp-dir
+    fallback lives in a world-writable tree, where a directory another user
+    created first is theirs to swap files in. Returns False when the directory
+    cannot be trusted."""
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        st = os.stat(directory)
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return False
+        if hasattr(os, "getuid") and st.st_mode & 0o077:
+            os.chmod(directory, 0o700)
+        return True
+    except Exception:
+        return False
+
+
+def _trusted_dir(directory):
+    """Whether a cache directory may be read from. Unlike _private_dir this
+    never creates or repairs anything: a reader only decides. The temp-dir
+    fallback sits in a world-writable tree, so a directory another account
+    created first would let it plant the roster a probe reads."""
+    try:
+        if not os.path.isdir(directory):
+            return False
+        st = os.stat(directory)
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return False
+        if hasattr(os, "getuid") and st.st_mode & 0o077:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def cache_get(name, key, ttl_s):
     """Return a cached value for (name, key), or None on miss/expiry/failure."""
     if not cache_enabled() or not key:
+        return None
+    if not _trusted_dir(cache_dir()):
         return None
     try:
         with open(_cache_file(name, key), "r", encoding="utf-8") as fh:
             doc = json.load(fh)
         if not isinstance(doc, dict):
             return None
-        if time.time() - float(doc.get("ts", 0)) > ttl_s:
+        age = time.time() - float(doc.get("ts", 0))
+        # A timestamp in the future means the wall clock moved backwards (an NTP
+        # correction, a dual-boot reboot into the older system). Treat it as
+        # expired: the alternative is an entry that stays "fresh" until the
+        # clock catches up, which can be hours.
+        if age < 0 or age > ttl_s:
             return None
         return doc.get("value")
     except Exception:
@@ -127,11 +170,18 @@ def cache_put(name, key, value):
         return
     try:
         directory = cache_dir()
-        os.makedirs(directory, exist_ok=True)
+        if not _private_dir(directory):
+            return
         path = _cache_file(name, key)
         tmp = "%s.%d.tmp" % (path, os.getpid())
-        with open(tmp, "w", encoding="utf-8") as fh:
+        # 0600 through os.open: the default umask would leave the catalogue
+        # readable by every account on the machine. fsync before the rename so a
+        # power loss cannot publish a truncated file.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump({"ts": time.time(), "value": value}, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except Exception:
         pass

@@ -35,7 +35,7 @@ func dummyListener(t *testing.T) string {
 }
 
 func TestSyncPeersAddRemove(t *testing.T) {
-	c := newCore(t, "self", "")
+	c := newCore(t, "self")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -59,7 +59,7 @@ func TestSyncPeersAddRemove(t *testing.T) {
 }
 
 func TestSyncPeersKeepsLiveLoop(t *testing.T) {
-	c := newCore(t, "self", "")
+	c := newCore(t, "self")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -90,16 +90,16 @@ func TestProbePeerEncrypted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	server := newCore(t, "server", "127.0.0.1:17997")
+	server := newCore(t, "server")
 	if err := server.Register(ctx); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	startListen(t, ctx, server, "127.0.0.1:17997")
+	serverAddr := startListen(t, ctx, server, "127.0.0.1:0")
 
 	// The probe runs unsigned (nil keypair): reachability + session
 	// negotiation are what the check answers, not consent.
 	res, err := ProbePeer(ctx, "prober", ledger.Card{Device: "prober"}, config.ModelConfig{},
-		config.NetworkConfig{SharedSecret: testSharedSecret}, "127.0.0.1:17997", nil, nil)
+		config.NetworkConfig{SharedSecret: testSharedSecret}, serverAddr, nil, nil)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -122,9 +122,9 @@ func TestProbePeerAgainstHeldEdge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	entry := newCore(t, "entry-held", "127.0.0.1:17982")
-	worker := newCore(t, "worker-held", "127.0.0.1:17983")
-	startPair(t, ctx, entry, worker, "127.0.0.1:17982", "127.0.0.1:17983")
+	entry := newCore(t, "entry-held")
+	worker := newCore(t, "worker-held")
+	entryAddr, _ := startPair(t, ctx, entry, worker)
 
 	// The live worker core holds the edge; the probe claims the same id. It
 	// must sign with that identity's key: the entry has the worker's public
@@ -136,7 +136,7 @@ func TestProbePeerAgainstHeldEdge(t *testing.T) {
 	}
 	res, err := ProbePeer(ctx, "worker-held", ledger.Card{Device: "worker-held"},
 		config.ModelConfig{}, config.NetworkConfig{SharedSecret: testSharedSecret},
-		"127.0.0.1:17982", pub, priv)
+		entryAddr, pub, priv)
 	if err != nil {
 		t.Fatalf("probe against a held edge = %v, want reachable", err)
 	}

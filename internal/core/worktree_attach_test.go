@@ -61,7 +61,7 @@ func TestLooksLikeRepo(t *testing.T) {
 // skip set keeps derived content (and .git — a credential carrier) off the wire.
 func TestAttachWorktreePacksRepo(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "attach-src", "")
+	c := newCore(t, "attach-src")
 	pool := withArtifactPool(t, c)
 	repo := writeRepoTree(t)
 
@@ -110,7 +110,7 @@ func TestAttachWorktreePacksRepo(t *testing.T) {
 
 // newCoreWithAgentListen builds a listening Core whose card advertises one
 // agent ability — the leaf half of a delegation e2e.
-func newCoreWithAgentListen(t *testing.T, id, addr string) *Core {
+func newCoreWithAgentListen(t *testing.T, id string) *Core {
 	t.Helper()
 	db := openTestDB(t)
 	card := ledger.Card{
@@ -136,12 +136,12 @@ func TestFileTaskWorktreeTravelsRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	root := newCore(t, "wt-root", "127.0.0.1:18010")
-	leaf := newCoreWithAgentListen(t, "wt-leaf", "127.0.0.1:18011")
+	root := newCore(t, "wt-root")
+	leaf := newCoreWithAgentListen(t, "wt-leaf")
 	withArtifactPool(t, root)
 	withArtifactPool(t, leaf)
 	leaf.SetWorkDir(filepath.Join(t.TempDir(), "leafwork"))
-	startPair(t, ctx, root, leaf, "127.0.0.1:18010", "127.0.0.1:18011")
+	startPair(t, ctx, root, leaf)
 
 	repo := writeRepoTree(t)
 
@@ -219,12 +219,12 @@ func TestScheduledFileTaskShipsWorktree(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	root := newCore(t, "q-root", "127.0.0.1:18120")
-	leaf := newCoreWithAgentListen(t, "q-leaf", "127.0.0.1:18121")
+	root := newCore(t, "q-root")
+	leaf := newCoreWithAgentListen(t, "q-leaf")
 	withArtifactPool(t, root)
 	withArtifactPool(t, leaf)
 	leaf.SetWorkDir(filepath.Join(t.TempDir(), "leafwork"))
-	startPair(t, ctx, root, leaf, "127.0.0.1:18120", "127.0.0.1:18121")
+	startPair(t, ctx, root, leaf)
 	leaf.router.SetAdapterRunner(func(ctx context.Context, adapter, prompt, cwd string) commander.AgentResult {
 		return commander.AgentResult{OK: true, Result: "done", ExitCode: 0}
 	})
@@ -278,11 +278,11 @@ func TestScheduledFileTaskNonRepoStaysLocal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	root := newCore(t, "q-root2", "127.0.0.1:18122")
-	leaf := newCoreWithAgentListen(t, "q-leaf2", "127.0.0.1:18123")
+	root := newCore(t, "q-root2")
+	leaf := newCoreWithAgentListen(t, "q-leaf2")
 	withArtifactPool(t, root)
 	withArtifactPool(t, leaf)
-	startPair(t, ctx, root, leaf, "127.0.0.1:18122", "127.0.0.1:18123")
+	startPair(t, ctx, root, leaf)
 
 	got, err := root.Enqueue(ctx, TaskInput{
 		Title:       "scratch work",
@@ -308,7 +308,7 @@ func TestScheduledFileTaskNonRepoStaysLocal(t *testing.T) {
 // honest landing spot.
 func TestAttachWorktreePinsAdoptDir(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "pin-src", "")
+	c := newCore(t, "pin-src")
 	withArtifactPool(t, c)
 	repo := writeRepoTree(t)
 
@@ -416,7 +416,7 @@ func TestFilesChangedReportedLocally(t *testing.T) {
 // only copy of the deliverable.
 func TestSweepTaskDirsReapsOrphans(t *testing.T) {
 	ctx := context.Background()
-	c := newCore(t, "sweep-node", "127.0.0.1:17990")
+	c := newCore(t, "sweep-node")
 	work := t.TempDir()
 	c.SetWorkDir(work)
 
@@ -452,7 +452,7 @@ func TestSweepTaskDirsReapsOrphans(t *testing.T) {
 // and the scratch root is host state, so pack prune and drift masking
 // treat its churn as the node's own bookkeeping.
 func TestScratchRootHidesRuntimeDirs(t *testing.T) {
-	c := newCore(t, "scratch-node", "127.0.0.1:17991")
+	c := newCore(t, "scratch-node")
 	ws := t.TempDir()
 	c.SetWorkDir(ws)
 	scratch := filepath.Join(ws, ".openpanda")
