@@ -197,38 +197,6 @@ func (t *Tool) load(target string, args map[string]any) (MemFile, error) {
 	}
 }
 
-// save writes a MemFile back to its layer.
-//
-// Deprecated in the mutation paths: add/replace/remove go through mutate so the
-// load and the save are one locked critical section. Kept for callers that
-// genuinely replace a whole file (a CLI `memory set`), where the caller's view
-// is the intended new content rather than a diff against the old one.
-func (t *Tool) save(target string, args map[string]any, m MemFile) error {
-	switch target {
-	case targetUser:
-		if t.hermes == nil {
-			return ErrNoStore
-		}
-		return t.hermes.SaveUser(m)
-	case targetMemory:
-		if t.hermes == nil {
-			return ErrNoStore
-		}
-		return t.hermes.SaveMemory(m)
-	case targetProject:
-		if t.projects == nil {
-			return ErrNoStore
-		}
-		project, err := argString(args, "project")
-		if err != nil {
-			return err
-		}
-		return t.projects.Save(project, m)
-	default:
-		return fmt.Errorf("memory: unknown target %q", target)
-	}
-}
-
 // mutate runs fn against the layer's current contents with the store's
 // read-modify-write lock held, then writes the result back. The whole cycle is
 // one critical section: load and save as two steps let a second writer slip

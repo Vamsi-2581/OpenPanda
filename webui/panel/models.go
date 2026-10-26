@@ -427,20 +427,11 @@ type modelRefRequest struct {
 	BaseURL string `json:"base_url,omitempty"`
 }
 
-// resolveModelRef maps the request onto a ModelConfig, mirroring the REPL's
-// resolveModel: alias → registry, provider → catalogue + key. Returns false
-// when nothing usable was named.
-func (h *handler) resolveModelRef(req modelRefRequest) (config.ModelConfig, bool) {
-	mc, err := h.resolveModelRefErr(req)
-	if err != nil {
-		return config.ModelConfig{}, false
-	}
-	return mc, true
-}
-
-// resolveModelRefErr is resolveModelRef with the reason kept, so a caller can
-// tell "you named nothing usable" from "the endpoint you named must not be
-// dialed" — the second is a security refusal and deserves its own message.
+// resolveModelRefErr maps the request onto a ModelConfig, mirroring the REPL's
+// resolveModel: alias → registry, provider → catalogue + key. The reason is
+// kept, so a caller can tell "you named nothing usable" from "the endpoint you
+// named must not be dialed" — the second is a security refusal and deserves
+// its own message.
 func (h *handler) resolveModelRefErr(req modelRefRequest) (config.ModelConfig, error) {
 	if req.Alias == "" && req.Provider == "" {
 		return h.engineModel(), nil
