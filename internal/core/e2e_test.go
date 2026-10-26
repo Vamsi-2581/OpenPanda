@@ -1461,15 +1461,30 @@ func startListen(t *testing.T, ctx context.Context, c *Core, addr string) string
 	// ":0" is the kernel's choice: the core publishes the port it actually
 	// bound (bus.Server.OnBound → ListenAddr), so a test can ask for an
 	// ephemeral listener and still know where to dial.
+	//
+	// The wait is on the published value, never on the literal: a listener
+	// whose bind failed after the check above left this loop publishing ":0"
+	// and then dialing it, which surfaced as "nothing listening on
+	// 127.0.0.1:0" — a timeout about an address no one was meant to dial,
+	// with the real error sitting unread in done.
 	if strings.HasSuffix(addr, ":0") {
 		deadline := time.Now().Add(10 * time.Second)
-		for c.ListenAddr() == addr || c.ListenAddr() == "" {
+		for {
+			bound := c.ListenAddr()
+			if bound != "" && bound != addr && !strings.HasSuffix(bound, ":0") {
+				addr = bound
+				break
+			}
 			if time.Now().After(deadline) {
-				t.Fatalf("core never published the port chosen for %s", addr)
+				select {
+				case err := <-done:
+					t.Fatalf("listen on %s: %v", addr, err)
+				default:
+				}
+				t.Fatalf("core never published the port chosen for %s (last published %q)", addr, bound)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		addr = c.ListenAddr()
 	}
 	waitListening(t, addr)
 	return addr
