@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -344,7 +345,17 @@ func TestValidateWorkDir(t *testing.T) {
 	if err != nil || home == "" {
 		t.Skip("no home directory to test against")
 	}
-	rejected := []string{"/", "/etc", "/usr", home, filepath.Dir(home)}
+	rejected := []string{
+		// The volume root: "/" on unix, "C:\" on Windows. The literal "/" is
+		// refused there as "not absolute", which tests the wrong branch.
+		filepath.VolumeName(home) + string(filepath.Separator),
+		home,
+		filepath.Dir(home),
+	}
+	if runtime.GOOS != "windows" {
+		// System trees are a unix list; Windows has no equivalent here.
+		rejected = append(rejected, "/etc", "/usr")
+	}
 	for _, dir := range rejected {
 		if err := ValidateWorkDir(dir); !errors.Is(err, ErrWorkDirTooBroad) {
 			t.Errorf("ValidateWorkDir(%q) = %v, want ErrWorkDirTooBroad", dir, err)
