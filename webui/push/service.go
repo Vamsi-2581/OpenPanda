@@ -276,9 +276,9 @@ func redactEndpoint(endpoint string) string {
 // A *private* address is left alone on purpose: a self-hosted push service on
 // the LAN is a legitimate deployment, and the endpoint is only reachable by
 // someone who already holds the panel token. The send path additionally
-// refuses to dial a metadata address at connect time (see metadataDialer),
-// which covers the case the name check cannot: a public host whose DNS
-// resolves to one.
+// refuses to dial a metadata address at connect time (see
+// metadataGuardTransport), which covers the case the name check cannot: a
+// public host whose DNS resolves to one.
 func validateEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
 	if err != nil {
