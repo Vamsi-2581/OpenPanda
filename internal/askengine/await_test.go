@@ -212,9 +212,14 @@ func TestInlineAskFollowsQueuedTaskToOutcome(t *testing.T) {
 	// wait that returned at "queued" would carry neither the executor's output
 	// nor a done state. The old elapsed-time floor only measured the sleeps
 	// this test no longer takes.
-	// The card advanced through the parked states and the relayed work note.
-	if !containsStr(waitStates, core.StateQueued) || !containsStr(waitStates, core.StateDispatched) {
-		t.Errorf("wait progress = %v, want queued then dispatched", waitStates)
+	// The card advanced out of the parked state and carried the relayed work
+	// note. Only the parked state is asserted: the watch announces a state it
+	// observes, and a poll that lands after the consumer has already walked
+	// the row from dispatched to done sees the end state alone. Which
+	// intermediate states a tick happens to catch is a scheduling detail, not
+	// a contract — the done result above already proves the wait followed it.
+	if !containsStr(waitStates, core.StateQueued) {
+		t.Errorf("wait progress = %v, want the parked state announced", waitStates)
 	}
 	if !containsStr(toolNotes, "Bash: python3 -m http.server 8000") {
 		t.Errorf("tool notes = %v, want the relayed progress note", toolNotes)
