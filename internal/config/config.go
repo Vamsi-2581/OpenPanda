@@ -46,6 +46,7 @@ type Config struct {
 	Delegation DelegationConfig `yaml:"delegation"`
 	Approval   ApprovalConfig   `yaml:"approval"`
 	Timeouts   TimeoutsConfig   `yaml:"timeouts"`
+	Execution  ExecutionConfig  `yaml:"execution"`
 	Messages   MessagesConfig   `yaml:"messages"`
 	UI         UIConfig         `yaml:"ui"`
 	Skills     SkillsConfig     `yaml:"skills"`
@@ -1025,6 +1026,56 @@ type TimeoutsConfig struct {
 	// DefaultTaskTokenBudget; a negative value leaves new tasks unbounded —
 	// the pre-budget legacy behaviour.
 	TaskTokenBudget int64 `yaml:"task_token_budget"`
+}
+
+// ExecutionConfig tunes task execution beyond the raw timeouts. P0 reads only
+// Acceptance; the strategy/profile fields noted in the design doc land in
+// later phases and are deliberately absent until then.
+type ExecutionConfig struct {
+	Acceptance AcceptanceConfig `yaml:"acceptance"`
+}
+
+// AcceptanceConfig bounds the delivery-contract checks the orchestrator runs
+// itself. The zero value is the recommended configuration: a 10-minute cap per
+// check, a 30-minute cap per phase, and one retry to tell a flaky suite from a
+// regression.
+type AcceptanceConfig struct {
+	// CheckTimeoutS bounds one acceptance command. 0 uses the built-in
+	// default; a value below one minute is ignored as misconfiguration.
+	CheckTimeoutS int `yaml:"check_timeout_s"`
+	// BudgetS bounds the whole phase (baseline or final). 0 uses the built-in
+	// default; a negative value leaves the phase unbounded.
+	BudgetS int `yaml:"budget_s"`
+	// RetryFlaky retries a failing final check once. Nil means on: a single
+	// retry is what separates a flaky suite from a regression, and dropping it
+	// silently turns flakes into task failures.
+	RetryFlaky *bool `yaml:"retry_flaky"`
+}
+
+// CheckTimeout resolves the per-check budget.
+func (a AcceptanceConfig) CheckTimeout() time.Duration {
+	if a.CheckTimeoutS <= 0 {
+		return 0 // caller applies the contract package default
+	}
+	return time.Duration(a.CheckTimeoutS) * time.Second
+}
+
+// Budget resolves the whole-phase budget: 0 means the default, negative means
+// unbounded.
+func (a AcceptanceConfig) Budget() time.Duration {
+	switch {
+	case a.BudgetS < 0:
+		return -1
+	case a.BudgetS == 0:
+		return 0 // caller applies the contract package default
+	default:
+		return time.Duration(a.BudgetS) * time.Second
+	}
+}
+
+// FlakyRetry reports whether a failing final check may be retried once.
+func (a AcceptanceConfig) FlakyRetry() bool {
+	return a.RetryFlaky == nil || *a.RetryFlaky
 }
 
 // SilenceTimeout returns the configured progress silence limit: DefaultSilenceS

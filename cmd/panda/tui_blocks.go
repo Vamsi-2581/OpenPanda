@@ -57,6 +57,10 @@ type block struct {
 	// routeFallback names the peer the run was routed to before its link
 	// failed and the task executed locally — "meant for the Mac, ran here".
 	routeFallback string
+	// verification is the delivery contract's verdict: "verified", "failed",
+	// "partial", or "" when the task carried no contract. It is rendered as
+	// its own line so "done" and "verified" never read as the same thing.
+	verification string
 
 	// Model-error state (kind == blockError): errKind is the classified
 	// error kind (one of entry.ErrKind*) picking which troubleshooting block
@@ -260,6 +264,9 @@ func (b block) renderTask(t theme, width int) string {
 	}
 	if b.routeFallback != "" {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "cli.task.route_fallback", "peer", b.routeFallback)))
+	}
+	if b.verification != "" {
+		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+i18n.Tf(t.loc, "tui.task.verification", "status", b.verification)))
 	}
 	if b.meta != "" {
 		sb.WriteString("\n" + t.muted.Render("  "+arm+"  "+b.meta))

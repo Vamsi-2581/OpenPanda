@@ -725,10 +725,22 @@ type TaskResultPayload struct {
 	// WorkDir is the workspace the executor actually ran in — the derived
 	// directory, not the submitter's pin — so the origin can locate the
 	// produced files on the machine that ran the work.
-	WorkDir        string `json:"work_dir,omitempty"`
-	Agent          string `json:"agent,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Injected       bool   `json:"injected,omitempty"`
+	WorkDir  string `json:"work_dir,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Injected bool   `json:"injected,omitempty"`
+	// Verified and Verification carry the delivery-contract verdict. Verified
+	// is true only when every selected check ran and passed; Verification is
+	// the status word (verified|failed|partial|skipped) and is empty when the
+	// task carried no contract. A done task without Verified is exactly what a
+	// surface must not present as an unqualified success.
+	Verified     bool   `json:"verified,omitempty"`
+	Verification string `json:"verification,omitempty"`
+	// NoRetry marks a verdict a blind re-run cannot improve: the work ran to
+	// completion and failed its contract, so the orchestrator's retry budget
+	// must not re-execute the same task and pay for the same result. The row
+	// stays failed; the caller or a human decides what happens next.
+	NoRetry        bool   `json:"no_retry,omitempty"`
 	DurationMS     int64  `json:"duration_ms,omitempty"`
 	SessionID      string `json:"session_id,omitempty"`
 	AgentSessionID string `json:"agent_session_id,omitempty"`

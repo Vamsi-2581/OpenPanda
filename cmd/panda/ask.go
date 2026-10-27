@@ -14,6 +14,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/cliui"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/mdtext"
@@ -27,7 +28,7 @@ import (
 // its own FlagSet, which cannot drift; keep the two in agreement when adding
 // a flag, or the heuristic misjudges an unquoted one-liner.
 var askValueFlags = map[string]bool{
-	"config": true, "card": true, "mcp": true, "output-format": true,
+	"config": true, "card": true, "mcp": true, "output-format": true, "accept": true,
 	"project": true, "team": true, "node": true,
 }
 
@@ -59,7 +60,12 @@ type askJSON struct {
 	// RouteFallback names the peer the task was routed to before the link
 	// failed and it ran locally — the "meant for remote, ran here" marker.
 	RouteFallback string `json:"route_fallback,omitempty"`
-	EntryModel    string `json:"entry_model,omitempty"`
+	// Verification is the delivery contract's verdict (verified|failed|
+	// partial|skipped), empty when the task carried no contract. Scripts
+	// should read this instead of inferring success from task_state.
+	Verification string `json:"verification,omitempty"`
+	Verified     bool   `json:"verified,omitempty"`
+	EntryModel   string `json:"entry_model,omitempty"`
 	// Plan fields (kind == "plan"): the stage list is what makes the routing
 	// decision auditable from a script — which stage went where, and what it is
 	// waiting for.
@@ -74,6 +80,7 @@ func resultToJSON(out *askengine.Result) askJSON {
 		OK: out.OK, Deferred: out.Deferred, Stdout: out.Stdout, Stderr: out.Stderr, ExitCode: out.ExitCode,
 		Agent: out.Agent, Model: out.Model, Injected: out.Injected,
 		Executor: out.Executor, WorkDir: out.WorkDir, RouteFallback: out.RouteFallback, EntryModel: out.EntryModel,
+		Verification: out.Verification, Verified: out.Verified,
 		PlanID: out.PlanID, PlanGoal: out.PlanGoal,
 	}
 	for _, t := range out.PlanStages {
@@ -101,6 +108,8 @@ func runAsk(args []string) {
 	project := fs.String("project", "", "run this ask inside a project (default: the one you entered)")
 	team := fs.String("team", "", "comma-separated agents this ask may dispatch to (default: any; --continue inherits the conversation's roster)")
 	node := fs.String("node", "", "run this turn's task on a specific node id or name (default: scheduler)")
+	var accept repeatableFlag
+	fs.Var(&accept, "accept", "acceptance check the orchestrator runs after the task: 'auto' enumerates this directory's checks, or a command line (no shell syntax; repeatable)")
 	fs.Parse(reorderFlags(fs, args))
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -183,10 +192,19 @@ func runAsk(args []string) {
 	}
 
 	cwd, _ := os.Getwd()
+	var acceptChecks []contract.Check
+	if len(accept) > 0 {
+		checks, cerr := buildAcceptanceChecks(accept, cwd)
+		if cerr != nil {
+			fail(2, i18n.Tf(loc, "cli.task.add.badAccept", "err", cerr.Error()))
+		}
+		acceptChecks = checks
+	}
 	switch *outputFormat {
 	case "json":
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
 			WorkDir: cwd, Agents: agents, Node: strings.TrimSpace(*node), AmbientProject: true,
+			Acceptance: acceptChecks,
 		}, *authorize, askengine.StreamCallbacks{})
 		if err != nil {
 			emitJSON(map[string]string{"error": err.Error()})
@@ -199,11 +217,11 @@ func runAsk(args []string) {
 		}
 		return
 	case "stream-json":
-		runAskStreamJSON(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, recordConvo)
+		runAskStreamJSON(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, recordConvo)
 		return
 	}
 
-	out, streamedText, st, err := askStreaming(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, loc)
+	out, streamedText, st, err := askStreaming(engine, history, prompt, cwd, agents, strings.TrimSpace(*node), *authorize, acceptChecks, loc)
 	if err != nil {
 		fail(1, "panda: "+err.Error())
 	}
@@ -261,6 +279,12 @@ func runAsk(args []string) {
 			reportNote += " · " + i18n.Tf(loc, "cli.task.route_fallback", "peer", out.RouteFallback)
 		}
 		fmt.Println(pal().Muted(reportNote))
+		// The contract verdict is part of the receipt, not a footnote: a
+		// "done" the orchestrator could not verify must not read like a
+		// verified one.
+		if out.Verification != "" {
+			fmt.Println(pal().Muted("  " + i18n.Tf(loc, "tui.task.verification", "status", out.Verification)))
+		}
 
 		// A task parked on a clarification question must lead with the
 		// question — it is the only thing standing between the work and done,
@@ -435,7 +459,7 @@ func answerTail(streamed, answer string) string {
 
 // runAskStreamJSON is the headless streaming mode: one NDJSON event per line
 // (status / delta / result / error), consumable by scripts and other tools.
-func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, record func(*askengine.Result)) {
+func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, record func(*askengine.Result)) {
 	write := func(v map[string]any) {
 		line, err := json.Marshal(v)
 		if err != nil {
@@ -449,7 +473,7 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 		OnStatus:    func(text string) { write(map[string]any{"type": "status", "text": text}) },
 	}
 	out, err := engine.AskTurnsScoped(context.Background(), history, prompt, askengine.AskScope{
-		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true,
+		WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept,
 	}, authorize, cb)
 	if err != nil {
 		write(map[string]any{"type": "error", "message": err.Error()})
@@ -476,8 +500,8 @@ func runAskStreamJSON(engine *askengine.Engine, history []entry.Turn, prompt, wo
 // attached, nothing is animated, and the full answer prints once at the end.
 // The streamed marker tells the caller to skip the duplicate final print; the
 // returned status line carries the run's numbers for a closing cost line.
-func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
-	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true}
+func askStreaming(engine *askengine.Engine, history []entry.Turn, prompt, workDir string, agents []string, node string, authorize bool, accept []contract.Check, loc i18n.Locale) (*askengine.Result, string, *cliui.Status, error) {
+	scope := askengine.AskScope{WorkDir: workDir, Agents: agents, Node: node, AmbientProject: true, Acceptance: accept}
 	st := newStatusLine(loc)
 	if !stdoutIsTTY() {
 		out, err := engine.AskTurnsScoped(context.Background(), history, prompt, scope, authorize, askengine.StreamCallbacks{})

@@ -114,6 +114,10 @@ type Core struct {
 	// agent task is allowed before it is parked in review for human help. A
 	// value <= 0 falls back to defaultSuperviseRounds.
 	superviseRounds int
+	// acceptance bounds the delivery-contract checks this node runs for a
+	// task (execution.acceptance). The zero value uses the contract
+	// package's defaults: 10 minutes per check, 30 per phase, one retry.
+	acceptance config.AcceptanceConfig
 	// msgBudgetCap caps how many sibling-board posts one task episode may
 	// send (the metering half of the message layer — a spent budget reports
 	// back to the agent rather than hard-failing). <= 0 → defaultMsgBudget.
@@ -966,6 +970,14 @@ func (c *Core) SetSuperviseRounds(n int) {
 		n = defaultSuperviseRounds
 	}
 	c.superviseRounds = n
+}
+
+// SetAcceptanceConfig applies execution.acceptance: the per-check and
+// per-phase budgets for the delivery-contract checks this node runs.
+func (c *Core) SetAcceptanceConfig(a config.AcceptanceConfig) {
+	c.mu.Lock()
+	c.acceptance = a
+	c.mu.Unlock()
 }
 
 // SetMessageBudget bounds sibling-board posts per task episode (§inter-task

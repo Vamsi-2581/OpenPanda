@@ -983,6 +983,15 @@ func (c *Core) retryLoop(ctx context.Context, taskID, intent string, required []
 			c.checkpointLoop.Reset(taskID)
 			return final, result, nil
 		}
+		if result.NoRetry {
+			// A contract failure is the outcome, not a transient error: the
+			// retry budget would re-run the agent and the same checks to
+			// collect the same verdict. Stop here and let the caller show the
+			// failed row with its evidence.
+			c.loop.Reset(taskID)
+			c.checkpointLoop.Reset(taskID)
+			return final, result, nil
+		}
 		if result.AttemptID != "" && final.AttemptID != result.AttemptID {
 			// The row was rotated (lease-expiry reroute) and re-attempted while
 			// this loop idled in backoff: the failed row now belongs to a

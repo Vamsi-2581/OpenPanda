@@ -501,6 +501,26 @@ injection:
 #   # unbounded (the pre-budget behaviour).
 #   task_token_budget: 2000000
 
+# Delivery contract. A task may carry acceptance checks (spec.acceptance):
+# commands the orchestrator runs itself, before and after the agent works.
+# The baseline run is what separates "the suite was already red" from "this
+# run broke it"; a final failure fails the task regardless of what the agent
+# said about itself. Checks come from `panda task add --accept` or from the
+# project's own entries (Makefile targets, package scripts, toolchain
+# defaults, CI steps) selected by the entry model.
+# execution:
+#   acceptance:
+#     # Per-check wall-clock budget (seconds). Unset keeps the 10-minute
+#     # default. Each acceptance phase runs every selected check once.
+#     check_timeout_s: 600
+#     # Whole-phase budget (seconds). Unset keeps the 30-minute default; -1
+#     # leaves the phase unbounded. When it runs out the remaining checks are
+#     # recorded as skipped and the verdict becomes "partial".
+#     budget_s: 1800
+#     # Retry a failing final check once, so a flaky suite is reported as
+#     # flaky instead of failing the task. On by default; false disables it.
+#     retry_flaky: true
+
 # Sibling-message board (inter-task notes within one plan or one parent's
 # child set). The board meters rather than forbids: a sender past its budget
 # is told so and carries on with local work.

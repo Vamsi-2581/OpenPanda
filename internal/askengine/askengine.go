@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -809,6 +810,13 @@ type Result struct {
 	// result's footprint, so a surface can show what moved instead of trusting
 	// the agent's prose.
 	FilesChanged []string
+	// Verified and Verification carry the delivery contract's verdict:
+	// "verified" when every selected check ran and passed, "failed" when one
+	// did not, "partial" when some were skipped, "" when the task carried no
+	// contract. A done task with an empty or non-verified verdict is exactly
+	// what a surface must not present as an unqualified success.
+	Verified     bool
+	Verification string
 	// EntryModel is the model that served this ask's entry calls (triage,
 	// classify, answer stream) — the configured primary, or the fallback the
 	// circuit breaker routed to mid-ask. UI surfaces render it next to the
@@ -1253,6 +1261,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 	sched.SetTimeouts(e.cfg.Timeouts)
+	sched.SetAcceptanceConfig(e.cfg.Execution.Acceptance)
 	sched.SetMessageBudget(e.cfg.Messages.Budget)
 	sched.SetRetentionDays(e.cfg.Storage.EffectiveTaskRetentionDays())
 
@@ -1723,6 +1732,12 @@ type AskScope struct {
 	// rather than being a hint the model may ignore. Empty means no
 	// restriction — the scheduler routes by capability, as before.
 	Agents []string
+
+	// Acceptance is the user's own contract for any task this ask produces
+	// (CLI --accept). It is appended to the classified task's spec and, unlike
+	// a model-selected check, bypasses the project shortlist: the user is the
+	// authority on how their own work is judged.
+	Acceptance []contract.Check
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1853,6 +1868,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// opencode.
 	if len(scope.Agents) > 0 {
 		classifyOpts = append(classifyOpts, entry.WithAgentRoster(scope.Agents))
+	}
+
+	// The workspace's own verification entries, offered as a shortlist. The
+	// model selects from it; it never authors a command. Without this the
+	// classifier has no grounded way to name an acceptance check, and every
+	// task it creates is done-but-unverified.
+	if workDir != "" {
+		if cands := contract.Enumerate(workDir); len(cands) > 0 {
+			classifyOpts = append(classifyOpts, entry.WithAcceptanceCandidates(cands))
+		}
 	}
 
 	// Memory wall (design §17.2): Hermes personal memory enters only
@@ -2650,6 +2675,13 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if in.RepoPath == "" && workDir != "" {
 		in.RepoPath = workDir
 	}
+	// A model may only select acceptance checks the workspace actually
+	// declares. It sees the shortlist in its prompt, but a prompt is not an
+	// enforcement point: an invented command would run under the
+	// orchestrator's own authority, so anything outside the enumeration is
+	// dropped before the row exists.
+	in.SpecJSON = restrictAcceptanceToProject(in.SpecJSON, workDir)
+	in.SpecJSON = appendUserAcceptance(in.SpecJSON, scope.Acceptance)
 	// Approval mode is the real tier-2 gate (design §16), resolved against the
 	// task's own project: a project approval_mode overrides the global mode;
 	// a remembered session/project decision answers before any prompt; an
@@ -2785,20 +2817,22 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
 	}
 	res := &Result{
-		Kind:      "task",
-		Thought:   reasoning,
-		TaskID:    task.TaskID,
-		TaskTitle: task.Title,
-		TaskState: task.State,
-		OK:        result.OK,
-		Stdout:    result.Stdout,
-		Stderr:    result.Stderr,
-		ExitCode:  result.ExitCode,
-		Agent:     result.Agent,
-		Model:     result.Model,
-		Injected:  result.Injected,
-		Executor:  result.Executor,
-		WorkDir:   result.WorkDir,
+		Kind:         "task",
+		Thought:      reasoning,
+		TaskID:       task.TaskID,
+		TaskTitle:    task.Title,
+		TaskState:    task.State,
+		OK:           result.OK,
+		Stdout:       result.Stdout,
+		Stderr:       result.Stderr,
+		ExitCode:     result.ExitCode,
+		Agent:        result.Agent,
+		Model:        result.Model,
+		Injected:     result.Injected,
+		Executor:     result.Executor,
+		WorkDir:      result.WorkDir,
+		Verified:     result.Verified,
+		Verification: result.Verification,
 	}
 	res.Question = result.Question
 	res.FilesChanged = result.FilesChanged
