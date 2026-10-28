@@ -548,6 +548,49 @@ func TestAdapterCandidateDirsFollowsSymlink(t *testing.T) {
 	}
 }
 
+// TestAdapterCandidateDirsPrefersInstalledCopy pins the order: a stale
+// adapters/ next to the PATH symlink must not outrank the scripts shipped
+// beside the real binary. It did once, so a leftover ~/.local/adapters from
+// an older layout silently kept running old adapter scripts.
+func TestAdapterCandidateDirsPrefersInstalledCopy(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(prefix, "bin", "panda")
+	if err := os.WriteFile(real, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(prefix); err == nil {
+		prefix = resolved
+	}
+	installed := filepath.Join(prefix, "adapters")
+
+	// Symlinks are unsupported on Windows without privileges; skip there.
+	link := filepath.Join(t.TempDir(), "panda")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	// The stale sibling a previous layout leaves behind: dir(link)/../adapters.
+	stale := filepath.Join(filepath.Dir(filepath.Dir(link)), "adapters")
+
+	idxInstalled, idxStale := -1, -1
+	for i, cand := range adapterCandidateDirs(link) {
+		if idxInstalled < 0 && sameAbs(cand, installed) {
+			idxInstalled = i
+		}
+		if idxStale < 0 && sameAbs(cand, stale) {
+			idxStale = i
+		}
+	}
+	if idxInstalled < 0 || idxStale < 0 {
+		t.Fatalf("candidates must name both the install and the stale sibling: %v", adapterCandidateDirs(link))
+	}
+	if idxInstalled > idxStale {
+		t.Fatalf("installed adapters rank after the stale sibling: %v", adapterCandidateDirs(link))
+	}
+}
+
 // sameAbs compares two paths after absolutizing + cleaning, so the test works
 // whether the caller hands an absolute or relative link path.
 func sameAbs(a, b string) bool {
