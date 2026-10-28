@@ -1145,13 +1145,6 @@ func truncSuffix(total, shown int) string {
 	return fmt.Sprintf("，仅显示前 %d 条", shown)
 }
 
-func orDash(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "—"
-	}
-	return s
-}
-
 // projectWorkDirNote renders the work dir a project operation actually runs in.
 // A row whose WorkDir the breadth rule refuses still HAS a work dir — reporting
 // "—" would read as "this project has no tree", which is a different fact and

@@ -316,13 +316,21 @@ func runRepl(args []string) {
 	projStore := projectstore.NewStore(db)
 	var activeProjectName string
 	if workspaceAllowed && cwd != "" {
-		cfg.Storage.WorkPath = cwd
-		// Shared adoption: the launch directory is the project space — the
-		// existing project owning it wins, else a fresh one is created and
-		// marked active (see workspace.go).
-		activeProjectName = adoptWorkspaceProject(projStore, cwd)
-		if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
-			fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
+		// The launch directory becomes the work path only when the breadth rule
+		// accepts it. `panda repl` from $HOME used to relocate the whole
+		// session's work path there (node scratch under ~/.openpanda, every
+		// anonymous task's root), and adoption minted a project row for it that
+		// the executor then refused. Refusing keeps storage.work_path as
+		// configured — the launch directory is simply not a workspace.
+		if abs, aerr := filepath.Abs(cwd); aerr == nil && projectstore.ValidateWorkDir(abs) == nil {
+			cfg.Storage.WorkPath = abs
+			// Shared adoption: the launch directory is the project space — the
+			// existing project owning it wins, else a fresh one is created and
+			// marked active (see workspace.go).
+			activeProjectName = adoptWorkspaceProject(projStore, abs)
+			if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
+				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", abs, "name", activeProjectName)))
+			}
 		}
 	} else if !workspaceAllowed && cwd != "" && interactive {
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))

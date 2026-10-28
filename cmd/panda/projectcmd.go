@@ -648,16 +648,24 @@ func activeProject(cfg *config.Config) (name, workDir string) {
 	if err != nil {
 		return name, cwd
 	}
+	// A row whose tree the breadth rule refuses contributes no work dir: the
+	// project stays bound (its approval policy and memory still apply) but the
+	// task falls back to the node default, exactly like a project with no tree
+	// of its own. Without this the active-project branch handed every task the
+	// refused path and createTask failed them all — the regression this rule
+	// caused on any machine that had adopted $HOME as a project before it
+	// existed.
+	usable := pr.UsableWorkDir()
 	// If the ambient project's directory is completely different from current working directory,
 	// do NOT hijack the user's cwd unless cwd is within pr.WorkDir.
-	if cwd != "" && pr.WorkDir != "" {
+	if cwd != "" && usable != "" {
 		cleanCwd := filepath.Clean(cwd)
-		cleanPrDir := filepath.Clean(pr.WorkDir)
+		cleanPrDir := filepath.Clean(usable)
 		if cleanCwd != cleanPrDir && !strings.HasPrefix(cleanCwd, cleanPrDir+string(filepath.Separator)) {
 			return "", cwd
 		}
 	}
-	return pr.Name, pr.WorkDir
+	return pr.Name, usable
 }
 
 // bindAskProject gives an engine its ambient project: the explicit --project when
@@ -687,5 +695,5 @@ func bindAskProject(engine *askengine.Engine, cfg *config.Config, named string) 
 	if err != nil {
 		fatal("get project", err)
 	}
-	engine.SetProject(pr.Name, pr.WorkDir)
+	engine.SetProject(pr.Name, pr.UsableWorkDir())
 }
