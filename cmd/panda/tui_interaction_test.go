@@ -433,8 +433,28 @@ func formTypes(m tuiModel, s string) tuiModel {
 // TestTUIModelWizardStepFlow tests the single-screen model form for Ollama —
 // a NoAuth provider whose form has no key field.
 func TestTUIModelWizardStepFlow(t *testing.T) {
+	// The wizard's default-card lookup reads the package-level config flag
+	// variable, not repl.configPath. Left unset it resolves the real per-user
+	// config dir, and completing the form makes the wizard create
+	// capabilities.yaml (plus the node's data dirs) there — which is how
+	// `make test` and `make gate` used to write into the operator's home and
+	// hand the reader a card that a later test then tripped over. Redirect
+	// both flag variables at a temp dir for the duration.
+	tmp := t.TempDir()
+	prevConfig, prevCard := cliConfigPath, cliCardPath
+	cliConfigPath, cliCardPath = filepath.Join(tmp, "config.yaml"), ""
+	t.Cleanup(func() { cliConfigPath, cliCardPath = prevConfig, prevCard })
+
 	cfg := &config.Config{}
-	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg.Node.CardPath = filepath.Join(tmp, "capabilities.yaml")
+	cfg.Storage.WorkPath = filepath.Join(tmp, "work")
+	cfg.Storage.DBPath = filepath.Join(tmp, "work", "openpanda.db")
+	cfg.Storage.ContextPath = filepath.Join(tmp, "work", "context")
+	cfg.Storage.MemoryPath = filepath.Join(tmp, "work", "memory")
+	cfg.Storage.ProjectsPath = filepath.Join(tmp, "work", "projects")
+	cfg.Storage.SkillsPath = filepath.Join(tmp, "work", "skills")
+	cfg.Storage.ArtifactPath = filepath.Join(tmp, "work", "artifacts")
+	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
