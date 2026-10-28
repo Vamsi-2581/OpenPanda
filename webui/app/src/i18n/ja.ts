@@ -755,6 +755,7 @@ const ja: Messages = {
   'workspace.systems': '種類の OS',
   'workspace.empty': 'デバイスがありません — このコンソールはまだネットワークに参加していません。',
   'workspace.count': '{devices} 台 · {online} オンライン',
+  'workspace.tidy': 'レイアウトを整える',
   'workspace.local': 'このデバイス',
   'workspace.tile.idle': '待機中',
   'workspace.tile.running': '実行中',

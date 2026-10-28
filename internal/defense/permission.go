@@ -65,15 +65,6 @@ func ValidMode(mode string) bool {
 	return false
 }
 
-// ModeForcesApproval reports whether the mode holds every state-changing plan
-// for a foreground answer regardless of the tier the command itself scored.
-// Routing applies it by raising the plan to Tier 2, so a `ls` under ModeManual
-// waits exactly the way `rm` does.
-func ModeForcesApproval(mode string) bool {
-	m := NormalizeMode(mode)
-	return m == ModeManual || m == ModePlan
-}
-
 // ErrNotAuthorized reports a Tier-2 command executed without authorization.
 var ErrNotAuthorized = errors.New("defense: tier-2 command requires authorization")
 

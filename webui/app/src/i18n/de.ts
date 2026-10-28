@@ -760,6 +760,7 @@ const de: Messages = {
   'workspace.systems': 'Systeme',
   'workspace.empty': 'Noch keine Geräte — diese Konsole ist keinem Netzwerk beigetreten.',
   'workspace.count': '{devices} Geräte · {online} online',
+  'workspace.tidy': 'Layout aufräumen',
   'workspace.local': 'dieses Gerät',
   'workspace.tile.idle': 'Leerlauf',
   'workspace.tile.running': 'arbeitet',

@@ -511,19 +511,4 @@ func TestPermissionModes(t *testing.T) {
 			t.Fatalf("NormalizeMode(%q) = %q, want %q", m, got, ModeAuto)
 		}
 	}
-	for _, tc := range []struct {
-		mode string
-		want bool
-	}{
-		{ModeManual, true},
-		{ModePlan, true},
-		{ModeAuto, false},
-		{ModeEdits, false},
-		{ModeBypass, false},
-		{"", false},
-	} {
-		if got := ModeForcesApproval(tc.mode); got != tc.want {
-			t.Fatalf("ModeForcesApproval(%q) = %v, want %v", tc.mode, got, tc.want)
-		}
-	}
 }

@@ -760,6 +760,7 @@ const es: Messages = {
   'workspace.systems': 'sistemas',
   'workspace.empty': 'Aún no hay dispositivos: esta consola no se ha unido a ninguna red.',
   'workspace.count': '{devices} equipos · {online} en línea',
+  'workspace.tidy': 'Ordenar diseño',
   'workspace.local': 'este equipo',
   'workspace.tile.idle': 'inactivo',
   'workspace.tile.running': 'trabajando',
