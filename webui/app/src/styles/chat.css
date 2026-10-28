@@ -3026,11 +3026,21 @@
 .team-row.on {
   background: var(--bg-active);
 }
-/* Not installed on this node is a fact about the machine, not a reason to
-   hide the person: a team can be hired for work that runs elsewhere. The name
-   steps back one grade and the tag says why. */
+/* Not installed on this node is a fact about the machine, and the scheduler
+   cannot staff a pick that names a binary the node does not have. The row
+   stays visible — the reader needs to know the roster is short a person and
+   why — but it is not an option: no hover wash, no pointer, and the second
+   line says what to do about it. A row already on the roster stays clickable
+   so a stale pick can be removed without installing anything. */
 .team-row.off .team-name {
   color: var(--text-secondary);
+}
+.team-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+.team-row:disabled:hover {
+  background: none;
 }
 .team-ava {
   flex: none;
@@ -4313,4 +4323,133 @@
 .note-act.danger:hover {
   background: color-mix(in srgb, var(--danger, #d94a4a) 14%, transparent);
   color: var(--danger, #d94a4a);
+}
+
+/* ==========================================================================
+   Permission mode (composer action row)
+   The thread's autonomy, one chip. It replaced a bare switch because "may this
+   turn run a destructive command" and "may this thread do anything unseen"
+   are different questions, and only the second one survives a reload.
+   ========================================================================== */
+.perm-pick {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.perm-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.perm-trigger:hover,
+.perm-trigger.open {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--bg-inset);
+}
+/* Plan and bypass are the two modes that change what the thread *is*: one
+   refuses to act, the other refuses to ask. They carry a tone so the reader
+   can see the mode without opening the menu. */
+.perm-trigger.perm-plan {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.perm-trigger.perm-bypass {
+  color: var(--semantic-danger);
+  border-color: var(--semantic-danger);
+  background: var(--semantic-danger-soft);
+}
+.perm-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 60;
+  width: 320px;
+  max-width: min(320px, 90vw);
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+}
+.perm-menu-head {
+  margin: 2px 6px 6px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.perm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 8px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.perm-row:hover {
+  background: var(--bg-inset);
+}
+.perm-row.on {
+  background: var(--bg-inset);
+}
+.perm-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+}
+.perm-row.danger .perm-row-icon {
+  color: var(--semantic-danger);
+  background: var(--semantic-danger-soft);
+}
+.perm-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.perm-row-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.perm-row-hint {
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+.perm-check {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+  align-self: center;
+}
+.perm-foot {
+  margin: 6px 6px 2px;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--text-tertiary);
 }

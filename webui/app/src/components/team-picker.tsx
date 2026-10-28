@@ -136,24 +136,39 @@ export function TeamRoster(props: {
               class={`team-row${on ? ' on' : ''}${a.installed ? '' : ' off'}`}
               role="option"
               aria-selected={on}
+              aria-disabled={!a.installed && !on}
               aria-label={`${a.display_name || a.name}${
                 a.installed ? ` — ${t('sessions.teamOnDuty')}` : ` — ${t('sessions.teamNotInstalled')}`
               }`}
-              title={a.version || a.path || a.binary}
+              title={
+                a.installed
+                  ? a.version || a.path || a.binary
+                  : t('sessions.teamNotInstalledHint')
+              }
+              // A CLI this node does not have cannot take a task here, so the
+              // row is not an option. It stays clickable only when it is
+              // already on the thread's roster — removing a stale pick must
+              // never need the binary to be installed first.
+              disabled={!a.installed && !on}
               onClick={() => toggle(a.name)}
             >
               {/* The green pip is the roster's "on the floor" mark: this CLI is
                   installed on the node, so this person can take a task today.
-                  An uninstalled row keeps the pip off and says so in words — a
-                  team can be hired for work that runs elsewhere, so the row
-                  stays pickable. */}
+                  An uninstalled row keeps the pip off, says so in words, and
+                  is disabled — a pick that can never be staffed is a promise
+                  the scheduler would have to break at dispatch time. */}
               <AgentFace name={a.name} label={a.display_name || a.name} onDuty={a.installed} />
               <span class="team-text">
                 <span class="team-name">{a.display_name || a.name}</span>
                 {/* An agent the registry knows but has no role tags for still
                     earns a second line — its binary is what the operator would
-                    type to check on it. */}
-                <span class="team-role">{roles.join(' · ') || a.binary}</span>
+                    type to check on it. An uninstalled one gets the reason
+                    instead, where the roles would have been. */}
+                <span class="team-role">
+                  {a.installed
+                    ? roles.join(' · ') || a.binary
+                    : t('sessions.teamNotInstalledHint')}
+                </span>
               </span>
               {!a.installed && <span class="team-tag">{t('sessions.teamNotInstalled')}</span>}
               {on && <Icon name="check" size={14} class="team-check" />}

@@ -306,6 +306,39 @@ func (c *Core) taskAllowAgents(ctx context.Context, taskID string) []string {
 	return spec.AllowAgents
 }
 
+// taskPermissionFor reads the conversation permission mode that created a
+// task. Empty (or an unreadable spec) reads as auto: the ordinary tier gate.
+func (c *Core) taskPermissionFor(ctx context.Context, taskID string) string {
+	t, err := c.store.Get(ctx, taskID)
+	if err != nil {
+		return defense.ModeAuto
+	}
+	return taskPermissionMode(t.SpecJSON)
+}
+
+// tightenForPermission raises the plan's tier to what the conversation's
+// permission mode demands. It runs after every failover and affinity
+// promotion, so a promoted alternate cannot hand back the autonomy the mode
+// took away. Bypass needs nothing here — the ask engine already consented —
+// and auto/edits keep the tier the command itself scored.
+//
+//   - manual: every native command and every agent delegation waits for a
+//     foreground answer; only reads and pure answers stay free.
+//   - plan: native commands wait too, and the agent runs with the read-only
+//     tool face (applied on the exec context, see execContextFor).
+func tightenForPermission(plan *commander.Plan, mode string) {
+	switch defense.NormalizeMode(mode) {
+	case defense.ModeManual:
+		if plan.Kind == "native" || plan.Kind == "agent" {
+			plan.Tier = defense.TierIrreversible
+		}
+	case defense.ModePlan:
+		if plan.Kind == "native" {
+			plan.Tier = defense.TierIrreversible
+		}
+	}
+}
+
 // rosterHonoursPins refuses a task whose requires pin an agent the thread's
 // roster excludes.
 //
@@ -502,6 +535,7 @@ func (c *Core) resolveRunPlan(ctx context.Context, taskID string, required []str
 			}
 		}
 	}
+	tightenForPermission(&plan, c.taskPermissionFor(ctx, taskID))
 	return plan, router, breakerKey, nil
 }
 
@@ -1059,6 +1093,13 @@ func (c *Core) decorateExecCtx(execCtx, ctx context.Context, taskID string, task
 	// global default. The override rides the context so runAdapterProcess
 	// picks it up without the execution-path signatures changing.
 	if plan.Kind == "agent" {
+		// A conversation in plan mode hands the agent the read-only tool
+		// face: it can look, reason and write a plan, but "produce a plan"
+		// must not quietly become "do it". The tier tightening in
+		// resolveRunPlan holds native commands at the same time.
+		if taskPermissionMode(task.SpecJSON) == defense.ModePlan {
+			execCtx = commander.WithRestricted(execCtx)
+		}
 		if d := c.agentTimeoutForKind(plan.Kind); d > 0 {
 			execCtx = commander.WithAgentTimeout(execCtx, d)
 		}

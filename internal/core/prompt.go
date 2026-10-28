@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/security"
@@ -50,6 +51,23 @@ func taskToolsPolicy(specJSON string) string {
 		return ""
 	}
 	return spec.ToolsPolicy
+}
+
+// taskPermissionMode extracts the conversation permission policy that created
+// this task (entry.TaskSpecDetail.PermissionMode). Empty means the thread
+// never picked one, which reads as auto. Parsing failure yields empty: an
+// unreadable spec must not grant more than the default.
+func taskPermissionMode(specJSON string) string {
+	if specJSON == "" {
+		return ""
+	}
+	var spec struct {
+		PermissionMode string `json:"permission_mode"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return ""
+	}
+	return defense.NormalizeMode(spec.PermissionMode)
 }
 
 // taskMaxTurns extracts the per-task agent turn cap from a task's persisted

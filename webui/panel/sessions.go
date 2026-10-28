@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
@@ -173,6 +174,10 @@ type patchSessionRequest struct {
 	// "absent" (leave the roster alone) and "empty" (clear it — no
 	// restriction) stay distinguishable; the console sends [] to clear.
 	Team *[]string `json:"team,omitempty"`
+	// PermissionMode replaces the thread's permission policy (auto, manual,
+	// edits, plan, bypass). A pointer so "absent" (leave it alone) and ""
+	// (back to auto) stay distinguishable.
+	PermissionMode *string `json:"permission_mode,omitempty"`
 }
 
 // patchSession serves PATCH /api/sessions/{id} — updates title, project
@@ -219,6 +224,19 @@ func (h *handler) patchSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.sessions.SetTeam(id, team); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if req.PermissionMode != nil {
+		mode := defense.NormalizeMode(*req.PermissionMode)
+		// NormalizeMode maps "" to auto, so an explicit clear works; anything
+		// else the caller sent must be a real policy, not a typo.
+		if *req.PermissionMode != "" && !defense.ValidMode(*req.PermissionMode) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown permission mode %q", *req.PermissionMode))
+			return
+		}
+		if err := h.sessions.SetPermissionMode(id, mode); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 	}
@@ -492,6 +510,11 @@ type sessionAskRequest struct {
 	// empty list means "no restriction" — the same distinction PATCH makes,
 	// so a pick made a moment before sending does not need a second request.
 	Agents []string `json:"agents"`
+	// PermissionMode overrides the session's stored permission policy for
+	// this turn only. Absent means "use the thread's policy" — the console
+	// normally PATCHes the session when the user flips the switch, so a
+	// resumed thread on another device keeps the same answer.
+	PermissionMode string `json:"permission_mode"`
 }
 
 // statusEventOf is the JSON one progress event becomes on the SSE stream.
@@ -578,6 +601,20 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
+	}
+
+	// The conversation's permission policy: an explicit per-turn value wins
+	// over the thread's stored mode, and an unknown value is a client bug
+	// worth refusing rather than silently downgrading to auto — "the mode I
+	// picked was ignored" is exactly the failure this feature exists to
+	// prevent.
+	permission := sess.PermissionMode
+	if req.PermissionMode != "" {
+		if !defense.ValidMode(req.PermissionMode) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown permission mode %q", req.PermissionMode))
+			return
+		}
+		permission = req.PermissionMode
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -741,11 +778,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// included it would overstate a fast reply.
 	askStarted := time.Now()
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
-		Project:   sess.Project,
-		WorkDir:   workDir,
-		SessionID: sess.ID,
-		Node:      req.Node,
-		Agents:    team,
+		Project:        sess.Project,
+		WorkDir:        workDir,
+		SessionID:      sess.ID,
+		Node:           req.Node,
+		Agents:         team,
+		PermissionMode: permission,
 	}, req.Authorize, cb)
 	askDuration := time.Since(askStarted).Milliseconds()
 	if err != nil {

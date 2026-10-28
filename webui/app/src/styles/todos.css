@@ -168,6 +168,23 @@
   outline: none;
   box-shadow: var(--ring);
 }
+/* The count rides inside the chip: a filter that cannot say how many rows it
+   would show is a click into the unknown. Tabular figures so the row does not
+   shift as the numbers change. */
+.td-quick-count {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+.td-quick-btn.on .td-quick-count {
+  color: var(--text-secondary);
+}
+/* Overdue is the one filter whose whole point is to read zero. */
+.td-quick-btn .td-quick-count {
+  min-width: 1ch;
+}
 
 .td-toolbar-right {
   display: flex;
@@ -193,7 +210,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  min-height: 200px;
+  /* Content height, not a fixed slab. Three full-height grey boxes on an
+     empty board read as broken widgets; a lane that ends under its last card
+     reads as a column with nothing in it yet. */
+  min-height: 0;
   padding: var(--sp-3);
   background: var(--bg-inset);
   border: 1px solid var(--border-soft);
@@ -684,4 +704,37 @@
   .td-sheet-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---- Empty board ---- */
+
+/* The board with nothing on it: one line where three empty lanes used to be.
+   The composer above is already the call to action, so this only has to say
+   why the space is empty and how the next card gets here. */
+.td-zero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 48px 16px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+.td-zero-title {
+  margin: 0;
+  font-size: var(--text-md, 15px);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.td-zero-hint {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+.td-zero-filtered {
+  padding: 24px 8px;
+  text-align: center;
 }

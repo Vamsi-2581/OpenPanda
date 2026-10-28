@@ -32,6 +32,11 @@ import { SessionPick } from '../components/session-pick'
 import { autoGrow, editorClear, editorPlain, editorTextOf, insertTextAtCaret, range_or_append, useBrParagraphSeparator } from './sessions'
 import { DeviceGlyph, type Form as FormKind } from '../components/device-glyph'
 import { WorkspacePanels } from './workspace-panels'
+import {
+  PermissionPicker,
+  authorizeRelevant,
+  type PermissionMode,
+} from '../components/permission-picker'
 
 /** 工作空间 — the fleet as panels. 节点网络 answers "what can each device do"
  *  with cards and forms; this page answers the live question, "what is running
@@ -345,6 +350,9 @@ export function WorkspaceView() {
   const [dirTouched, setDirTouched] = useState(false)
   const [pickedSession, setPickedSession] = useState<Session | null>(null)
   const [orchOpen, setOrchOpen] = useState(false)
+  // Bumped by the 整理布局 control; WorkspacePanels throws the saved
+  // arrangement away when it changes.
+  const [layoutReset, setLayoutReset] = useState(0)
 
   // Heartbeats land on the directory every ~15s; poll at the same cadence so
   // a device that goes quiet fades without a manual reload. SSE covers the
@@ -471,6 +479,18 @@ export function WorkspaceView() {
           })}
         </span>
         <div class="ws-head-tools">
+          {/* Re-form the tidy row. A panel can be dragged anywhere on the
+              surface, and a saved arrangement should never be a one-way door:
+              this is the way back that costs one click. */}
+          <button
+            type="button"
+            class="icon-btn ws-tidy"
+            title={t('workspace.tidy')}
+            aria-label={t('workspace.tidy')}
+            onClick={() => setLayoutReset((v) => v + 1)}
+          >
+            <Icon name="layout" size={15} />
+          </button>
           {/* The rail is a card, not a column: it hangs off the same corner as
               the orchestration card beside it, over the drawing. Taking a grid
               column instead made the map narrower, which re-laid the plates out
@@ -559,6 +579,7 @@ export function WorkspaceView() {
               idleLabel={t('workspace.tile.idle')}
               runningLabel={t('workspace.tile.running')}
               noneLabel={t('workspace.detail.agentsEmpty')}
+              resetSignal={layoutReset}
             />
           </div>
         </div>
@@ -656,6 +677,10 @@ function WorkspaceComposer(props: {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [authorize, setAuthorize] = useState(false)
+  // The permission policy this bench sends under. It is written to whichever
+  // thread the send lands in, so a task dispatched from here carries the same
+  // autonomy it was given at the bench.
+  const [permission, setPermission] = useState<PermissionMode>('auto')
 
   useEffect(() => {
     composer.current?.focus()
@@ -702,6 +727,11 @@ function WorkspaceComposer(props: {
       const prompt = expanded.prompt
       const target =
         props.picked ?? (await api.createSession(prompt.slice(0, 48), threadProject))
+      if (permission !== 'auto' && !props.picked) {
+        // Persist the pick on the thread this send just created; the ask
+        // below also carries it, so a failed patch costs the memory only.
+        api.patchSession(target.id, { permission_mode: permission }).catch(() => {})
+      }
       void askSessionStream(
         target.id,
         prompt,
@@ -720,6 +750,9 @@ function WorkspaceComposer(props: {
           },
         },
         undefined,
+        undefined,
+        undefined,
+        props.picked ? undefined : permission,
       ).catch(toastError)
       editorClear(composer.current)
       setInput('')
@@ -791,17 +824,20 @@ function WorkspaceComposer(props: {
           }}
         />
         <div class="composer-actions">
-          <label class="ask-authorize" title={t('approval.stateHint')}>
-            <span class="switch">
-              <input
-                type="checkbox"
-                checked={authorize}
-                onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-              />
-              <span class="switch-track" aria-hidden="true" />
-            </span>
-            {t('sessions.authorize')}
-          </label>
+          <PermissionPicker value={permission} onChange={setPermission} disabled={sending} />
+          {authorizeRelevant(permission) && (
+            <label class="ask-authorize" title={t('approval.stateHint')}>
+              <span class="switch">
+                <input
+                  type="checkbox"
+                  checked={authorize}
+                  onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
+                />
+                <span class="switch-track" aria-hidden="true" />
+              </span>
+              {t('sessions.authorize')}
+            </label>
+          )}
           <ModelSelect disabled={sending} />
           <VoiceInput onText={insertDictation} />
           <button class="btn primary" type="submit" disabled={!input.trim() || sending}>

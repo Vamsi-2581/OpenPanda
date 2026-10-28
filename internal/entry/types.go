@@ -116,6 +116,10 @@ type TaskSpecDetail struct {
 	// executor, so the restriction survives a hop to another node instead of
 	// being a submitter-side suggestion. Empty means no restriction.
 	AllowAgents []string `json:"allow_agents,omitempty"`
+	// PermissionMode is the conversation's permission policy that created
+	// this task (defense.ModeManual, ModePlan, …). Empty means auto: the
+	// thread never picked one, and the executor's ordinary tier gate applies.
+	PermissionMode string `json:"permission_mode,omitempty"`
 	// ActionSpec is the hardware/software actuator dispatch (§7.2): when the
 	// request drives a declared actuator (a hardware:* ability on a device),
 	// the model names the target actuator, the action verb and the scalar

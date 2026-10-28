@@ -30,6 +30,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/hwinfo"
@@ -1714,6 +1715,12 @@ type AskScope struct {
 	// rather than being a hint the model may ignore. Empty means no
 	// restriction — the scheduler routes by capability, as before.
 	Agents []string
+
+	// PermissionMode is the conversation's permission policy (defense.Mode*:
+	// auto, manual, edits, plan, bypass). It rides every tool gate and is
+	// copied into each classified task's spec so the executor — possibly a
+	// peer — applies the same policy. Empty reads as auto.
+	PermissionMode string
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1929,7 +1936,7 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// withholds consent no matter the grant — every tier-2 operation is
 	// decided per-action in the foreground.
 	scopeProj, _ := e.scopeProject(scope)
-	verdict := e.approvalFor(scope.SessionID, scopeProj)
+	verdict := e.approvalFor(scope.SessionID, scopeProj).withPermission(scope.PermissionMode)
 	toolAuthorized, toolDenied := verdict.gate(authorize)
 	approvalMode := verdict.mode
 	const maxRounds = 6
@@ -2610,6 +2617,14 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if len(scope.Agents) > 0 {
 		spec.Spec.AllowAgents = append([]string(nil), scope.Agents...)
 	}
+	// The conversation's permission mode rides the spec for the same reason
+	// the roster does: the executor (a peer included) must apply the policy
+	// the user picked, not the one this process happens to default to. Auto
+	// is left off so an untouched thread's spec stays byte-identical to the
+	// pre-mode shape.
+	if perm := defense.NormalizeMode(scope.PermissionMode); perm != defense.ModeAuto {
+		spec.Spec.PermissionMode = perm
+	}
 	in := toTaskInput(spec, targetLoc)
 	workDir := scope.WorkDir
 	// Explicit per-request scope wins. Existing CLI callers that omit a project
@@ -2653,7 +2668,7 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	// explicit session grant (/authorize on, --authorize) is the standing
 	// consent on-request honors; "always" withholds regardless so every tier-2
 	// task is decided per-task in the foreground.
-	verdict := e.approvalFor(scope.SessionID, in.Project)
+	verdict := e.approvalFor(scope.SessionID, in.Project).withPermission(scope.PermissionMode)
 	authorized, denied := verdict.gate(authorized)
 	consentSrc := ""
 	if authorized && verdict.decisionScope != "" && verdict.decision == projectstore.DecisionApprove {

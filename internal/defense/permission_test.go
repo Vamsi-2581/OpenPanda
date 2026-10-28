@@ -490,3 +490,40 @@ func TestTierFromCommandLanguageDeletion(t *testing.T) {
 		}
 	}
 }
+
+func TestPermissionModes(t *testing.T) {
+	// Every named mode is valid; everything else is not. ValidMode gates the
+	// setters, so a typo must not pass as a policy.
+	for _, m := range []string{ModeAuto, ModeManual, ModeEdits, ModePlan, ModeBypass} {
+		if !ValidMode(m) {
+			t.Fatalf("ValidMode(%q) = false, want true", m)
+		}
+		if got := NormalizeMode(m); got != m {
+			t.Fatalf("NormalizeMode(%q) = %q, want itself", m, got)
+		}
+	}
+	if ValidMode("auto ") || ValidMode("Automatic") {
+		t.Fatal("near-miss spellings must be refused, not coerced")
+	}
+	// An unknown or empty mode reads as auto: never wider than the default.
+	for _, m := range []string{"", "nonsense", "AUTO"} {
+		if got := NormalizeMode(m); got != ModeAuto {
+			t.Fatalf("NormalizeMode(%q) = %q, want %q", m, got, ModeAuto)
+		}
+	}
+	for _, tc := range []struct {
+		mode string
+		want bool
+	}{
+		{ModeManual, true},
+		{ModePlan, true},
+		{ModeAuto, false},
+		{ModeEdits, false},
+		{ModeBypass, false},
+		{"", false},
+	} {
+		if got := ModeForcesApproval(tc.mode); got != tc.want {
+			t.Fatalf("ModeForcesApproval(%q) = %v, want %v", tc.mode, got, tc.want)
+		}
+	}
+}

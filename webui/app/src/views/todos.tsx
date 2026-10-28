@@ -117,7 +117,13 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
           ? new Date(new Date(x.due_at * 1000).getFullYear(), new Date(x.due_at * 1000).getMonth(), new Date(x.due_at * 1000).getDate()).getTime()
           : 0
         if (quick === 'today' && dueDay !== startOfToday) return false
-        if (quick === 'overdue' && !(dueDay && dueDay < startOfToday)) return false
+        // A finished todo is not overdue. Counting closed cards here used to
+        // make the 已逾期 filter grow forever, which is the one number nobody
+        // wants to watch climb.
+        if (quick === 'overdue') {
+          const open = x.status !== 'done' && x.status !== 'cancelled'
+          if (!(open && dueDay && dueDay < startOfToday)) return false
+        }
         if (quick === 'undated' && x.due_at !== 0) return false
       }
       return true
@@ -143,6 +149,27 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
     return lane === 'pending' || lane === 'running'
   }).length
 
+  // Counts for the quick filters. A filter chip that cannot say how many rows
+  // it would show is a click into the unknown — and 已逾期 especially, since
+  // the point of that number is to be zero.
+  const counts = useMemo(() => {
+    const now = new Date()
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    const out = { all: 0, today: 0, overdue: 0, undated: 0 }
+    for (const x of todos ?? []) {
+      out.all++
+      if (!x.due_at) {
+        out.undated++
+        continue
+      }
+      const d = new Date(x.due_at * 1000)
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+      if (day === start) out.today++
+      if (day < start && x.status !== 'done' && x.status !== 'cancelled') out.overdue++
+    }
+    return out
+  }, [todos])
+
   const editingTodo = useMemo(
     () => (editing == null ? null : (todos ?? []).find((x) => x.id === editing) ?? null),
     [todos, editing],
@@ -151,7 +178,14 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
   /** Move a card to another lane (and, inside the same lane, to a new slot).
    *  A cross-lane drop writes the status first; the order write then covers
    *  whatever lane the card ended up in. Both failures refresh from server
-   *  truth rather than leaving the board showing a lie. */
+   *  truth rather than leaving the board showing a lie.
+   *
+   *  The order write is computed against the lane's FULL membership, not the
+   *  filtered view: dropping a card while a filter is on used to send only
+   *  the visible ids, which renumbered the hidden half of the lane and shuffled
+   *  cards the reader never touched. The drop target is still the visible
+   *  neighbour the pointer was over; its position in the full list is the
+   *  anchor. */
   async function drop(lane: Lane, index: number) {
     const d = drag
     setDrag(null)
@@ -162,8 +196,13 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
       if (laneOf(card.status) !== lane) {
         await api.patchTodo(card.id, { status: LANE_STATUS[lane] })
       }
-      const ids = lanes[lane].map((x) => x.id).filter((id) => id !== d.id)
-      ids.splice(Math.max(0, Math.min(index, ids.length)), 0, d.id)
+      const visibleIds = lanes[lane].map((x) => x.id)
+      const anchor = index < visibleIds.length ? visibleIds[index] : null
+      const ids = (todos ?? [])
+        .filter((x) => laneOf(x.status) === lane && x.id !== d.id)
+        .map((x) => x.id)
+      const at = anchor ? ids.indexOf(anchor) : -1
+      ids.splice(at < 0 ? ids.length : at, 0, d.id)
       if (ids.length > 1) await api.reorderTodos(ids)
     } catch (e) {
       toastError(e)
@@ -216,6 +255,7 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
               onClick={() => setQuick(k)}
             >
               {t(`todos.filter.${k}`)}
+              <span class="td-quick-count">{counts[k]}</span>
             </button>
           ))}
         </div>
@@ -256,7 +296,24 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
 
       {todos === null && !error && <p class="dim">{t('common.loading')}</p>}
 
-      {todos !== null && (
+      {/* An empty board used to be three empty lanes side by side — half a
+          screen of grey boxes saying nothing three times. One line says it
+          once and points at the field above. */}
+      {todos !== null && todos.length === 0 && (
+        <div class="td-zero">
+          <p class="td-zero-title">{t('todos.zeroTitle')}</p>
+          <p class="td-zero-hint">{t('todos.zeroHint')}</p>
+        </div>
+      )}
+
+      {/* A filter that matches nothing is not an empty board: the board is
+          there, the lens is wrong. Say which, instead of painting three
+          empty lanes the reader might mistake for lost data. */}
+      {todos !== null && todos.length > 0 && visible.length === 0 && (
+        <p class="td-zero-hint td-zero-filtered">{t('todos.noMatch')}</p>
+      )}
+
+      {todos !== null && visible.length > 0 && (
         <div class="td-board">
           {LANES.map((lane) => (
             <div
@@ -362,7 +419,13 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
 }
 
 /** The inline "新建待办" composer. One line, Enter to save, Esc to clear —
- *  the whole point of a to-do list is that adding one costs nothing. */
+ *  the whole point of a to-do list is that adding one costs nothing.
+ *
+ *  The field is always there. It used to hide behind a dashed 新建待办 button,
+ *  which charged a click for the page's most frequent action and left an empty
+ *  board looking like it had no way in. The optional fields (due, priority,
+ *  project) still fold away until the field is touched: they are refinements,
+ *  and a form that opens with four inputs treats every errand as a project. */
 function Composer({ onCreated }: { onCreated(): void }) {
   const [title, setTitle] = useState('')
   const [open, setOpen] = useState(false)
@@ -373,8 +436,20 @@ function Composer({ onCreated }: { onCreated(): void }) {
   const input = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (open) input.current?.focus()
-  }, [open])
+    // "n" gets you here from anywhere on the page — the same key most task
+    // tools use, and the reason the board needs no visible "new" button.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'n' || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = e.target as HTMLElement | null
+      if (el && (el.closest('input, textarea, select, [contenteditable="true"]') || el.isContentEditable)) {
+        return
+      }
+      e.preventDefault()
+      input.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   async function submit(e: Event) {
     e.preventDefault()
@@ -401,13 +476,11 @@ function Composer({ onCreated }: { onCreated(): void }) {
     }
   }
 
-  if (!open) {
-    return (
-      <button type="button" class="td-add" onClick={() => setOpen(true)}>
-        <Icon name="plus" size={14} />
-        {t('todos.new')}
-      </button>
-    )
+  function collapse() {
+    setOpen(false)
+    setTitle('')
+    setDue('')
+    input.current?.blur()
   }
 
   return (
@@ -420,64 +493,59 @@ function Composer({ onCreated }: { onCreated(): void }) {
           placeholder={t('todos.newPlaceholder')}
           aria-label={t('todos.newPlaceholder')}
           value={title}
+          onFocus={() => setOpen(true)}
           onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              setOpen(false)
-              setTitle('')
-            }
+            if (e.key === 'Escape') collapse()
           }}
         />
         <button class="btn primary small" type="submit" disabled={busy || !title.trim()}>
           {t('todos.add')}
         </button>
-        <button
-          class="btn small"
-          type="button"
-          onClick={() => {
-            setOpen(false)
-            setTitle('')
-          }}
-        >
-          {t('common.cancel')}
-        </button>
+        {open && (
+          <button class="btn small" type="button" onClick={collapse}>
+            {t('common.cancel')}
+          </button>
+        )}
       </div>
-      <div class="td-composer-meta">
-        <label class="td-inline-field">
-          <span>{t('todos.field.due')}</span>
-          <input
-            class="input"
-            type="date"
-            value={due}
-            onInput={(e) => setDue((e.target as HTMLInputElement).value)}
-          />
-        </label>
-        <label class="td-inline-field">
-          <span>{t('todos.field.priority')}</span>
-          <select
-            class="input"
-            value={priority}
-            onChange={(e) => setPriority((e.target as HTMLSelectElement).value as Todo['priority'])}
-          >
-            {PRIO_CYCLE.map((p) => (
-              <option key={p} value={p}>
-                {t(`todos.priority.${p}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label class="td-inline-field">
-          <span>{t('todos.field.project')}</span>
-          <input
-            class="input"
-            type="text"
-            list="td-project-list"
-            placeholder={t('todos.field.projectPlaceholder')}
-            value={project}
-            onInput={(e) => setProject((e.target as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
+      {open && (
+        <div class="td-composer-meta">
+          <label class="td-inline-field">
+            <span>{t('todos.field.due')}</span>
+            <input
+              class="input"
+              type="date"
+              value={due}
+              onInput={(e) => setDue((e.target as HTMLInputElement).value)}
+            />
+          </label>
+          <label class="td-inline-field">
+            <span>{t('todos.field.priority')}</span>
+            <select
+              class="input"
+              value={priority}
+              onChange={(e) => setPriority((e.target as HTMLSelectElement).value as Todo['priority'])}
+            >
+              {PRIO_CYCLE.map((p) => (
+                <option key={p} value={p}>
+                  {t(`todos.priority.${p}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label class="td-inline-field">
+            <span>{t('todos.field.project')}</span>
+            <input
+              class="input"
+              type="text"
+              list="td-project-list"
+              placeholder={t('todos.field.projectPlaceholder')}
+              value={project}
+              onInput={(e) => setProject((e.target as HTMLInputElement).value)}
+            />
+          </label>
+        </div>
+      )}
     </form>
   )
 }
