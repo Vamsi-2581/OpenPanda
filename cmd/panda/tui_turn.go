@@ -109,11 +109,19 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 
 	if msg.err != nil {
 		// A user-initiated cancel (Esc / Ctrl+C mid-stream) surfaces as a context
-		// error; that is a quiet "interrupted" note, not a red failure block.
+		// error; that is a quiet "interrupted" note, not a red failure block —
+		// but the streamed prose stays. The reply is not coming back (the ask
+		// was cancelled, not requeued), so dropping it would erase everything
+		// the user had already read.
 		done := m.turnEnded()
 		prompt := m.pendingPrompt
+		streamed := m.liveAnswerText()
 		m.resetLive()
 		if errors.Is(msg.err, context.Canceled) {
+			if strings.TrimSpace(streamed) != "" {
+				blk := block{kind: blockAnswer, body: streamed}
+				return m.withPending(done, m.printBlock(blk))
+			}
 			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
 			return m.withPending(done, m.printBlock(note))
 		}

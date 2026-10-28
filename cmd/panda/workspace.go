@@ -73,6 +73,11 @@ func looksLikeWorkspaceStrong(dir string) bool {
 // equals dir or — walking outward — is a proper ancestor of it. Longest
 // matching WorkDir wins, so a nested repo binds to its own project rather
 // than the enclosing one. "" means no project owns the directory.
+//
+// Only a usable work dir may own a directory: a row pointing at $HOME (minted
+// by home adoption before the breadth rule existed) would otherwise claim every
+// directory under the home tree, and each task in them would inherit a sandbox
+// root the executor refuses. Skipping the row here lets the real project win.
 func projectForDir(store *projects.Store, dir string) (name, workDir string) {
 	if store == nil || dir == "" {
 		return "", ""
@@ -88,7 +93,7 @@ func projectForDir(store *projects.Store, dir string) (name, workDir string) {
 	}
 	best := ""
 	for _, p := range list {
-		wd := filepath.Clean(p.WorkDir)
+		wd := filepath.Clean(p.UsableWorkDir())
 		if wd == "" || wd == "." {
 			continue
 		}
@@ -97,7 +102,7 @@ func projectForDir(store *projects.Store, dir string) (name, workDir string) {
 		}
 		if len(wd) > len(best) {
 			best = wd
-			name, workDir = p.Name, p.WorkDir
+			name, workDir = p.Name, p.UsableWorkDir()
 		}
 	}
 	return name, workDir
@@ -109,9 +114,23 @@ func projectForDir(store *projects.Store, dir string) (name, workDir string) {
 // active one, so every later entry point (task add, schedule, agents) lands
 // in the same space. Returns the adopted project name, "" on failure —
 // adoption is best-effort, never fatal.
+//
+// The breadth rule from internal/projects applies here too. Adoption used to
+// mint a row for any marker-bearing directory, and $HOME carries markers on
+// almost every developer machine (~/.claude, ~/.panda, a stray go.mod). The
+// resulting row was legal at the time, but every task under it died the moment
+// the work-dir breadth check landed: "work dir is too broad: /Users/<name> is
+// the home directory or an ancestor of it", on every ask, with nothing in the
+// message pointing at the project row that caused it. A directory the rule
+// would refuse is not adopted at all.
 func adoptWorkspaceProject(store *projects.Store, cwd string) string {
 	if store == nil || cwd == "" {
 		return ""
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		if err := projects.ValidateWorkDir(abs); err != nil {
+			return ""
+		}
 	}
 	// Deepest owning project wins first: launching inside a subdirectory of
 	// an existing project binds that project — minting a row for the subdir

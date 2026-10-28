@@ -1113,13 +1113,17 @@ func (r *repl) askMode(text, mode string) {
 	r.resetWatchBaseline()
 
 	if res.err != nil {
-		r.errf("%s\n", "panda: "+res.err.Error())
 		// A cancelled ask leaves no dangling turn worth pairing (the user
 		// aborted it); every other failure records one so the thread keeps
-		// its user/assistant alternation.
-		if !errors.Is(res.err, context.Canceled) {
-			r.recordErrorTurn(text, res.err)
+		// its user/assistant alternation. A cancel is also not a failure line:
+		// the user pressed the key, so it reads as a quiet note — the same
+		// wording the TUI uses — rather than "panda: model call canceled".
+		if errors.Is(res.err, context.Canceled) {
+			r.outln(pal().Muted(pal().MarkBullet() + " " + i18n.T(r.loc, "repl.interrupted")))
+			return
 		}
+		r.errf("%s\n", "panda: "+res.err.Error())
+		r.recordErrorTurn(text, res.err)
 		return
 	}
 	out := res.out

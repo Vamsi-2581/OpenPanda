@@ -2634,14 +2634,25 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if in.Project != "" && e.projStore != nil {
 		if p, perr := e.projStore.GetFold(in.Project); perr == nil {
 			in.Project = p.Name
-			if workDir == "" && p.WorkDir != "" {
-				workDir = p.WorkDir
+			// UsableWorkDir, not WorkDir: a row that names the home directory
+			// (created by home adoption before the breadth rule existed) would
+			// otherwise hand every ask a work dir the executor refuses, and the
+			// task fails at creation on a rule the user never invoked.
+			if workDir == "" {
+				workDir = p.UsableWorkDir()
 			}
 		}
 	}
+	// Last resort: the process's own directory. It answers to the same breadth
+	// rule a pin does — `panda ask` run from $HOME has no project and no pin,
+	// and taking $HOME as the work dir failed the task at creation with "work
+	// dir is too broad" instead of running it in its own private directory the
+	// way any other anonymous task does. A refused cwd leaves workDir empty.
 	if workDir == "" {
 		if cwd, err := os.Getwd(); err == nil {
-			workDir = cwd
+			if projectstore.ValidateWorkDir(cwd) == nil {
+				workDir = cwd
+			}
 		}
 	}
 	if in.RepoPath == "" && workDir != "" {

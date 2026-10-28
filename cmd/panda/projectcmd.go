@@ -146,9 +146,24 @@ func runProjectList(args []string) {
 			mark = p.Accent(p.Glyph("▸", ">")) + " "
 			tint = p.Accent
 		}
+		// A refused work dir is shown tinted rather than as an ordinary path:
+		// the row is the reason tasks under this project ignore the tree, and
+		// the list is where an operator notices it.
+		dirCell := func() string {
+			if pr.WorkDir == "" {
+				return cell(orDash(""), dirW)
+			}
+			if pr.UsableWorkDir() == "" {
+				// The marker leads, so tail-truncation of a long path cannot eat
+				// it: the row's point is that this tree is not used, and a mark
+				// that scrolls off with the path would leave a plausible path.
+				return cell(p.Warn("! "+cliui.TruncateTail(pr.WorkDir, dirW-2, p.Unicode())), dirW)
+			}
+			return cell(cliui.TruncateTail(pr.WorkDir, dirW, p.Unicode()), dirW)
+		}()
 		fmt.Println(mark + row(
 			styledCell(pr.Name, nameW, tint),
-			cell(orDash(cliui.TruncateTail(pr.WorkDir, dirW, p.Unicode())), dirW),
+			dirCell,
 			cell(humanAge(loc, pr.UpdatedAt.Unix()), seenW),
 			pr.Description,
 		))
@@ -273,7 +288,17 @@ func runProjectShow(args []string) {
 	if pr.Name == active {
 		field(i18n.T(loc, "cli.col.state"), p.Success(i18n.T(loc, "cli.project.isActive")))
 	}
-	field(i18n.T(loc, "cli.col.workdir"), orDash(pr.WorkDir))
+	// A work dir the breadth rule refuses still belongs on screen — with the
+	// reason. Printing it bare sends the user to a tree their tasks never use;
+	// printing "—" claims the project has none, which is a different fact.
+	if wd := pr.UsableWorkDir(); wd != "" {
+		field(i18n.T(loc, "cli.col.workdir"), wd)
+	} else if pr.WorkDir != "" {
+		field(i18n.T(loc, "cli.col.workdir"),
+			p.Warn(i18n.Tf(loc, "cli.project.workdirTooBroad", "dir", pr.WorkDir)))
+	} else {
+		field(i18n.T(loc, "cli.col.workdir"), orDash(pr.WorkDir))
+	}
 	if pr.Description != "" {
 		field(i18n.T(loc, "cli.col.description"), pr.Description)
 	}
