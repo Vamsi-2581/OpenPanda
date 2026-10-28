@@ -672,3 +672,34 @@ func TestSilentUpsertPreservesAdjacency(t *testing.T) {
 		t.Fatalf("link metrics wiped by null-adjacency upsert: %+v", nodes[0].LinkMetrics)
 	}
 }
+
+// TestHelloBindingLifecycle covers the downgrade-guard memory: a bound hello
+// records the id, re-recording on every reconnect is an upsert, and removing
+// the directory row clears the mark — that removal is the operator's reset for
+// a peer rolled back to a build that cannot bind.
+func TestHelloBindingLifecycle(t *testing.T) {
+	db := openLedgerDB(t)
+
+	if got, err := HelloBindingKnown(db, "opi3b"); err != nil || got {
+		t.Fatalf("unknown id = (%v, %v), want (false, nil)", got, err)
+	}
+	if err := RecordHelloBinding(db, "opi3b"); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if got, err := HelloBindingKnown(db, "opi3b"); err != nil || !got {
+		t.Fatalf("recorded id = (%v, %v), want (true, nil)", got, err)
+	}
+	if err := RecordHelloBinding(db, "opi3b"); err != nil {
+		t.Fatalf("re-record (upsert): %v", err)
+	}
+
+	if err := Register(db, testCard(), "opi3b", 1); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if _, err := Remove(db, "opi3b"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if got, _ := HelloBindingKnown(db, "opi3b"); got {
+		t.Fatal("Remove left the hello binding mark behind")
+	}
+}
