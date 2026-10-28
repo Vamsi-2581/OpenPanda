@@ -155,6 +155,16 @@ along with the link.
   required: a valid EdSig without the shared secret is refused outright,
   and presenting `pub_key` while unable to sign an EdSig is refused too
   (anti-impersonation).
+- **Receiver binding (anti cross-node replay)**: both layers above sign
+  only the dialer, so a captured `hello` can be replayed verbatim at a
+  third node inside the 5-minute window — that node's replay cache has
+  never seen it, and the replayer, as a member, derives the session key
+  from the two nonces. `to` names the receiver the hello is addressed
+  to, `sig_b` is `HMAC-SHA256(secret, "panda-hello-bind-v1" + nodeID +
+  to + ts + nonce)`, and `ed_sig_b` is the Ed25519 signature over the
+  same bytes. A dialer binds only when it knows the peer id (the
+  address→id binding recorded by a previous successful hello, or the
+  hello reply); a receiver refuses a hello whose `to` is not itself.
 
 Verification rules (`VerifyHelloP`):
 
@@ -171,6 +181,16 @@ Verification rules (`VerifyHelloP`):
   identity-less peer (membership only); only half present, or a
   signature that does not verify → treated as forged/stripped, failing
   rather than degrading.
+- `to` present → it must equal this node's id and `sig_b` must verify;
+  a hello carrying identity must also carry a verified `ed_sig_b`.
+  A `to` naming someone else (a captured hello offered here) → failure.
+- `to` absent → verified the legacy way, but if this node remembers the
+  id having bound before (`hello_bindings`) the hello is refused anyway.
+  That closes the downgrade path of stripping `to`/`sig_b` and replaying
+  the legacy signature. The record is written only when this node is the
+  receiver and the peer dialed in with a binding that verified, so a
+  build that never bound is unaffected; after rolling a peer back to a
+  pre-binding build, `nodes remove` clears the record so it can rejoin.
 
 The 5-minute window both tolerates P2P clock drift and expires sniffed
 old `hello`s. An authenticated Ed25519 identity then becomes the outbox's
@@ -181,8 +201,8 @@ fingerprints to.
 
 | `type` | Payload | Notes |
 |---|---|---|
-| `hello` | `HelloPayload` | Identity declaration at connect: `card` summary + HMAC `sig` (binding `ts`/`nonce`) + Ed25519 `pub_key`/`ed_sig` + `udp_port` + `caps` + `authoritative` |
-| `hello_reject` | `HelloRejectPayload` | The only receipt the server gives before disconnecting on handshake failure: `reason` ∈ `auth`/`identity`/`replay` |
+| `hello` | `HelloPayload` | Identity declaration at connect: `card` summary + HMAC `sig` (binding `ts`/`nonce`) + Ed25519 `pub_key`/`ed_sig` + receiver binding `to`/`sig_b`/`ed_sig_b` + `udp_port` + `caps` + `authoritative` |
+| `hello_reject` | `HelloRejectPayload` | The only receipt the server gives before disconnecting on handshake failure: `reason` ∈ `auth`/`identity`/`binding`/`replay` |
 | `join` | — | Join (constant defined in `bus`, handled at the core layer) |
 | `heartbeat` | `HeartbeatPayload` | status + capacity; may carry the latest capability card `card` |
 | `task_delegate` | `TaskDelegatePayload` | Task handover (the core frame, below) |
@@ -218,7 +238,10 @@ fingerprints to.
 ### `hello`
 `node_id`, `ver` (version), `card` (compact JSON of the capability
 summary, raw payload), `ts`, `nonce`, `sig`, `pub_key`, `ed_sig` (the
-Ed25519 identity pair — see the authentication section), `udp_port`
+Ed25519 identity pair — see the authentication section),
+`to`/`sig_b`/`ed_sig_b` (receiver binding — see the authentication
+section; an absent `to` means no binding support or an unresolved peer
+id), `udp_port`
 (datagram-plane listen port, 0 = no UDP plane), `caps` (optional wire
 capability list: `sessaead` session encryption, `binart` binary data
 frames — a peer that does not know a capability simply does not use it),
@@ -234,7 +257,7 @@ through).
 
 When hello verification fails the server replies `hello_reject`
 (`reason`: `auth` signature/key mismatch, `identity` id conflict or a
-pinned identity re-keyed, `replay` signature already consumed) before
+pinned identity re-keyed, `binding` a node that has bound before falling back to the unbound form, `replay` signature already consumed) before
 disconnecting — the only receipt frame on the unauthenticated channel,
 carrying nothing derived from the secret.
 

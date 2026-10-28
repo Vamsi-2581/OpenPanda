@@ -226,4 +226,18 @@ func TestParseQuestionRequest(t *testing.T) {
 	if !strings.Contains(cleaned4, "PANDA_QUESTIONABLE: design choice") {
 		t.Fatalf("lookalike line mangled: %q", cleaned4)
 	}
+
+	// A full-width colon is the separator a Chinese IME produces without
+	// being asked; it must park the task exactly like the ASCII one.
+	q5, cleaned5, ok5 := parseQuestionRequest("做完了\nPANDA_QUESTION：要改哪个文件？")
+	if !ok5 || q5 != "要改哪个文件？" {
+		t.Fatalf("full-width colon parse = %q ok=%v", q5, ok5)
+	}
+	if strings.Contains(cleaned5, questionMarker) {
+		t.Fatalf("full-width marker not stripped: %q", cleaned5)
+	}
+	// The ideographic space (U+3000) is a separator too.
+	if q6, _, ok6 := parseQuestionRequest("PANDA_QUESTION　哪个环境？"); !ok6 || q6 != "哪个环境？" {
+		t.Fatalf("ideographic space parse = %q ok=%v", q6, ok6)
+	}
 }

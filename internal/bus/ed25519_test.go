@@ -47,25 +47,25 @@ func TestEd25519NodeIdentityAndAuth(t *testing.T) {
 		EdSig:  sig,
 		Sig:    HelloSigN("mesh-secret", nodeID, ts, nonce),
 	}
-	if !VerifyHelloP("mesh-secret", p, time.Now()) {
+	if !VerifyHelloP("mesh-secret", "node-r", p, time.Now()) {
 		t.Fatalf("VerifyHelloP must pass with HMAC membership + valid Ed25519 identity")
 	}
-	if VerifyHelloP("", p, time.Now()) {
+	if VerifyHelloP("", "node-r", p, time.Now()) {
 		t.Fatalf("VerifyHelloP must not pass on Ed25519 identity alone (no shared secret)")
 	}
-	if VerifyHelloP("other-secret", p, time.Now()) {
+	if VerifyHelloP("other-secret", "node-r", p, time.Now()) {
 		t.Fatalf("VerifyHelloP must not pass under a wrong shared secret")
 	}
 	// Half an identity is a malformed hello, not a legacy peer.
 	pNoEdSig := p
 	pNoEdSig.EdSig = ""
-	if VerifyHelloP("mesh-secret", pNoEdSig, time.Now()) {
+	if VerifyHelloP("mesh-secret", "node-r", pNoEdSig, time.Now()) {
 		t.Fatalf("VerifyHelloP must reject a PubKey with no EdSig")
 	}
 	// A bad EdSig under a valid HMAC is tampering — fail closed.
 	pBadEd := p
 	pBadEd.EdSig = sig[:len(sig)-2] + "ff"
-	if VerifyHelloP("mesh-secret", pBadEd, time.Now()) {
+	if VerifyHelloP("mesh-secret", "node-r", pBadEd, time.Now()) {
 		t.Fatalf("VerifyHelloP must reject a corrupt EdSig even with a valid HMAC")
 	}
 

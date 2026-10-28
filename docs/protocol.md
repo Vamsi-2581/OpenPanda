@@ -112,6 +112,13 @@ JSON 重打包）。
   `NodeID:Ts:Nonce` 的 Ed25519 签名。HMAC 证明「你持有 mesh 密钥」，Ed25519 证明
   「你是这个 node id 的密钥本体」——二者缺一不可：光有有效 EdSig 而无共享密钥一律
   拒绝，持有 `pub_key` 却签不出 EdSig 同样拒绝（防身份冒称）。
+- **接收方绑定（防跨节点重放）**：上面两层签的都只是拨号方自己，因此一枚抓到的
+  `hello` 在 5 分钟窗口内可以原样重放给第三个节点——那个节点的重放缓存从没见过它，
+  而重放者作为成员能从两个 nonce 推出会话密钥。`to` 是这枚 hello 指向的接收方 node
+  id，`sig_b` 是 `HMAC-SHA256(secret, "panda-hello-bind-v1" + nodeID + to + ts +
+  nonce)`，`ed_sig_b` 是同一串字节的 Ed25519 签名。拨号方只有知道对端 id 时才带
+  （上一跳成功 hello 记下的地址→id 绑定，或 hello 应答）；接收方发现 `to` 不是自己
+  即拒绝。
 
 校验规则（`VerifyHelloP`）：
 
@@ -121,6 +128,13 @@ JSON 重打包）。
   恒定时间比较；不符 → 失败。接收侧另以签名覆盖字段建单次性重放缓存。
 - `pub_key`/`ed_sig` 都不带 → 按无身份旧对端放行（仅成员资格）；只带一半
   或签不出来 → 按伪造/剥离处理，失败而非降级。
+- `to` 非空 → 必须等于本节点 id，且 `sig_b` 校验通过；带身份时还必须带已验证的
+  `ed_sig_b`。`to` 不是自己（抓到的 hello 指向别处）→ 失败。
+- `to` 为空 → 按旧路径校验；但若本节点记得该 id 曾经发过绑定的 hello
+  （`hello_bindings`），仍未绑定 → 失败。这条堵的是「剥掉 `to`/`sig_b` 再重放旧签名」
+  的降级路径。记录只在本节点作为接收方、对端主动拨入且验证通过后写入，因此从没绑定
+  过的旧构建不受影响；把对端降级回不支持绑定的构建后，需要 `nodes remove` 清掉记录
+  才能重新入网。
 
 `5 min` 窗口既容忍 P2P 时钟漂移，又能让抓到的旧 `hello` 过期。经认证的 Ed25519
 身份随后成为 outbox 稳定托管键（`k:<pub>`）与 `panda nodes verify` 指纹钉住的对象。
@@ -129,8 +143,8 @@ JSON 重打包）。
 
 | `type` | 负载结构 | 说明 |
 |---|---|---|
-| `hello` | `HelloPayload` | 连接时声明身份：`card` 摘要 + HMAC `sig`（绑 `ts`/`nonce`）+ Ed25519 `pub_key`/`ed_sig` + X25519 `x_pub` + `udp_port` + `caps` + `authoritative` |
-| `hello_reject` | `HelloRejectPayload` | 握手失败时服务端在断连前给出的唯一回执：`reason` ∈ `auth`/`identity`/`replay` |
+| `hello` | `HelloPayload` | 连接时声明身份：`card` 摘要 + HMAC `sig`（绑 `ts`/`nonce`）+ Ed25519 `pub_key`/`ed_sig` + 接收方绑定 `to`/`sig_b`/`ed_sig_b` + X25519 `x_pub` + `udp_port` + `caps` + `authoritative` |
+| `hello_reject` | `HelloRejectPayload` | 握手失败时服务端在断连前给出的唯一回执：`reason` ∈ `auth`/`identity`/`binding`/`replay` |
 | `join` | — | 加入（常量定义在 `bus`，处理在核心层） |
 | `heartbeat` | `HeartbeatPayload` | 状态 + 容量；可顺带最新能力卡 `card` |
 | `task_delegate` | `TaskDelegatePayload` | 任务移交（核心帧，见下） |
@@ -169,7 +183,8 @@ JSON 重打包）。
 
 ### `hello`
 `node_id`、`ver`（版本）、`card`（能力摘要的紧凑 JSON，原始负载）、`ts`、`nonce`、
-`sig`、`pub_key`、`ed_sig`（Ed25519 身份对，见认证节）、`udp_port`（数据报平面
+`sig`、`pub_key`、`ed_sig`（Ed25519 身份对，见认证节）、`to`/`sig_b`/`ed_sig_b`
+（接收方绑定，见认证节；`to` 缺席 = 不支持绑定或不知道对端 id）、`udp_port`（数据报平面
 监听端口，0 = 无 UDP 面）、`caps`（可选线能力清单：`sessaead` 会话加密、
 `binart` 二进制数据帧——不认识某项能力的对端只是不启用它）、
 `authoritative`（声明发送进程持有节点身份锁，同 id 仲裁让真正的 daemon 从
@@ -185,7 +200,7 @@ version.Provenance 戳，自声明且在签名域外，接收方白名单化后�
 换来错误的候选列表，打洞握手本身会识破）。
 
 hello 校验失败时服务端回 `hello_reject`（`reason`：`auth` 签名/密钥不符、
-`identity` id 冲突或已钉住身份换钥、`replay` 签名被消费）再断开——这是
+`identity` id 冲突或已钉住身份换钥、`binding` 绑定过的节点退回未绑定形态、`replay` 签名被消费）再断开——这是
 未认证通道上唯一的回执帧，不带任何从密钥派生的内容。
 
 ### `heartbeat`

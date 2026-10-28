@@ -46,6 +46,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Fixed
+
+- **A captured hello no longer replays at another node** — a hello now names the receiver it was signed for (`to`, `sig_b`, `ed_sig_b`), and a node refuses a hello addressed elsewhere. Shipping is backward compatible: a peer that cannot bind is still admitted, and a node that has bound once may not fall back to the unbound form.
+- **The clarification marker accepts a full-width colon** — an agent writing `PANDA_QUESTION：` (the colon a Chinese IME produces) now parks the task for an answer instead of leaving the line in the prose.
+- **One damaged task row no longer 500s the task list** — the nullable columns (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) hydrate as zero values, so `/api/tasks` serves the rest of the board instead of failing whole.
+
 ## [0.1.1] - 2026-10-27 — "Constellation"
 
 **The patch on the release-grade line** — codename **Constellation**: the fleet as one sky, with the seams tightened. The entry client speaks OpenAI Responses and Google Gemini natively, a thread's roster and node pin reach the terminal beside the console, the dispatch budget follows the team you actually picked, cross-process writes are atomic behind a file lock, and a task can pin a work directory of its own. A project can no longer turn one authenticated request into a viewer for the whole disk. Configuration and stored data are unchanged — no schema migration, no renamed key — and the wire gains no new frame; the one format change is the UDP datagram's peer-keyed seal, which a 0.1.0 node cannot open, so a mesh upgrades together (see **Breaking changes**).
