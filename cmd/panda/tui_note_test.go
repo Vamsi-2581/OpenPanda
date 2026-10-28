@@ -31,12 +31,20 @@ func newNoteTUI(t *testing.T, withEngine bool) (tuiModel, *core.TaskStore, strin
 		// Kind vm, not the physical default: the engine probes the node
 		// identity lock to decide whether it owns the row, and a physical test
 		// node collides with a live daemon on this machine.
-		Node: config.NodeConfig{Name: "note-test", Kind: "vm", ResourceClass: "Standard"},
+		Node: config.NodeConfig{
+			Name: "note-test", Kind: "vm", ResourceClass: "Standard",
+			// An explicit card: with none, the engine falls back to
+			// config.DefaultCardTarget and materializes a real capabilities.yaml
+			// (plus the node's data dirs) in the operator's home.
+			CardPath: filepath.Join(dir, "capabilities.yaml"),
+		},
 		Storage: config.StorageConfig{
 			DBPath:       filepath.Join(dir, "panda.db"),
+			ContextPath:  filepath.Join(dir, "context"),
 			MemoryPath:   filepath.Join(dir, "memory"),
 			ProjectsPath: filepath.Join(dir, "projects"),
 			SkillsPath:   filepath.Join(dir, "skills"),
+			ArtifactPath: filepath.Join(dir, "artifacts"),
 			WorkPath:     dir,
 		},
 		Model: config.ModelConfig{BaseURL: "http://127.0.0.1:9", Model: "test-model"},
