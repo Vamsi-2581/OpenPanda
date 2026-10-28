@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2160,6 +2161,13 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 		if strings.TrimSpace(res.Stderr) != "" {
 			judgeResult = judgeResult + "\n\n错误输出（stderr）：\n" + res.Stderr
 		}
+		// Deterministic evidence rides the judge payload: the exit code and the
+		// declared scope are facts the prose cannot dress up, and a judge that
+		// only reads the agent's own summary is judging the summary.
+		judgeResult += "\n\n[执行退出码] " + strconv.Itoa(res.ExitCode)
+		if scope := taskScope(task.SpecJSON); scope != "" {
+			judgeResult += "\n[任务范围] " + scope
+		}
 		// The footprint is evidence the prose cannot fake: an agent reporting
 		// success while its diff is empty is the classic delegation failure,
 		// and a judge that only reads text cannot catch it.
@@ -2190,6 +2198,16 @@ func (w *runWork) executeRounds(ctx context.Context) (roundOutcome, error) {
 			c.logger.Warn("supervise call failed", "task", taskID, "err", serr)
 		}
 		verdict = v
+		// A "done" that leaves no trace is not done. When the working tree was
+		// readable and the round produced neither a byte of output nor a single
+		// changed file, the verdict is the model agreeing with itself — park it
+		// for a human instead of closing the task on silence. This is the one
+		// completion rule that needs no second model call.
+		if verdict.Status == entry.VerdictDone && beforeOK &&
+			strings.TrimSpace(res.Stdout) == "" && len(lastChanged) == 0 {
+			verdict.Status = entry.VerdictReview
+			verdict.Reason = "agent reported success with no output and no changed files"
+		}
 		// — Trace: supervision_round, part 2. The judge has spoken, so the
 		// round's badge can carry the verdict it actually produced — and the
 		// reviewing stage's stopwatch starts only now, not over the agent run.

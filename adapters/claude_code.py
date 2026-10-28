@@ -233,6 +233,16 @@ def _injected():
     return bool(os.environ.get("OPENPANDA_INJECTED_MODEL") or os.environ.get("ANTHROPIC_BASE_URL"))
 
 
+# What the CLI may be called on PATH. The registry probes the same list, so the
+# roster and the adapter agree that this CLI exists: a `claude-code`-only
+# install used to pass the probe and then exit 127 at dispatch.
+BINARIES = ["claude", "claude-code"]
+
+
+def _binary():
+    return harness.resolve_binary(BINARIES, default="claude")
+
+
 def _base_args(req, max_turns, v2):
     """The shared argv head: prompt, turn cap, permission posture, tool face.
 
@@ -240,7 +250,7 @@ def _base_args(req, max_turns, v2):
     native --restricted mode); the v1 tier uses the flag set older CLIs
     already understand so a flag rejection never leaves a run unprotected.
     """
-    base = ["claude", "-p", req.prompt,
+    base = [_binary(), "-p", req.prompt,
             "--max-turns", max_turns,
             "--permission-mode", "acceptEdits"]
     if v2:
@@ -568,7 +578,7 @@ def _main_session(req, model, max_turns):
     event becomes one envelope on our stdout. The first turn reuses
     req.prompt so a session request still reads as one task.
     """
-    cmd = ["claude", "-p",
+    cmd = [_binary(), "-p",
            "--input-format", "stream-json",
            "--output-format", "stream-json", "--verbose",
            "--max-turns", max_turns,

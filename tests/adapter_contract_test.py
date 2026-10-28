@@ -2024,6 +2024,28 @@ time.sleep(10)
 class HarnessContractTest(unittest.TestCase):
     """Direct contracts for the shared runtime adapters/_harness.py."""
 
+    def test_prompt_argv_guards_a_leading_dash(self):
+        # A prompt that opens with "-" is a flag to every CLI that takes the
+        # message positionally. The guard only fires when it is needed, so the
+        # common case keeps the argv the per-adapter tests pin.
+        payload, _ = run_harness(
+            "import json; _harness.emit(True, "
+            "json.dumps([_harness.prompt_argv('fix it'), "
+            "_harness.prompt_argv('- please fix')]), 0)"
+        )
+        self.assertEqual(json.loads(payload["result"]), [["fix it"], ["--", "- please fix"]])
+
+    def test_resolve_binary_prefers_an_installed_alias(self):
+        payload, _ = run_harness(
+            "import json, os, tempfile; "
+            "d = tempfile.mkdtemp(); "
+            "open(os.path.join(d, 'claude-code'), 'w').close(); "
+            "os.chmod(os.path.join(d, 'claude-code'), 0o755); "
+            "os.environ['PATH'] = d; "
+            "_harness.emit(True, _harness.resolve_binary(['claude', 'claude-code']), 0)"
+        )
+        self.assertEqual(payload["result"], "claude-code", payload)
+
     def test_read_request_parses_contract(self):
         req = {"prompt": "hi there", "timeout_s": 7, "cwd": "/tmp"}
         payload, proc = run_harness(
