@@ -430,10 +430,42 @@ func formTypes(m tuiModel, s string) tuiModel {
 	return m
 }
 
+// isolatedUIConfig returns a config whose storage and capability-card paths
+// live under a temp dir. A wizard that commits builds an ask engine (opens the
+// database, ensures capabilities.yaml); an empty Config resolves those to the
+// developer's real ~/Library/Application Support/openpanda and the test run
+// silently repopulates it. The engine also takes a node-identity lock through
+// os.UserConfigDir, which ignores the config it was handed, so HOME and the
+// platform config vars move to the temp dir as well.
+func isolatedUIConfig(t *testing.T) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("APPDATA", dir)
+	return &config.Config{
+		Node: config.NodeConfig{
+			Name:          "ui-test",
+			Kind:          "vm",
+			ResourceClass: "Standard",
+			CardPath:      filepath.Join(dir, "capabilities.yaml"),
+		},
+		Storage: config.StorageConfig{
+			DBPath:       filepath.Join(dir, "panda.db"),
+			ContextPath:  filepath.Join(dir, "context"),
+			MemoryPath:   filepath.Join(dir, "memory"),
+			ProjectsPath: filepath.Join(dir, "projects"),
+			SkillsPath:   filepath.Join(dir, "skills"),
+			WorkPath:     dir,
+			ArtifactPath: filepath.Join(dir, "artifacts"),
+		},
+	}
+}
+
 // TestTUIModelWizardStepFlow tests the single-screen model form for Ollama —
 // a NoAuth provider whose form has no key field.
 func TestTUIModelWizardStepFlow(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := isolatedUIConfig(t)
 	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
 	m := newTUIModel(r)
 	m.mode = modeIdle
@@ -484,7 +516,7 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 // thinking, context — then a failed probe stays unsaved until the user picks
 // the plain "save" action.
 func TestTUIModelWizardCustomRelay(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := isolatedUIConfig(t)
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
 	m := newTUIModel(r)
 	m.mode = modeIdle
