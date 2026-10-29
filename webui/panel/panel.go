@@ -697,6 +697,10 @@ type taskJSON struct {
 }
 
 type eventJSON struct {
+	// ID is the row's task_events id. It is the cursor an incremental read
+	// resumes from, and what lets the console merge a new batch into a
+	// timeline it is already showing without re-sending the history.
+	ID   int64  `json:"id,omitempty"`
 	TS   int64  `json:"ts"`
 	Type string `json:"type"`
 	Data string `json:"data"`
@@ -1042,6 +1046,17 @@ var visibleTraceTypes = map[string]bool{
 	"user_msg_consumed":  true,
 }
 
+// afterCursor reads the ?after=<eventID> cursor an incremental read carries.
+// Absent, empty or malformed means "from the beginning": a bad cursor must
+// never hide rows, so it degrades to the full read.
+func afterCursor(r *http.Request) int64 {
+	n, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
 // getTask serves one task's full row plus its event timeline; ?brief=1 serves
 // the light projection a chat bubble re-reads on every change frame (row,
 // newest event line, and the exec_agent_start that names the employee).
@@ -1058,6 +1073,10 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 	out := toTaskJSON(t)
 	h.enrichPlanMeta(r.Context(), &out, t)
+	// ?after=<eventID> is the poll loop's cursor: the row and its rollups stay
+	// complete, but only the timeline past that id goes on the wire. A page
+	// following a long run re-read it every second otherwise.
+	after := afterCursor(r)
 	// ?brief=1 is the chat bubble's read. Every task bubble in a thread
 	// re-reads its row on every change frame, and the full projection drags
 	// the task's whole event timeline — up to maxAgentTranscriptEvents rows
@@ -1095,7 +1114,12 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 		var latestSupervision *supervisionJSON
 		var tierOps []tier2OpJSON
 		for _, e := range events {
-			out.Events = append(out.Events, eventJSON{TS: e.TS, Type: e.Type, Data: e.DataJSON})
+			// The rollups below still read the whole timeline — that is what
+			// keeps an incremental poll from degrading the orbit or the
+			// delegation trail to the newest few rows.
+			if e.ID > after {
+				out.Events = append(out.Events, eventJSON{ID: e.ID, TS: e.TS, Type: e.Type, Data: e.DataJSON})
+			}
 			if visibleTraceTypes[e.Type] {
 				te := traceEventJSON{ID: e.ID, TS: e.TS, Type: e.Type}
 				if e.DataJSON != "" {

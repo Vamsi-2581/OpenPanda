@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -582,5 +583,160 @@ func TestPushNewTracesDrainsABurst(t *testing.T) {
 	_, rest := push(wm)
 	if got := first + rest; got != n {
 		t.Fatalf("delivered %d frames across two ticks, want %d", got, n)
+	}
+}
+
+// ?after=<eventID> is the detail page's cursor: the row and its rollups stay
+// complete, the timeline is incremental. A poll that re-sent the whole history
+// grew with the run and ran once per change frame.
+func TestGetTaskAfterReturnsOnlyNewEvents(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "cursor task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvExecAgentStart,
+		map[string]any{"agent": "opencode"}); err != nil {
+		t.Fatalf("record start: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "step"}); err != nil {
+			t.Fatalf("record step %d: %v", i, err)
+		}
+	}
+
+	type wireEvent struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
+	}
+	type wireTask struct {
+		Events []wireEvent `json:"events"`
+		Traces []struct {
+			Type string `json:"type"`
+		} `json:"traces"`
+	}
+	get := func(path string) wireTask {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var got wireTask
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return got
+	}
+
+	full := get("/api/tasks/" + task.TaskID)
+	if len(full.Events) < 4 {
+		t.Fatalf("full read carried %d events, want the whole timeline", len(full.Events))
+	}
+	cursor := full.Events[len(full.Events)-1].ID
+	if cursor == 0 {
+		t.Fatal("events carry no id, so no caller can hold a cursor")
+	}
+
+	// Caught up: no rows, but the rollups still describe the whole run.
+	caughtUp := get("/api/tasks/" + task.TaskID + "?after=" + strconv.FormatInt(cursor, 10))
+	if len(caughtUp.Events) != 0 {
+		t.Fatalf("caught-up read carried %d events, want none", len(caughtUp.Events))
+	}
+	foundStart := false
+	for _, tr := range caughtUp.Traces {
+		if tr.Type == core.EvExecAgentStart {
+			foundStart = true
+		}
+	}
+	if !foundStart {
+		t.Fatal("an incremental read dropped the rollup the orbit is built from")
+	}
+
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+		map[string]any{"note": "after the cursor"}); err != nil {
+		t.Fatalf("record tail: %v", err)
+	}
+	next := get("/api/tasks/" + task.TaskID + "?after=" + strconv.FormatInt(cursor, 10))
+	if len(next.Events) != 1 {
+		t.Fatalf("incremental read carried %d events, want exactly the new one", len(next.Events))
+	}
+}
+
+// The chain panel follows the same cursor through /logs.
+func TestTaskLogsAfterReturnsOnlyNewEvents(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "logs task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "step"}); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+
+	read := func(after int64) []struct {
+		ID int64 `json:"id"`
+	} {
+		t.Helper()
+		path := "/api/tasks/" + task.TaskID + "/logs"
+		if after > 0 {
+			path += "?after=" + strconv.FormatInt(after, 10)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var payload struct {
+			Events []struct {
+				ID int64 `json:"id"`
+			} `json:"events"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return payload.Events
+	}
+
+	full := read(0)
+	if len(full) != 5 { // create's submit row plus the four recorded
+		t.Fatalf("full log carried %d rows, want 5", len(full))
+	}
+	cursor := full[len(full)-1].ID
+	if got := read(cursor); len(got) != 0 {
+		t.Fatalf("caught-up log carried %d rows, want none", len(got))
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+		map[string]any{"note": "tail"}); err != nil {
+		t.Fatalf("record tail: %v", err)
+	}
+	if got := read(cursor); len(got) != 1 {
+		t.Fatalf("incremental log carried %d rows, want 1", len(got))
 	}
 }

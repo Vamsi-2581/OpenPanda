@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { subscribeEvents } from './api/client.ts'
-import type { ChangeEvent, Task, TraceEvent } from './api/client.ts'
+import { api, subscribeEvents } from './api/client.ts'
+import type { ChangeEvent, Task, TaskEvent, TraceEvent } from './api/client.ts'
+import { mergeEvents, newestCursor } from './components/event-merge.ts'
 import { onLocaleChange } from './i18n/index.ts'
 
 /** Re-render on locale change. */
@@ -210,6 +211,52 @@ export function useTraceForTask(
   }, [taskId])
 
   return traces
+}
+
+/** Tail a task's event timeline incrementally. `changeKey` is the caller's
+ *  change counter; each read asks only for the rows past the cursor and the
+ *  batch is merged into what is already held, so a chain left open beside a
+ *  long run does not re-download the history on every frame. Switching task
+ *  resets the cursor — a new task starts a new timeline. */
+export function useTaskEvents(
+  taskId: string | undefined,
+  changeKey: number,
+): { events: TaskEvent[]; error: string | null } {
+  const [events, setEvents] = useState<TaskEvent[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const cursor = useRef(0)
+
+  useEffect(() => {
+    setEvents([])
+    setError(null)
+    cursor.current = 0
+  }, [taskId])
+
+  useEffect(() => {
+    if (!taskId) return
+    let alive = true
+    const after = cursor.current
+    api
+      .logs(taskId, after || undefined)
+      .then((d) => {
+        if (!alive) return
+        setError(null)
+        const fresh = d.events ?? []
+        cursor.current = newestCursor(fresh, after)
+        if (fresh.length === 0) return
+        setEvents((prev) => mergeEvents(prev, fresh))
+      })
+      .catch((e: unknown) => {
+        // A failed read keeps what is already on screen; the next frame
+        // retries from the same cursor.
+        if (alive) setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      alive = false
+    }
+  }, [taskId, changeKey])
+
+  return { events, error }
 }
 
 /** Merge two trace lists, dedup on id, stable sorted by (ts,id). */

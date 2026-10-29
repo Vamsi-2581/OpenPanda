@@ -24,7 +24,14 @@ import {
 } from '../api/client'
 import { Icon } from '../components/icons'
 import { DiffViewer } from '../components/diff-viewer'
-import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval, busSubscribeChange } from '../hooks'
+import {
+  useAsync,
+  useChangeSignal,
+  useLocaleRerender,
+  useTaskEvents,
+  useVisibleInterval,
+  busSubscribeChange,
+} from '../hooks'
 import { t, locale } from '../i18n'
 import { isNodeConnected } from '../format/node-status'
 import { clockStamp, clockTime } from '../format/time'
@@ -3808,9 +3815,8 @@ function TaskOutput({ text }: { text: string }) {
  *  triggers a refetch while the chain is open (design §5). */
 function TaskChain({ taskId }: { taskId: string }) {
   const change = useChangeSignal()
-  const { data, error } = useAsync(() => api.logs(taskId), [taskId], change)
+  const { events, error } = useTaskEvents(taskId, change)
   if (error) return <p class="dim chain-empty">{t('common.error')} ({error})</p>
-  const events = data?.events ?? []
   if (events.length === 0) return <p class="dim chain-empty">{t('sessions.chainEmpty')}</p>
   return <EventTimeline events={events} className="task-chain-timeline" />
 }

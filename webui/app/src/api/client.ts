@@ -193,6 +193,10 @@ export interface SelfEvoSet {
 }
 
 export interface TaskEvent {
+  /** The task_events row id. It is the cursor an incremental read resumes
+   *  from, so a page already showing a timeline asks only for what is new.
+   *  Absent from an older panel's payload. */
+  id?: number
   ts: number
   type: string
   data: string
@@ -1035,8 +1039,12 @@ export const api = {
     return request('POST', `/api/agents/${encodeURIComponent(name)}/test`)
   },
 
-  task(id: string): Promise<Task> {
-    return request('GET', `/api/tasks/${id}`)
+  /** One task's row. `after` asks for the timeline past that event id: the
+   *  row and its rollups (traces, hops, supervision) stay complete, only the
+   *  events are incremental — a page following a long run would otherwise
+   *  re-download the whole history every second. Omit it for a full read. */
+  task(id: string, after?: number): Promise<Task> {
+    return request('GET', `/api/tasks/${id}${after ? `?after=${after}` : ''}`)
   },
   /** The light projection a chat bubble re-reads on every change frame:
    *  state, plan stage, running adapter and the newest event line, with no
@@ -1109,8 +1117,8 @@ export const api = {
     return request('DELETE', '/api/tasks')
   },
 
-  logs(id: string): Promise<{ id: string; events: TaskEvent[] }> {
-    return request('GET', `/api/tasks/${id}/logs`)
+  logs(id: string, after?: number): Promise<{ id: string; events: TaskEvent[] }> {
+    return request('GET', `/api/tasks/${id}/logs${after ? `?after=${after}` : ''}`)
   },
 
   ask(prompt: string, authorize: boolean): Promise<AskResult> {
