@@ -1067,7 +1067,10 @@ func (r *Router) runAdapterDefault(ctx context.Context, adapter string, prompt s
 	// injection.model=never opts out of this too: "never" is documented as
 	// "agents always use their own models", and a retry that hands the task
 	// panda's key is exactly the override the setting promises not to do.
-	if !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
+	//
+	// A kill the commander itself performed is not a provider failure even
+	// though its verdict says "timeout" — see commanderKill.
+	if !res.OK && replayableFailure(res) && !dec.Inject && r.injectionModel != config.InjectionModelNever && !ModelCredsWithheld(ctx) && modelConfigured(injModel) && supportsModelInjection(name, adapter, injModel) && injModel.APIKey != "" && !commanderKill(res) && isProviderFailureOrAuth(res.Result+" "+res.Stderr) {
 		if ep := effectiveBaseURLFor(name, adapter, injModel); ep == "" || security.NewNetworkGuard(security.EndpointHost(ep)).CheckURL(ep) == nil {
 			// Merged with the first attempt's environment, not replacing it:
 			// the retry is the same run with a different model endpoint, so the
@@ -1131,6 +1134,24 @@ func isProviderFailureOrAuth(text string) bool {
 	// Bare numeric statuses and timeout wording need word boundaries: "403"
 	// inside "port 4030" or "error-14031" is not a provider failure.
 	return providerStatusRE.MatchString(low) || providerTimeoutRE.MatchString(low)
+}
+
+// commanderKill reports a run this package ended itself — the silence
+// watchdog, the tool-call fuse, or the hard deadline. All three carry exit
+// 124 and a verdict phrased as a timeout, so isProviderFailureOrAuth would
+// read the commander's own kill as provider trouble and answer it with a
+// full injected-model re-run: the silent CLI stalls again on the same bound
+// four minutes later, and whatever side effects the first attempt already
+// performed happen twice. Exit 124 alone is not the test — the adapter
+// process may exit 124 on its own for a genuine provider timeout, and that
+// run still deserves the rescue.
+func commanderKill(ar AgentResult) bool {
+	if ar.ExitCode != 124 {
+		return false
+	}
+	return strings.HasPrefix(ar.Result, "adapter stalled: ") ||
+		ar.Result == "adapter timed out (hard limit)" ||
+		strings.HasPrefix(ar.Result, "agent tool-call budget exhausted")
 }
 
 // agentBinary derives the CLI binary for an agent: the card's install_check
