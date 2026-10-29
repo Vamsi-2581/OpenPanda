@@ -189,17 +189,19 @@ func (h *handler) cancelTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // taskLogs serves GET /api/tasks/{id}/logs — the event timeline only, the web
-// equivalent of `panda logs`.
+// equivalent of `panda logs`; ?after=<eventID> returns only the
+// rows past that cursor, which is how an open chain follows a long run without
+// re-reading the whole history on every poll.
 func (h *handler) taskLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	events, err := h.store.Events(r.Context(), id)
+	events, err := h.store.EventsSince(r.Context(), id, afterCursor(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("load events failed"))
 		return
 	}
 	out := make([]eventJSON, 0, len(events))
 	for _, e := range events {
-		out = append(out, eventJSON{TS: e.TS, Type: e.Type, Data: e.DataJSON})
+		out = append(out, eventJSON{ID: e.ID, TS: e.TS, Type: e.Type, Data: e.DataJSON})
 	}
 	writeJSON(w, map[string]any{"id": id, "events": out})
 }

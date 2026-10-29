@@ -439,6 +439,7 @@ const en: Messages = {
   'sessions.stop': 'Stop',
   'sessions.stopped': 'Stopped by you.',
   'sessions.syncing': 'Syncing background execution…',
+  'sessions.streamLost': 'Live link lost — reconnecting to pick the turn back up.',
   'sessions.fixModel': 'Open model settings',
   'sessions.retry': 'Model call failed ({reason}) — retrying in {delay}s · {attempt}/{max}',
   'sessions.spawn': 'Spawning sub-agent {name}…',

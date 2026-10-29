@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -420,5 +421,378 @@ func TestListTasksStampsLastEvent(t *testing.T) {
 	input, _ := got.LastEvent.Data["input"].(map[string]any)
 	if s, _ := input["command"].(string); len(s) > traceDataClip+3 {
 		t.Fatalf("last_event payload not clipped: %d", len(s))
+	}
+}
+
+// brief=1 is the chat bubble's read: the row plus its newest event line and
+// the exec_agent_start the cast names the employee from — never the task's
+// event timeline, which every bubble would otherwise re-pull on every change
+// frame.
+func TestGetTaskBriefCarriesNoTimeline(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "brief task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvExecAgentStart,
+		map[string]any{"agent": "opencode", "adapter": "opencode.py"}); err != nil {
+		t.Fatalf("record start: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvAgentEvent,
+			map[string]any{"ev": "tool_use", "name": "bash", "n": i}); err != nil {
+			t.Fatalf("record tool_use %d: %v", i, err)
+		}
+	}
+
+	type wireTask struct {
+		ID     string            `json:"id"`
+		Events []json.RawMessage `json:"events"`
+		Traces []struct {
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		} `json:"traces"`
+		LastEvent *struct {
+			Type string `json:"type"`
+		} `json:"last_event"`
+	}
+	get := func(path string) wireTask {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var got wireTask
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return got
+	}
+
+	full := get("/api/tasks/" + task.TaskID)
+	// Create itself records a submit row, so the exact count is not the point:
+	// the full detail carries the timeline, the brief carries none of it.
+	if len(full.Events) < 41 {
+		t.Fatalf("full detail events = %d, want at least the 41 recorded", len(full.Events))
+	}
+
+	brief := get("/api/tasks/" + task.TaskID + "?brief=1")
+	if len(brief.Events) != 0 {
+		t.Fatalf("brief carried %d event rows, want none", len(brief.Events))
+	}
+	if brief.LastEvent == nil || brief.LastEvent.Type != core.EvAgentEvent {
+		t.Fatalf("brief last_event = %+v, want the newest agent_event", brief.LastEvent)
+	}
+	if len(brief.Traces) != 1 || brief.Traces[0].Type != core.EvExecAgentStart {
+		t.Fatalf("brief traces = %+v, want exactly the exec_agent_start", brief.Traces)
+	}
+	if brief.Traces[0].Data["agent"] != "opencode" {
+		t.Fatalf("brief trace agent = %v, want opencode", brief.Traces[0].Data["agent"])
+	}
+}
+
+// One board poll must stamp every row it lists. The ids ride an IN list split
+// into batches, so the seam between batches is the thing worth pinning.
+func TestAttachLastEventsCoversEveryBatch(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	// The concrete handler: these two helpers are internal, and New() hands
+	// back the wrapped http.Handler.
+	h := &handler{db: db}
+	ctx := context.Background()
+
+	const n = 401 // one past the 400-id batch
+	out := make([]taskJSON, 0, n)
+	for i := 0; i < n; i++ {
+		task, err := store.Create(ctx, "", "proj", "row", "node", []string{"node"})
+		if err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "working"}); err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+		out = append(out, toTaskJSON(task))
+	}
+	h.attachLastEvents(ctx, out)
+	for i := range out {
+		if out[i].LastEvent == nil {
+			t.Fatalf("row %d (%s) came back without a stamp", i, out[i].ID)
+		}
+	}
+}
+
+// A burst bigger than one batch must be drained inside the same tick. The old
+// fixed per-tick LIMIT was a ceiling, not a bound: an agent writing faster than
+// it pushed the watermark further behind every second for the whole run.
+func TestPushNewTracesDrainsABurst(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := &handler{db: db}
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "burst", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	const n = traceBatchSize + 250
+	for i := 0; i < n; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "step"}); err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+	}
+
+	push := func(watermark int64) (int64, int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		next := h.pushNewTraces(ctx, rec, rec, watermark)
+		return next, strings.Count(rec.Body.String(), "event: trace\n")
+	}
+
+	wm, first := push(0)
+	if first < traceBatchSize {
+		t.Fatalf("one tick drained %d frames, want at least one full batch (%d)", first, traceBatchSize)
+	}
+	_, rest := push(wm)
+	if got := first + rest; got != n {
+		t.Fatalf("delivered %d frames across two ticks, want %d", got, n)
+	}
+}
+
+// ?after=<eventID> is the detail page's cursor: the row and its rollups stay
+// complete, the timeline is incremental. A poll that re-sent the whole history
+// grew with the run and ran once per change frame.
+func TestGetTaskAfterReturnsOnlyNewEvents(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "cursor task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvExecAgentStart,
+		map[string]any{"agent": "opencode"}); err != nil {
+		t.Fatalf("record start: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "step"}); err != nil {
+			t.Fatalf("record step %d: %v", i, err)
+		}
+	}
+
+	type wireEvent struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
+	}
+	type wireTask struct {
+		Events []wireEvent `json:"events"`
+		Traces []struct {
+			Type string `json:"type"`
+		} `json:"traces"`
+	}
+	get := func(path string) wireTask {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var got wireTask
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return got
+	}
+
+	full := get("/api/tasks/" + task.TaskID)
+	if len(full.Events) < 4 {
+		t.Fatalf("full read carried %d events, want the whole timeline", len(full.Events))
+	}
+	cursor := full.Events[len(full.Events)-1].ID
+	if cursor == 0 {
+		t.Fatal("events carry no id, so no caller can hold a cursor")
+	}
+
+	// Caught up: no rows, but the rollups still describe the whole run.
+	caughtUp := get("/api/tasks/" + task.TaskID + "?after=" + strconv.FormatInt(cursor, 10))
+	if len(caughtUp.Events) != 0 {
+		t.Fatalf("caught-up read carried %d events, want none", len(caughtUp.Events))
+	}
+	foundStart := false
+	for _, tr := range caughtUp.Traces {
+		if tr.Type == core.EvExecAgentStart {
+			foundStart = true
+		}
+	}
+	if !foundStart {
+		t.Fatal("an incremental read dropped the rollup the orbit is built from")
+	}
+
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+		map[string]any{"note": "after the cursor"}); err != nil {
+		t.Fatalf("record tail: %v", err)
+	}
+	next := get("/api/tasks/" + task.TaskID + "?after=" + strconv.FormatInt(cursor, 10))
+	if len(next.Events) != 1 {
+		t.Fatalf("incremental read carried %d events, want exactly the new one", len(next.Events))
+	}
+}
+
+// The chain panel follows the same cursor through /logs.
+func TestTaskLogsAfterReturnsOnlyNewEvents(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "logs task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "step"}); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+
+	read := func(after int64) []struct {
+		ID int64 `json:"id"`
+	} {
+		t.Helper()
+		path := "/api/tasks/" + task.TaskID + "/logs"
+		if after > 0 {
+			path += "?after=" + strconv.FormatInt(after, 10)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var payload struct {
+			Events []struct {
+				ID int64 `json:"id"`
+			} `json:"events"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return payload.Events
+	}
+
+	full := read(0)
+	if len(full) != 5 { // create's submit row plus the four recorded
+		t.Fatalf("full log carried %d rows, want 5", len(full))
+	}
+	cursor := full[len(full)-1].ID
+	if got := read(cursor); len(got) != 0 {
+		t.Fatalf("caught-up log carried %d rows, want none", len(got))
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+		map[string]any{"note": "tail"}); err != nil {
+		t.Fatalf("record tail: %v", err)
+	}
+	if got := read(cursor); len(got) != 1 {
+		t.Fatalf("incremental log carried %d rows, want 1", len(got))
+	}
+}
+
+// The chat polls its thread's task list once per change frame; ?brief=1 is
+// that read. Spec and result are the row's heaviest columns and nothing in the
+// chat renders them, so they must not ride along.
+func TestListTasksBriefDropsHeavyColumns(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "row", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id='s1', spec_json='{"cmd":"go test"}', result_json='{"stdout":"ok"}' WHERE task_id=?`,
+		task.TaskID); err != nil {
+		t.Fatalf("stamp spec: %v", err)
+	}
+
+	read := func(path string) taskJSON {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var rows []taskJSON
+		if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("GET %s returned %d rows, want 1", path, len(rows))
+		}
+		return rows[0]
+	}
+
+	full := read("/api/tasks?session=s1")
+	if full.Spec == "" || full.Result == "" {
+		t.Fatalf("full list dropped spec/result: spec=%q result=%q", full.Spec, full.Result)
+	}
+	brief := read("/api/tasks?session=s1&brief=1")
+	if brief.Spec != "" || brief.Result != "" {
+		t.Fatalf("brief list carried spec=%q result=%q", brief.Spec, brief.Result)
+	}
+	if brief.State != full.State || brief.Agent != full.Agent {
+		t.Fatalf("brief row lost the fields the chat renders: %+v", brief)
 	}
 }

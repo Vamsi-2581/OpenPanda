@@ -23,6 +23,11 @@ import (
 // the store.
 const eventsPollInterval = time.Second
 
+// fingerprintScanTimeout bounds one shared fingerprint scan. The scan answers
+// for every stream in its window, so it is detached from the requesting
+// client's context (see cachedTaskFingerprint) and needs a bound of its own.
+const fingerprintScanTimeout = 5 * time.Second
+
 // maxEventStreams bounds concurrent SSE connections. Each one costs a goroutine
 // and two tickers for as long as the client stays connected, and the client —
 // a browser tab or a CLI — holds the same token, so without a ceiling a single
@@ -126,6 +131,12 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Tell reverse proxies to pass frames through as they are written. nginx
+	// buffers proxied responses by default, which turns this into a stream
+	// that arrives in clumps when its buffer fills — the console looks frozen
+	// and a manual reload (a plain fetch) is the only thing that updates it.
+	// The ask stream sets the same header; this one was the odd feed out.
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	wantTraces := r.URL.Query().Get("trace") == "1"
 
@@ -206,24 +217,56 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// traceBatchSize is how many rows one read of the trace feed requests, and
+// traceCatchupBudget is how long a single tick may spend draining a backlog.
+// Together they mean a burst is caught up within a tick or two instead of
+// outrunning the stream for good.
+const (
+	traceBatchSize     = 500
+	traceCatchupBudget = 250 * time.Millisecond
+)
+
 // pushNewTraces delivers every trace-class row from task_events with id >
 // watermark as one SSE `event: trace` frame per row, and returns the new
-// watermark. On any DB or write error it returns the previous watermark so
-// the next tick retries — a visibility glitch never kills the stream.
+// watermark. It drains in batches while rows keep coming: a single fixed batch
+// per tick is a ceiling, not a bound, and an agent (or several in parallel)
+// writing faster than that pushed the watermark further behind every second
+// for the whole run — the console's live line drifted instead of skipping.
+//
+// On a read error the previous watermark comes back so the next tick retries;
+// a visibility glitch never kills the stream.
 func (h *handler) pushNewTraces(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, watermark int64) int64 {
+	deadline := time.Now().Add(traceCatchupBudget)
+	for {
+		next, full := h.pushTraceBatch(ctx, w, watermark)
+		if next != watermark {
+			watermark = next
+			flusher.Flush()
+		}
+		if !full || time.Now().After(deadline) {
+			return watermark
+		}
+	}
+}
+
+// pushTraceBatch delivers one batch past the watermark and reports whether the
+// batch came back full, which means there is probably more waiting.
+func (h *handler) pushTraceBatch(ctx context.Context, w http.ResponseWriter, watermark int64) (int64, bool) {
 	rows, err := h.db.QueryContext(ctx,
 		`SELECT id, task_id, ts, type, COALESCE(data_json, '{}')
 		   FROM task_events
 		  WHERE id > ?
 		  ORDER BY id ASC
-		  LIMIT 200`, watermark)
+		  LIMIT ?`, watermark, traceBatchSize)
 	if err != nil {
-		return watermark
+		return watermark, false
 	}
 	defer rows.Close()
 	pushed := watermark
-	var wroteAny bool
+	count := 0
+	failed := false
 	for rows.Next() {
+		count++
 		var (
 			id       int64
 			taskID   string
@@ -232,6 +275,7 @@ func (h *handler) pushNewTraces(ctx context.Context, w http.ResponseWriter, flus
 			dataJSON string
 		)
 		if err := rows.Scan(&id, &taskID, &ts, &typ, &dataJSON); err != nil {
+			failed = true
 			break
 		}
 		if !traceEventTypes[typ] {
@@ -256,21 +300,21 @@ func (h *handler) pushNewTraces(ctx context.Context, w http.ResponseWriter, flus
 		}
 		buf, err := json.Marshal(body)
 		if err != nil {
+			failed = true
 			break
 		}
 		if _, err := w.Write([]byte("event: trace\ndata: " + string(buf) + "\n\n")); err != nil {
+			failed = true
 			break
 		}
-		wroteAny = true
 		pushed = id
 	}
-	if rows.Err() != nil {
-		return watermark
+	if rows.Err() != nil || failed {
+		// Keep what actually went out; the client dedups by trace id, and
+		// re-sending the whole batch would only stall the next tick too.
+		return pushed, false
 	}
-	if wroteAny {
-		flusher.Flush()
-	}
-	return pushed
+	return pushed, count == traceBatchSize
 }
 
 var errNoFlusher = &staticError{msg: "streaming unsupported"}
@@ -290,11 +334,19 @@ func (h *handler) taskFingerprint(r *http.Request) (string, error) {
 // connected client (see sharedFingerprints).
 func (h *handler) cachedTaskFingerprint(r *http.Request) (string, error) {
 	return sharedFingerprints.get("tasks", func() (string, error) {
+		// The scan runs once per window on behalf of every connected client, so
+		// it must not ride the first caller's request context: that tab closing
+		// mid-scan cancelled the query, and every waiter in the same window got
+		// the error and had its stream dropped. Detach from the request and
+		// keep a bound of our own — a genuinely stuck store still fails the
+		// window rather than pinning a stale fingerprint.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fingerprintScanTimeout)
+		defer cancel()
 		// Stamps only — the full task rows carry spec/result payloads the
 		// digest never reads; this scan ran once per second per connection
 		// before the shared cache, and the heavy projection made each window
 		// cost O(total task bytes) instead of O(task count).
-		tasks, err := h.store.TaskStamps(r.Context())
+		tasks, err := h.store.TaskStamps(ctx)
 		if err != nil {
 			return "", err
 		}

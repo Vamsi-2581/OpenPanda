@@ -437,6 +437,7 @@ const es: Messages = {
   'sessions.stop': 'Detener',
   'sessions.stopped': 'Detenido por ti.',
   'sessions.syncing': 'Sincronizando ejecución en segundo plano…',
+  'sessions.streamLost': 'Se perdió la conexión en vivo: reconectando para recuperar el turno.',
   'sessions.fixModel': 'Abrir ajustes del modelo',
   'sessions.retry': 'La llamada al modelo falló ({reason}) — reintentando en {delay}s · {attempt}/{max}',
   'sessions.spawn': 'Iniciando subagente {name}…',

@@ -193,6 +193,10 @@ export interface SelfEvoSet {
 }
 
 export interface TaskEvent {
+  /** The task_events row id. It is the cursor an incremental read resumes
+   *  from, so a page already showing a timeline asks only for what is new.
+   *  Absent from an older panel's payload. */
+  id?: number
   ts: number
   type: string
   data: string
@@ -352,6 +356,10 @@ export interface Task {
   spec?: string
   result?: string
   risk?: string
+  /** The adapter that ran (or is running) this task, bare of its extension
+   *  ("claude_code"). Present on list rows as well as the detail, so a light
+   *  row can name the employee without dragging the task's traces along. */
+  agent?: string
   // Queue redesign fields: the board sorts by seq (drag order) then
   // priority, and jumps into session_id when set.
   priority?: 'high' | 'normal' | 'low'
@@ -918,7 +926,14 @@ export const api = {
     return request('GET', '/api/healthz')
   },
 
-  tasks(params?: { state?: string; project?: string; session?: string }): Promise<Task[]> {
+  tasks(params?: {
+    state?: string
+    project?: string
+    session?: string
+    /** Drop the row's spec/result/intent — the chat's per-frame read renders
+     *  none of them, and they are the heaviest columns a task row carries. */
+    brief?: boolean
+  }): Promise<Task[]> {
     const q = new URLSearchParams()
     if (params?.state) q.set('state', params.state)
     if (params?.project) q.set('project', params.project)
@@ -926,6 +941,7 @@ export const api = {
     // side this is a different read (by session_id, uncapped) than the board's
     // state listing, so it must not be emulated by filtering a board response.
     if (params?.session) q.set('session', params.session)
+    if (params?.brief) q.set('brief', '1')
     const suffix = q.size > 0 ? `?${q}` : ''
     return request('GET', `/api/tasks${suffix}`)
   },
@@ -1031,8 +1047,20 @@ export const api = {
     return request('POST', `/api/agents/${encodeURIComponent(name)}/test`)
   },
 
-  task(id: string): Promise<Task> {
-    return request('GET', `/api/tasks/${id}`)
+  /** One task's row. `after` asks for the timeline past that event id: the
+   *  row and its rollups (traces, hops, supervision) stay complete, only the
+   *  events are incremental — a page following a long run would otherwise
+   *  re-download the whole history every second. Omit it for a full read. */
+  task(id: string, after?: number): Promise<Task> {
+    return request('GET', `/api/tasks/${id}${after ? `?after=${after}` : ''}`)
+  },
+  /** The light projection a chat bubble re-reads on every change frame:
+   *  state, plan stage, running adapter and the newest event line, with no
+   *  event timeline. The full detail carries up to a couple of thousand
+   *  agent_event rows, and a thread with several task bubbles would pull
+   *  that once a second for each of them. */
+  taskBrief(id: string): Promise<Task> {
+    return request('GET', `/api/tasks/${id}?brief=1`)
   },
 
   /** Self-evolution patch sets: the merge-review surface. A proposal is a
@@ -1097,8 +1125,8 @@ export const api = {
     return request('DELETE', '/api/tasks')
   },
 
-  logs(id: string): Promise<{ id: string; events: TaskEvent[] }> {
-    return request('GET', `/api/tasks/${id}/logs`)
+  logs(id: string, after?: number): Promise<{ id: string; events: TaskEvent[] }> {
+    return request('GET', `/api/tasks/${id}/logs${after ? `?after=${after}` : ''}`)
   },
 
   ask(prompt: string, authorize: boolean): Promise<AskResult> {
@@ -2252,15 +2280,30 @@ export interface OpenSSEOptions {
   /** Fired once the response headers arrive with 2xx — the moment the
    *  (re)connection is proven live. */
   onOpen?(): void
+  /** Fired on every chunk that arrives, heartbeat comments included. This is
+   *  the stream's liveness clock: a subscriber uses it to tell a live link
+   *  from a half-open one the browser will never error on its own. */
+  onActivity?(): void
   /** Every complete SSE frame. `data` is the raw payload string. */
   onEvent(event: string, data: string): void
+  /** Reject when no bytes arrive for this long. The panel heartbeats every
+   *  15s on /api/events and every 5s on the ask streams, so silence past
+   *  this window means the connection died without an error. 0 disables the
+   *  watchdog (tests that drive a body by hand). */
+  idleTimeoutMs?: number
 }
+
+/** How long a stream may stay silent before it is presumed dead: three
+ *  missed heartbeats on the slowest feed, nine on the fastest. */
+export const SSE_IDLE_MS = 45_000
 
 /**
  * Opens one SSE stream over fetch and pumps frames into `onEvent` until the
  * stream ends. Promise semantics:
  *  - natural end of the stream → resolve
  *  - `signal` aborted → resolve (promptly: the parked reader is cancelled)
+ *  - silence past `idleTimeoutMs` → reject  (a half-open socket never errors
+ *    on its own; the watchdog is what turns it into a reconnect)
  *  - connection error (network failure, non-2xx) → reject (ApiError carries
  *    the status; a 401 also clears the token and fires `unauthorized`)
  */
@@ -2302,16 +2345,38 @@ export async function openSSE(url: string, opts: OpenSSEOptions): Promise<void> 
   opts.signal?.addEventListener('abort', onAbort, { once: true })
   const decoder = new TextDecoder()
   const parser = makeSSEFrameParser(opts.onEvent)
+  // Half-open connections are the failure the browser never reports: the
+  // path is gone but read() stays parked forever, so the console silently
+  // stops updating until someone reloads the page. The server's heartbeat is
+  // the other half of this contract — silence past the window cancels the
+  // parked read, which ends the loop and rejects below.
+  const idleMs = opts.idleTimeoutMs ?? SSE_IDLE_MS
+  let stalled = false
+  let idle: ReturnType<typeof setTimeout> | null = null
+  const armIdle = () => {
+    if (idle !== null) clearTimeout(idle)
+    idle = setTimeout(() => {
+      stalled = true
+      void reader.cancel().catch(() => {})
+    }, idleMs)
+  }
+  if (idleMs > 0) armIdle()
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
+      armIdle()
+      opts.onActivity?.()
       parser.push(decoder.decode(value, { stream: true }))
     }
   } finally {
+    if (idle !== null) clearTimeout(idle)
     opts.signal?.removeEventListener('abort', onAbort)
   }
   // A cancelled reader ends the loop cleanly — still an abort-driven end.
+  if (stalled && !opts.signal?.aborted) {
+    throw new ApiError(0, 'event stream stalled')
+  }
 }
 
 // ---- Streaming session ask (SSE over fetch POST) ----
@@ -2356,6 +2421,10 @@ export interface AskStreamHandlers {
   onDelta(text: string): void
   onStatus(text: string, ev?: AskStatusEvent): void
   onOperation(operationID: string): void
+  /** A task row this turn dispatched, sent the moment the row exists — well
+   *  before `onResult`, because the turn keeps running until the task
+   *  settles. It is the console's handle on the work while it executes. */
+  onTask?(taskID: string): void
   onResult(r: AskResult): void
   /** A note the round loop actually folded into its prompt, with the round that
    *  carries it. The note was accepted earlier (POST /api/sessions/{id}/messages);
@@ -2405,6 +2474,10 @@ export async function askSessionStream(
       else if (event === 'delta') h.onDelta(payload.text ?? '')
       else if (event === 'status') h.onStatus(payload.text ?? '', payload as AskStatusEvent)
       else if (event === 'operation') h.onOperation(payload.operation_id ?? '')
+      else if (event === 'task') {
+        const taskID = typeof payload.task_id === 'string' ? payload.task_id : ''
+        if (taskID) h.onTask?.(taskID)
+      }
       else if (event === 'steer') h.onSteer?.(payload.text ?? '', payload.round ?? 0)
       else if (event === 'result') h.onResult(payload as AskResult)
       else if (event === 'error')
@@ -2453,12 +2526,18 @@ export interface SubscribeEventsOptions {
 
 /**
  * Opens GET /api/events as a long-lived SSE stream and keeps it alive:
- * transient connection errors and server-side closes trigger an automatic
- * reconnect with exponential backoff (1s → 15s cap). The returned Promise
- * resolves when the subscription is deliberately ended — the AbortSignal
- * fires, or the panel answers 401 (which also clears the token and fires
- * `unauthorized`; the gate screen handles the rest, so reconnecting into a
- * revoked token would be pointless).
+ * transient connection errors, server-side closes and silent half-open
+ * sockets all lead to a reconnect — errors and closes through openSSE's own
+ * rejection, silence through its idle watchdog (SSE_IDLE_MS). The link also
+ * re-dials the moment the browser says it is back (`online`) or the tab
+ * becomes visible again with a heartbeat already missed, because neither
+ * event makes an already-dead stream fail on its own. Backoff is 1s → 15s
+ * except for those forced redials, which go out immediately.
+ *
+ * The returned Promise resolves when the subscription is deliberately ended —
+ * the AbortSignal fires, or the panel answers 401 (which also clears the
+ * token and fires `unauthorized`; the gate screen handles the rest, so
+ * reconnecting into a revoked token would be pointless).
  *
  * Each successful reconnection delivers a synthetic `onChange` event with
  * kinds ['reconnect'] so subscribers can re-fetch once and reconcile whatever
@@ -2479,7 +2558,22 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
     let delay = RECONNECT_MIN_MS
     let attempt = 0
     let timer: ReturnType<typeof setTimeout> | null = null
+    // The attempt currently on the wire. A forced redial hangs this one up
+    // rather than waiting out the idle watchdog; only `finish` ends the
+    // subscription itself.
+    let live: AbortController | null = null
+    // The next dial should follow the current attempt immediately (the link
+    // came back, the tab woke) instead of waiting out the backoff.
+    let redialNow = false
+    // Last byte that arrived, heartbeat comments included. The heartbeat is a
+    // comment, so onEvent never sees it — this clock is the only honest
+    // answer to "is this link still moving".
+    let lastActivity = Date.now()
 
+    const detachWake = () => {
+      if (typeof window !== 'undefined') window.removeEventListener('online', onOnline)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
+    }
     const finish = () => {
       if (stopped) return
       stopped = true
@@ -2487,6 +2581,9 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
         clearTimeout(timer)
         timer = null
       }
+      detachWake()
+      live?.abort()
+      live = null
       resolve()
     }
     const onAbort = () => finish()
@@ -2541,12 +2638,56 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
       }, wait)
     }
 
+    /** Hang up the current attempt and re-dial at once. The promise of the
+     *  live attempt settles on the abort, and its handler consumes the flag,
+     *  so exactly one new connection goes out. */
+    const forceRedial = () => {
+      if (stopped) return
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      delay = RECONNECT_MIN_MS
+      redialNow = true
+      if (live !== null) {
+        live.abort()
+        return
+      }
+      redialNow = false
+      connect()
+    }
+
+    const onOnline = () => forceRedial()
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      // A tab that slept through the heartbeat window may hold a socket the
+      // browser never closed. Re-dial so the console reconciles on wake
+      // instead of waiting for a change that may never be pushed.
+      if (Date.now() - lastActivity >= SSE_IDLE_MS) forceRedial()
+    }
+    if (typeof window !== 'undefined') window.addEventListener('online', onOnline)
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
+
     const connect = () => {
       if (stopped) return
       attempt++
       const nth = attempt
+      const ctrl = new AbortController()
+      live = ctrl
+      const release = () => {
+        if (live === ctrl) live = null
+      }
+      const afterAttempt = () => {
+        if (stopped || opts.signal?.aborted) return finish()
+        if (redialNow) {
+          redialNow = false
+          connect()
+          return
+        }
+        scheduleReconnect()
+      }
       openSSE(url, {
-        signal: opts.signal,
+        signal: ctrl.signal,
         onOpen: () => {
           if (stopped) return
           // Link proven live again: reset the backoff and, when this was a
@@ -2561,6 +2702,9 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
             }
           }
         },
+        onActivity: () => {
+          lastActivity = Date.now()
+        },
         onEvent: dispatch,
       })
         .then(() => {
@@ -2568,17 +2712,18 @@ export function subscribeEvents(opts: SubscribeEventsOptions): Promise<void> {
           // means the subscriber walked away; anything else we treat like a
           // dropped link and re-dial — the old EventSource reconnected on
           // every close too.
-          if (stopped || opts.signal?.aborted) return finish()
-          scheduleReconnect()
+          release()
+          afterAttempt()
         })
         .catch((err: unknown) => {
+          release()
           if (stopped || isAbort(err)) return finish()
           if (err instanceof ApiError && err.status === 401) {
             // Token revoked: openSSE already cleared it and broadcast
             // `unauthorized`. Reconnecting would just hammer a 401.
             return finish()
           }
-          scheduleReconnect()
+          afterAttempt()
         })
     }
 

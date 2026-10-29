@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api, isTaskStalled, type ApprovalScope, type Task } from '../api/client'
 import { useAsync, useChangeSignal, useLocaleRerender, useVisibleInterval } from '../hooks'
+import { mergeEvents, newestCursor } from '../components/event-merge'
 import { t } from '../i18n'
 import { formatDuration } from '../format/time'
 import { navigate } from '../nav'
@@ -26,6 +27,52 @@ import { Markdown } from '../md/render'
 import { Icon } from '../components/icons'
 import { prettifyJson } from '../format/json'
 
+/** The task row plus its timeline, followed incrementally.
+ *
+ *  The first read is the whole history — the page needs it for the timeline,
+ *  the review reason and the rollups — and every poll after that carries only
+ *  the events past the cursor, which the client merges back in. Without the
+ *  cursor this page re-downloaded a long run's entire timeline once per
+ *  change frame, a request per second that grew with the run. */
+function useLiveTask(id: string, changeKey: number) {
+  const [task, setTask] = useState<Task | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const cursor = useRef(0)
+
+  useEffect(() => {
+    setTask(null)
+    setError(null)
+    cursor.current = 0
+  }, [id])
+
+  useEffect(() => {
+    let alive = true
+    const after = cursor.current
+    api
+      .task(id, after || undefined)
+      .then((t) => {
+        if (!alive) return
+        cursor.current = newestCursor(t.events, after)
+        // An incremental read carries only new rows; a full one (cursor 0)
+        // carries the history, and the merge dedups either way.
+        setTask((prev) => ({
+          ...t,
+          events: mergeEvents(prev && prev.id === t.id ? prev.events : [], t.events),
+        }))
+        setError(null)
+      })
+      .catch((e: unknown) => {
+        if (!alive) return
+        setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      alive = false
+    }
+  }, [id, changeKey])
+
+  return { task, error }
+}
+
 // The task detail page reads as a document, not a stack of cards: a header
 // with the title and the facts that identify the run, one line of trace, then
 // two columns — what happened (result / brief / timeline) beside what it is
@@ -46,7 +93,7 @@ export function DetailView({
   useLocaleRerender()
   const change = useChangeSignal()
   const [tick, setTick] = useState(0)
-  const { data: task, error } = useAsync(() => api.task(id), [id], change + tick)
+  const { task, error } = useLiveTask(id, change + tick)
   // The task's board rides the same refresh cadence: a queued note posted
   // below must render, not just be accepted, or the send reads as lost.
   const { data: board } = useAsync(() => api.taskBoardMessages(id), [id], change + tick)

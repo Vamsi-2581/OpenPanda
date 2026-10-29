@@ -639,6 +639,13 @@ type taskJSON struct {
 	Spec       string `json:"spec,omitempty"`
 	Result     string `json:"result,omitempty"`
 	Risk       string `json:"risk,omitempty"`
+	// Agent is the adapter that ran (or is running) this task, bare of its
+	// file extension ("claude_code", not "claude_code.py"). It is the same
+	// affinity key the agent handle is pinned to, and it is what lets the
+	// console name the employee on a light row that carries no traces — the
+	// session's task list, which is polled every change frame and must stay
+	// one row wide rather than dragging a task's whole event timeline.
+	Agent string `json:"agent,omitempty"`
 	// Queue redesign fields: the board sorts by priority, then seq (drag
 	// order, 0 = not dragged), and jumps into session_id when set.
 	Priority     string   `json:"priority"`
@@ -690,6 +697,10 @@ type taskJSON struct {
 }
 
 type eventJSON struct {
+	// ID is the row's task_events id. It is the cursor an incremental read
+	// resumes from, and what lets the console merge a new batch into a
+	// timeline it is already showing without re-sending the history.
+	ID   int64  `json:"id,omitempty"`
 	TS   int64  `json:"ts"`
 	Type string `json:"type"`
 	Data string `json:"data"`
@@ -767,6 +778,7 @@ func toTaskJSON(t core.Task) taskJSON {
 		Spec:         t.SpecJSON,
 		Result:       t.ResultJSON,
 		Risk:         t.Risk,
+		Agent:        strings.TrimSuffix(t.AgentSessionAdapter, ".py"),
 		Priority:     priorityLabel(t.Priority),
 		Seq:          t.Seq,
 		SessionID:    t.SessionID,
@@ -905,28 +917,67 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range filtered {
 		out = append(out, toTaskJSON(t))
 	}
+	if r.URL.Query().Get("brief") == "1" {
+		// The chat's own read of a thread's tasks: it renders state, the
+		// running adapter, the plan stage and the newest event line, and the
+		// poll runs once per change frame. Spec and result are the row's
+		// heaviest columns and no consumer of this read looks at them.
+		for i := range out {
+			out[i].Spec = ""
+			out[i].Result = ""
+			out[i].Intent = ""
+		}
+	}
 	h.attachLastEvents(r.Context(), out)
 	writeJSON(w, out)
 }
 
 // attachLastEvents stamps every listed task with its newest task_events row
 // (clipped) so the board's live line can say what a mid-flight task is doing
-// on first paint — before the SSE trace stream's first frame lands. One
-// batched query covers the whole board; any failure degrades to no stamp
-// rather than failing the list.
+// on first paint — before the SSE trace stream's first frame lands. Any
+// failure degrades to no stamp rather than failing the list.
+//
+// The ids are spelled out rather than left to a whole-table GROUP BY: this
+// runs once per change frame for every open board, so the old form made each
+// poll cost O(all events on the node) instead of O(the events of the rows on
+// screen).
 func (h *handler) attachLastEvents(ctx context.Context, tasks []taskJSON) {
 	if h.db == nil || len(tasks) == 0 {
 		return
 	}
+	last := make(map[string]traceEventJSON, len(tasks))
+	// 400 placeholders per query: comfortably inside SQLite's bound-variable
+	// limit even on builds old enough to still carry the 999 ceiling.
+	const batch = 400
+	for start := 0; start < len(tasks); start += batch {
+		h.lastEventsBatch(ctx, tasks[start:min(start+batch, len(tasks))], last)
+	}
+	for i := range tasks {
+		if te, ok := last[tasks[i].ID]; ok {
+			te := te
+			tasks[i].LastEvent = &te
+		}
+	}
+}
+
+// lastEventsBatch fills `last` with one batch's newest event per task.
+func (h *handler) lastEventsBatch(ctx context.Context, tasks []taskJSON, last map[string]traceEventJSON) {
+	marks := make([]string, len(tasks))
+	args := make([]any, len(tasks))
+	for i, t := range tasks {
+		marks[i] = "?"
+		args[i] = t.ID
+	}
 	rows, err := h.db.QueryContext(ctx,
 		`SELECT task_id, id, ts, type, COALESCE(data_json, '{}')
 		   FROM task_events
-		  WHERE id IN (SELECT MAX(id) FROM task_events GROUP BY task_id)`)
+		  WHERE id IN (SELECT MAX(id) FROM task_events
+		                WHERE task_id IN (`+strings.Join(marks, ",")+`)
+		                GROUP BY task_id)`, args...)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
-	last := make(map[string]traceEventJSON, len(tasks))
 	for rows.Next() {
 		var (
 			taskID  string
@@ -946,12 +997,45 @@ func (h *handler) attachLastEvents(ctx context.Context, tasks []taskJSON) {
 		}
 		last[taskID] = te
 	}
-	for i := range tasks {
-		if te, ok := last[tasks[i].ID]; ok {
-			te := te
-			tasks[i].LastEvent = &te
+}
+
+// newestEvent reads one task's newest event row, optionally restricted to a
+// single type. It is the indexed counterpart of attachLastEvents' batched
+// query: the brief projection asks about one row, and the whole-board GROUP BY
+// would cost more than the payload it saves.
+func (h *handler) newestEvent(ctx context.Context, taskID, typ string) *traceEventJSON {
+	if h.db == nil {
+		return nil
+	}
+	query := `SELECT id, ts, type, COALESCE(data_json, '{}')
+	            FROM task_events
+	           WHERE task_id = ?`
+	args := []any{taskID}
+	if typ != "" {
+		query += ` AND type = ?`
+		args = append(args, typ)
+	}
+	query += ` ORDER BY id DESC LIMIT 1`
+
+	var (
+		dataRaw string
+		te      traceEventJSON
+	)
+	if err := h.db.QueryRowContext(ctx, query, args...).
+		Scan(&te.ID, &te.TS, &te.Type, &dataRaw); err != nil {
+		// No events yet, or a row we cannot read: the brief carries no stamp
+		// rather than failing. It is a visibility hint, not the task.
+		return nil
+	}
+	if dataRaw != "" && dataRaw != "{}" {
+		var decoded any
+		if err := json.Unmarshal([]byte(dataRaw), &decoded); err == nil {
+			te.Data = clipTraceData(decoded)
+		} else {
+			te.DataRaw = dataRaw
 		}
 	}
+	return &te
 }
 
 // visibleTraceTypes is the track set the decision-orbit component paints.
@@ -973,7 +1057,20 @@ var visibleTraceTypes = map[string]bool{
 	"user_msg_consumed":  true,
 }
 
-// getTask serves one task's full row plus its event timeline.
+// afterCursor reads the ?after=<eventID> cursor an incremental read carries.
+// Absent, empty or malformed means "from the beginning": a bad cursor must
+// never hide rows, so it degrades to the full read.
+func afterCursor(r *http.Request) int64 {
+	n, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// getTask serves one task's full row plus its event timeline; ?brief=1 serves
+// the light projection a chat bubble re-reads on every change frame (row,
+// newest event line, and the exec_agent_start that names the employee).
 func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	t, err := h.store.Get(r.Context(), id)
@@ -987,6 +1084,31 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 	out := toTaskJSON(t)
 	h.enrichPlanMeta(r.Context(), &out, t)
+	// ?after=<eventID> is the poll loop's cursor: the row and its rollups stay
+	// complete, but only the timeline past that id goes on the wire. A page
+	// following a long run re-read it every second otherwise.
+	after := afterCursor(r)
+	// ?brief=1 is the chat bubble's read. Every task bubble in a thread
+	// re-reads its row on every change frame, and the full projection drags
+	// the task's whole event timeline — up to maxAgentTranscriptEvents rows
+	// per request — which is traffic heavy enough to starve the event stream
+	// it depends on. A bubble renders the state, the plan stage, the running
+	// adapter and the newest event line, so that is all this returns.
+	if r.URL.Query().Get("brief") == "1" {
+		out.LastEvent = h.newestEvent(r.Context(), id, "")
+		// The cast line names the employee from the exec_agent_start trace.
+		// One row, not the timeline — but only when the adapter column cannot
+		// answer: that column stays empty for an agent that never mints a
+		// session handle, and it is free, while this lookup scans the task's
+		// events backwards.
+		if out.Agent == "" {
+			if ev := h.newestEvent(r.Context(), id, core.EvExecAgentStart); ev != nil {
+				out.Traces = []traceEventJSON{*ev}
+			}
+		}
+		writeJSON(w, out)
+		return
+	}
 	// Sub-agent tree: the detail view shows the children a parent is
 	// orchestrating (states live) instead of leaving them to the board.
 	if kids, err := h.store.Children(r.Context(), id); err == nil {
@@ -1003,7 +1125,12 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 		var latestSupervision *supervisionJSON
 		var tierOps []tier2OpJSON
 		for _, e := range events {
-			out.Events = append(out.Events, eventJSON{TS: e.TS, Type: e.Type, Data: e.DataJSON})
+			// The rollups below still read the whole timeline — that is what
+			// keeps an incremental poll from degrading the orbit or the
+			// delegation trail to the newest few rows.
+			if e.ID > after {
+				out.Events = append(out.Events, eventJSON{ID: e.ID, TS: e.TS, Type: e.Type, Data: e.DataJSON})
+			}
 			if visibleTraceTypes[e.Type] {
 				te := traceEventJSON{ID: e.ID, TS: e.TS, Type: e.Type}
 				if e.DataJSON != "" {

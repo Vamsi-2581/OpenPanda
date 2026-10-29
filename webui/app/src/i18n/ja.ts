@@ -436,6 +436,7 @@ const ja: Messages = {
   'sessions.stop': '停止',
   'sessions.stopped': '停止しました。',
   'sessions.syncing': 'バックグラウンドの実行結果を同期中…',
+  'sessions.streamLost': 'ライブ接続が切れました。ターンの結果を取りに再接続しています。',
   'sessions.fixModel': 'モデル設定を開く',
   'sessions.retry': 'モデル呼び出しに失敗（{reason}）——{delay}秒後に再試行 · {attempt}/{max}',
   'sessions.spawn': 'サブエージェント {name} を起動中…',

@@ -432,6 +432,7 @@ const zhCN: Messages = {
   'sessions.stop': '停止',
   'sessions.stopped': '已被你停止。',
   'sessions.syncing': '正在同步后台执行结果…',
+  'sessions.streamLost': '实时连接已断开，正在重连以取回这一轮结果。',
   'sessions.fixModel': '打开模型设置',
   'sessions.retry': '模型调用失败（{reason}）——{delay}秒后重试 · {attempt}/{max}',
   'sessions.spawn': '正在派生子智能体 {name}…',

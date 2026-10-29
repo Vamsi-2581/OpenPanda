@@ -668,3 +668,18 @@ func TestClearTasks(t *testing.T) {
 		t.Fatalf("deleted = %d, want 2", res["deleted"])
 	}
 }
+
+// TestTaskJSONNamesTheRunningAdapter: the console's live progress row is fed
+// by the session's task list, which carries no trace timeline — the adapter
+// the task is running under is the only place that row can name the employee
+// from, so it has to leave the wire bare of the adapter's file extension
+// ("claude_code", not "claude_code.py").
+func TestTaskJSONNamesTheRunningAdapter(t *testing.T) {
+	got := toTaskJSON(core.Task{TaskID: "t-1", AgentSessionAdapter: "claude_code.py"})
+	if got.Agent != "claude_code" {
+		t.Fatalf("agent = %q, want claude_code", got.Agent)
+	}
+	if bare := toTaskJSON(core.Task{TaskID: "t-2"}); bare.Agent != "" {
+		t.Fatalf("agent on a task with none = %q, want empty", bare.Agent)
+	}
+}

@@ -99,6 +99,7 @@ var migrations = []Migration{
 	// The delivery contract's verification tables arrived while upstream was
 	// claiming 63 for hello bindings, so they move behind it.
 	{Version: 64, Name: "add_task_checks_and_verification", Apply: migrateV64},
+	{Version: 65, Name: "index_tasks_by_session", Apply: migrateV65},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -1565,4 +1566,18 @@ func migrateV64(tx MigrationExec) error {
 		return err
 	}
 	return addColumnIfMissingTx(tx, "tasks", "verification", "TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateV65 indexes tasks.session_id. A conversation reads its own task set
+// on every change frame — the live progress rows and the round roll-up — and
+// that lookup was a full table scan. taskColumns drags spec_json and
+// result_json along with every row, so the cost grew with the whole board
+// rather than with the thread being watched.
+func migrateV65(tx MigrationExec) error {
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)`)
+	return err
 }

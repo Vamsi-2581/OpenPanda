@@ -57,7 +57,7 @@ export function ChatAvatar({ speaker }: { speaker: Speaker }) {
  *  where it stands. Rendered inside the panda's own bubble, above the task
  *  card — the card is the paperwork, this is the sentence. */
 export function TaskCast({ task }: { task: Task }) {
-  const agent = castAgent(task.traces)
+  const agent = castAgent(task.traces) || task.agent || ''
   const stage = task.plan_meta?.stage_id
   const count = task.plan_meta?.stage_count
   return (
@@ -120,17 +120,30 @@ export function StateChip({ state }: { state: string }) {
  *  took — the duration said 26 minutes and there was nothing in between. The
  *  row reads the task's newest event and says it in the employee's own voice,
  *  with their face, so the wait has a speaker. It disappears the moment the
- *  task settles: the report turn below is the same person, saying more. */
+ *  task settles: the report turn below is the same person, saying more.
+ *
+ *  The row is fed by the session's task list (one small row per task, polled
+ *  on every change frame), so it must not depend on a trace timeline that
+ *  list does not carry: the adapter the task is running under names the
+ *  employee first, and traces — when the caller has them — refine it. Until
+ *  either is known the row wears the panda's face: the panda is the one who
+ *  handed the job out, and a row that appears only once the agent starts is a
+ *  row the user stares at nothing for. */
 export function TaskProgress({ task }: { task: Task }) {
-  const agent = castAgent(task.traces)
-  if (!agent || !isActiveState(task.state)) return null
+  const agent = castAgent(task.traces) || task.agent || ''
+  if (!isActiveState(task.state)) return null
   const line = activityLine(task.last_event)
+  const speaker: Speaker = agent
+    ? { who: 'agent', agent, role: 'report' }
+    : { who: 'panda', agent: '', role: 'report' }
   return (
     <div class="msg agent is-progress">
-      <ChatAvatar speaker={{ who: 'agent', agent, role: 'report' }} />
+      <ChatAvatar speaker={speaker} />
       <div class="msg-body">
         <div class="msg-head">
-          <span class="msg-name">{prettyAgent(agent)}</span>
+          <span class="msg-name">
+            {agent ? prettyAgent(agent) : t('sessions.speakerPanda')}
+          </span>
           <span class="msg-cast-state is-active">
             <span class="msg-report-dot" aria-hidden="true" />
             {t('sessions.castWorking')}
@@ -165,13 +178,14 @@ function activityLine(ev?: TraceEvent): string {
 }
 
 /** Loads the task behind a dispatch turn. The transcript only stores the id,
- *  so the cast list and the live progress row read the row itself — and they
- *  read it again on every change frame, which is what keeps the progress line
- *  moving. */
+ *  so the cast list and the bubble read the row itself — and they read it
+ *  again on every change frame, which is what keeps the state current. It is
+ *  the brief read: a bubble never renders the event timeline, and the full
+ *  projection would drag that timeline down once per second per bubble. */
 export function useTaskBrief(taskId?: string): Task | null {
   const change = useChangeSignal()
   const { data } = useAsync<Task | null>(
-    () => (taskId ? api.task(taskId).catch(() => null) : Promise.resolve(null)),
+    () => (taskId ? api.taskBrief(taskId).catch(() => null) : Promise.resolve(null)),
     [taskId],
     change,
   )
