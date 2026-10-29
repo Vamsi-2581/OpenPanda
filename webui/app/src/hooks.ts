@@ -18,13 +18,27 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[], reloadKey = 0
   const [error, setError] = useState<string | null>(null)
   const fnRef = useRef(fn)
   fnRef.current = fn
+  // Every run claims a generation and only the newest may write. The change
+  // feed re-fetches once a second, and reads do not come back in order — a
+  // task detail carrying its whole event timeline can land after the smaller
+  // read that followed it. Without this guard the older response wins and the
+  // view visibly regresses to a row that was already superseded.
+  const generation = useRef(0)
 
   useEffect(() => {
     let alive = true
+    const mine = ++generation.current
     fnRef
       .current()
-      .then((v) => alive && (setData(v), setError(null)))
-      .catch((e: unknown) => alive && setError(e instanceof Error ? e.message : String(e)))
+      .then((v) => {
+        if (!alive || mine !== generation.current) return
+        setData(v)
+        setError(null)
+      })
+      .catch((e: unknown) => {
+        if (!alive || mine !== generation.current) return
+        setError(e instanceof Error ? e.message : String(e))
+      })
     return () => {
       alive = false
     }

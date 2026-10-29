@@ -639,6 +639,13 @@ type taskJSON struct {
 	Spec       string `json:"spec,omitempty"`
 	Result     string `json:"result,omitempty"`
 	Risk       string `json:"risk,omitempty"`
+	// Agent is the adapter that ran (or is running) this task, bare of its
+	// file extension ("claude_code", not "claude_code.py"). It is the same
+	// affinity key the agent handle is pinned to, and it is what lets the
+	// console name the employee on a light row that carries no traces — the
+	// session's task list, which is polled every change frame and must stay
+	// one row wide rather than dragging a task's whole event timeline.
+	Agent string `json:"agent,omitempty"`
 	// Queue redesign fields: the board sorts by priority, then seq (drag
 	// order, 0 = not dragged), and jumps into session_id when set.
 	Priority     string   `json:"priority"`
@@ -767,6 +774,7 @@ func toTaskJSON(t core.Task) taskJSON {
 		Spec:         t.SpecJSON,
 		Result:       t.ResultJSON,
 		Risk:         t.Risk,
+		Agent:        strings.TrimSuffix(t.AgentSessionAdapter, ".py"),
 		Priority:     priorityLabel(t.Priority),
 		Seq:          t.Seq,
 		SessionID:    t.SessionID,

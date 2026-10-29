@@ -559,7 +559,10 @@ func statusEventOf(p askengine.Progress) map[string]any {
 // stream: the conversation runs with the session's full history, and the
 // session's git worktree is the execution directory for any classified task.
 // Events: "reasoning" (chain-of-thought chunk), "delta" (answer text chunk),
-// "status" (one-line progress), "result" (the final askResult), "error".
+// "status" (one-line progress), "task" (the id of a task row this turn
+// dispatched, sent the moment the row exists — the turn keeps running while
+// the task executes, so this is what lets the console show live progress),
+// "result" (the final askResult), "error".
 //
 // Reasoning travels on its own event so the console can show it apart from the
 // answer. It is display-only — D14 keeps it out of the answer text, out of the
@@ -723,6 +726,15 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		// scraping the English fallback sentence.
 		OnProgress: func(p askengine.Progress) {
 			send("status", statusEventOf(p))
+		},
+		// The task row exists now — name it on the wire immediately. This turn
+		// does not finish until the task settles (askengine follows the row to
+		// its outcome), so without this frame the console has no handle on the
+		// work for the whole execution and can only show a spinner and one
+		// line of status. With it the thread renders the employee's live
+		// progress row from the moment the job is dispatched.
+		OnTaskRow: func(taskID string) {
+			send("task", map[string]string{"task_id": taskID})
 		},
 		// What the user types while this turn streams. The queue is drained at
 		// every round boundary, so the note lands in the round after the one

@@ -82,6 +82,11 @@ import { acquireKeepAlive } from '../utils/keepalive'
  *  keyhole; unbounded growth would eat the transcript instead. */
 const COMPOSER_MAX_PX = 240
 
+/** How long the pane keeps watching a turn it lost the live stream for.
+ *  Comfortably past a slow classify plus a long agent run, and finite: a
+ *  watch with no end is a spinner the user cannot dismiss. */
+const RECOVER_WATCH_MS = 10 * 60 * 1000
+
 /** The composer's editable surface is a contenteditable, not a textarea: an
  *  attachment has to render as a pill *inside* the line the user is typing,
  *  and only a rich surface can host one. Everything the textarea used to give
@@ -322,6 +327,11 @@ interface ChatMsg extends SessionTurn {
   /** @file paths that were expanded into fenced blocks for this prompt —
    *  shown as attachment chips on the user's bubble. */
   files?: string[]
+  /** The task row this turn dispatched, adopted the moment the ask stream
+   *  names it. It drives the live progress row while the turn is still
+   *  waiting for the task to settle; `kind`/`ref` are only set once the
+   *  result lands, which is far too late to show progress. */
+  liveTask?: string
 }
 
 /** One file waiting in the composer's attachment tray.
@@ -973,7 +983,7 @@ export function SessionsView({
     // thinking bubble to the transcript indefinitely, so stop after a budget
     // that comfortably covers a slow classify/answer and fall back to the
     // persisted transcript.
-    const deadline = startedAt > 0 ? startedAt + 10*60*1000 : Date.now() + 10*60*1000
+    const deadline = startedAt > 0 ? startedAt + RECOVER_WATCH_MS : Date.now() + RECOVER_WATCH_MS
     const poll = async () => {
       while (!cancelled) {
         await new Promise((r) => setTimeout(r, 2000))
@@ -1021,10 +1031,15 @@ export function SessionsView({
   useEffect(() => {
     const onWake = () => {
       if (!activeId || (typeof document !== 'undefined' && document.visibilityState === 'hidden')) return
+      // A local ask owns the tail: its stream is still painting the bubble,
+      // and replacing the transcript underneath it would drop that bubble and
+      // aim the next delta at an older message.
+      if (inflight.current && inflightSid.current === activeId) return
       api
         .session(activeId)
         .then((s) => {
           if (activeIdRef.current !== activeId) return
+          if (inflight.current && inflightSid.current === activeId) return
           const turns = s.turns ?? []
           const last = turns[turns.length - 1]
           if (last?.role === 'assistant') {
@@ -1570,6 +1585,11 @@ export function SessionsView({
               inflightOperation.current = operationID
             }
           },
+          // A task row exists for this turn. Adopt its id as a side channel —
+          // `kind` stays untouched, because a plan turn must not flip into a
+          // task card mid-stream — so the thread can render the employee's
+          // live progress row for the whole execution instead of a spinner.
+          onTask: (taskID) => patch((m) => ({ ...m, liveTask: taskID })),
           onResult: (r) => patch((m) => {
             // Reconcile the accumulated deltas against the parsed reply:
             // whatever the stream withheld still lands — "something
@@ -1600,7 +1620,7 @@ export function SessionsView({
               r.kind === 'plan' && r.plan_id
                 ? ({ kind: 'plan', ref: r.plan_id } as const)
                 : {}
-            return { ...m, ...task, ...plan, result: r, status: undefined, text }
+            return { ...m, ...task, ...plan, result: r, status: undefined, text, liveTask: undefined }
           }),
           onError: (message, code, info) =>
             patch((m) => ({
@@ -1658,21 +1678,41 @@ export function SessionsView({
           // The operation snapshot is durable in the session. Follow that
           // exact generation until it terminalizes instead of guessing from a
           // fixed number of transcript polls.
+          //
+          // Two things bound this watch. A stream that died before the
+          // `operation` frame arrived leaves no id to follow, so the session's
+          // own operation row is the fallback — and the deadline is the floor
+          // under both: the loop used to run forever when the id was missing,
+          // which is a spinner nobody could dismiss without reloading.
           let resolved = false
           if (id) {
             patch((m) => ({ ...m, status: t('sessions.syncing') }))
             let delay = 500
-            while (!ctrl.signal.aborted && isLiveSession(id, activeIdRef.current)) {
+            const deadline = Date.now() + RECOVER_WATCH_MS
+            while (
+              !ctrl.signal.aborted &&
+              isLiveSession(id, activeIdRef.current) &&
+              Date.now() < deadline
+            ) {
               try {
                 const s = await api.session(id)
                 const operationID = inflightOperation.current
-                if (operationID && s.operation?.id === operationID && s.operation.status !== 'running') {
+                const op = s.operation
+                const settled = operationID
+                  ? op?.id === operationID && op.status !== 'running'
+                  : !op || op.status !== 'running'
+                if (settled) {
+                  const turns = s.turns ?? []
                   setSession(s)
-                  setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
+                  setMsgs(turns.map((turn, i) => ({ ...turn, k: `srv-${i}` })))
                   // The turn did land server-side, just not over the stream —
                   // its wall-clock is as real as any other reply's.
                   finishTurn()
-                  resolved = true
+                  // Settled without a reply means the turn never wrote one
+                  // (cancelled, failed before the model answered). That is
+                  // still an outcome the pane must report, so it falls through
+                  // to the error bubble below rather than looking finished.
+                  resolved = turns[turns.length - 1]?.role === 'assistant'
                   break
                 }
               } catch {}
@@ -1681,7 +1721,12 @@ export function SessionsView({
             }
           }
           if (!resolved && isLiveSession(id, activeIdRef.current) && !ctrl.signal.aborted) {
-            const message = err instanceof Error ? err.message : String(err)
+            const message =
+              err instanceof ApiError && err.status === 0
+                ? t('sessions.streamLost')
+                : err instanceof Error
+                  ? err.message
+                  : String(err)
             setMsgs((ms) => [
               ...ms.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
               { role: 'assistant', kind: 'error', text: message, k: localMsgId() },
@@ -2068,7 +2113,12 @@ export function SessionsView({
   // print "本轮工作已全部完成" while a colleague was still running — and then
   // rewrite the roll-up every time another one landed. The task board is the
   // only place that knows the batch (see `useSessionTasks`).
-  const dispatched = msgs.some((m) => m.kind === 'task' || m.kind === 'plan')
+  // A running operation counts too: a turn started elsewhere (the workspace
+  // dispatcher, another tab, the TUI) has no bubble here yet, but the thread
+  // must still show the employee's live row instead of a bare spinner.
+  const dispatched =
+    msgs.some((m) => m.kind === 'task' || m.kind === 'plan' || Boolean(m.liveTask)) ||
+    session?.operation?.status === 'running'
   const sessionTasks = useSessionTasks(activeId, dispatched)
   const roundOpen = sessionTasks ? roundStillOpen(sessionTasks) : false
   const runSummary = busy || roundOpen ? null : trailingRunSummary(msgs)
@@ -2291,9 +2341,10 @@ export function SessionsView({
               onOpenTask={openTaskInPlace}
             />
           ))}
-          {liveIds.map((id) => (
-            <LiveProgressRow key={id} taskId={id} />
-          ))}
+          {liveIds.map((id) => {
+            const task = sessionTasks?.find((t) => t.id === id)
+            return task ? <TaskProgress key={id} task={task} /> : null
+          })}
           {runSummary && <RunSummaryRow run={runSummary} onOpenTask={openTaskInPlace} />}
         </div>
 
@@ -3461,7 +3512,7 @@ function ChatBubble(props: {
 
 /** A chat row. The employee's own progress row does *not* hang off it any
  *  more: a still-running job belongs at the foot of the thread, not under the
- *  bubble that dispatched it (see `liveTaskIds` / `LiveProgressRow`). */
+ *  bubble that dispatched it (see `liveTaskIds` / `TaskProgress`). */
 function ChatTurn(props: {
   msg: ChatMsg
   onOpenTask(id: string): void
@@ -3472,18 +3523,6 @@ function ChatTurn(props: {
   const task = useTaskBrief(msg.kind === 'task' ? msg.ref : undefined)
   const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
   return <ChatBubble {...props} task={task} plan={plan} />
-}
-
-/** One employee's live row, at the tail of the thread while their job runs.
- *
- *  The board list carries the state, not the trace the row's face is named
- *  from, so the row is read here on its own — and re-read on every change
- *  frame, which is what keeps the line moving. It draws nothing once the job
- *  settles: by then the finalizer's report turn is in the transcript, in this
- *  same spot, saying more. */
-function LiveProgressRow({ taskId }: { taskId: string }) {
-  const task = useTaskBrief(taskId)
-  return task ? <TaskProgress task={task} /> : null
 }
 
 /** Whether the thread's round still has work in flight.

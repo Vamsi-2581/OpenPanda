@@ -437,6 +437,7 @@ const de: Messages = {
   'sessions.stop': 'Stopp',
   'sessions.stopped': 'Von dir gestoppt.',
   'sessions.syncing': 'Hintergrundausführung wird synchronisiert…',
+  'sessions.streamLost': 'Live-Verbindung verloren — verbinde neu, um den Zug zu übernehmen.',
   'sessions.fixModel': 'Modelleinstellungen öffnen',
   'sessions.retry': 'Modellaufruf fehlgeschlagen ({reason}) — Wiederholung in {delay}s · {attempt}/{max}',
   'sessions.spawn': 'Subagent {name} wird gestartet…',
