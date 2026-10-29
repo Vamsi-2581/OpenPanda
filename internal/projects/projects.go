@@ -92,6 +92,26 @@ func (p Project) NormalizedScope() string {
 	}
 }
 
+// UsableWorkDir is WorkDir when it still answers to the breadth rule, "" when it
+// does not. Rows written before ValidateWorkDir existed can name the home
+// directory (home-directory adoption created them), and every reader that took
+// WorkDir at face value propagated a path the executor refuses — a task then
+// failed at creation with "work dir is too broad" and nothing in the message
+// pointed at the project row that produced it. Readers use this instead: a
+// too-broad row degrades to "no work dir of its own" (the task falls back to its
+// own private directory) rather than poisoning every task under the project.
+// The row itself is left alone — `panda project show` reports it, and the
+// operator fixes or removes it.
+func (p Project) UsableWorkDir() string {
+	if p.WorkDir == "" {
+		return ""
+	}
+	if ValidateWorkDir(p.WorkDir) != nil {
+		return ""
+	}
+	return p.WorkDir
+}
+
 // ValidateApprovalMode rejects a project approval mode outside the understood
 // set. "" means "inherit the global gate" and is always legal; the alias words
 // config accepts (strict/auto) are legal here too so a policy can be written in

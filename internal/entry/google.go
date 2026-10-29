@@ -367,7 +367,9 @@ func (c *Client) completeOnceGoogle(ctx context.Context, system string, turns []
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
 	if gr.Error != nil {
-		return Response{}, fmt.Errorf("entry: api error: %s", gr.Error.Message)
+		// A 200 with an error body is the same failure as a non-200 would be;
+		// classify it the same way so a retry/failover decision sees it.
+		return Response{}, inBandError(googleErrorKind(gr.Error), gr.Error.Message)
 	}
 	if gr.PromptFeedback != nil && gr.PromptFeedback.BlockReason != "" && len(gr.Candidates) == 0 {
 		return Response{}, fmt.Errorf("entry: api error: prompt blocked (%s)", gr.PromptFeedback.BlockReason)
@@ -430,7 +432,11 @@ type googleAccumulator struct {
 
 func (a *googleAccumulator) feed(r *googleResponse, onDelta, onReasoning func(string)) error {
 	if r.Error != nil {
-		return fmt.Errorf("entry: api error: %s", r.Error.Message)
+		// Gemini reports the failure on the chunk itself; Code is the HTTP
+		// status it would have used, and Status the canonical gRPC name
+		// (UNAVAILABLE, RESOURCE_EXHAUSTED, …). Map the code so an in-stream
+		// overload keeps the retry path it would have had as a status.
+		return inBandError(googleErrorKind(r.Error), r.Error.Message)
 	}
 	if r.PromptFeedback != nil && r.PromptFeedback.BlockReason != "" && len(r.Candidates) == 0 {
 		return fmt.Errorf("entry: api error: prompt blocked (%s)", r.PromptFeedback.BlockReason)
@@ -574,8 +580,8 @@ func (c *Client) streamGoogle(ctx context.Context, system string, turns []Turn, 
 			return Response{}, err
 		}
 	}
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, sseReadError(err)
+	if err := streamEnded(ctx, scanner.Err()); err != nil {
+		return Response{}, err
 	}
 	if !sawData {
 		if err := feedGoogleJSON(strings.TrimSpace(raw.String()), acc, onDelta, onReasoning); err != nil {

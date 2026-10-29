@@ -257,7 +257,8 @@ func (c *Core) attachProject(ctx context.Context, p *bus.TaskDelegatePayload, pr
 }
 
 // projectDir is the project's work tree on this node, or "" when the project has
-// none (or this node has no project table).
+// none (or this node has no project table) or names a tree the breadth rule
+// refuses (see projects.Project.UsableWorkDir).
 func (c *Core) projectDir(project string) string {
 	if c.projects == nil || project == "" {
 		return ""
@@ -266,7 +267,7 @@ func (c *Core) projectDir(project string) string {
 	if err != nil {
 		return ""
 	}
-	return pr.WorkDir
+	return pr.UsableWorkDir()
 }
 
 // packProjectMemory packs the project's memory directory for inline carriage.

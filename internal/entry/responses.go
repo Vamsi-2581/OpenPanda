@@ -344,7 +344,9 @@ func (c *Client) completeOnceResponses(ctx context.Context, system string, turns
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
 	if rr.Error != nil {
-		return Response{}, fmt.Errorf("entry: api error: %s", rr.Error.Message)
+		// Same rule as the streamed envelopes: a 200 carrying an error object is
+		// a failed call, classified by the code the provider named.
+		return Response{}, inBandError(rr.Error.Code, rr.Error.Message)
 	}
 	if rr.Usage != nil {
 		c.addUsage(rr.Usage.InputTokens, rr.Usage.OutputTokens)
@@ -523,22 +525,28 @@ func (a *responsesAccumulator) feed(ev *responsesStreamEvent, onDelta, onReasoni
 		}
 	case "response.failed":
 		msg := ev.Message
+		code := ""
 		if ev.Response != nil && ev.Response.Error != nil && ev.Response.Error.Message != "" {
 			msg = ev.Response.Error.Message
+			code = ev.Response.Error.Code
 		}
 		if msg == "" {
 			msg = "response failed"
 		}
-		return fmt.Errorf("entry: api error: %s", msg)
+		return inBandError(code, msg)
 	case "error":
 		msg := ev.Message
-		if msg == "" && ev.Error != nil {
-			msg = ev.Error.Message
+		code := ""
+		if ev.Error != nil {
+			if msg == "" {
+				msg = ev.Error.Message
+			}
+			code = ev.Error.Code
 		}
 		if msg == "" {
 			msg = "stream error"
 		}
-		return fmt.Errorf("entry: api error: %s", msg)
+		return inBandError(code, msg)
 	}
 	return nil
 }
@@ -715,14 +723,14 @@ func (c *Client) streamResponses(ctx context.Context, system string, turns []Tur
 			return Response{}, err
 		}
 	}
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, sseReadError(err)
+	if err := streamEnded(ctx, scanner.Err()); err != nil {
+		return Response{}, err
 	}
 	if !sawData {
 		var one responsesResponse
 		if err := json.Unmarshal([]byte(strings.TrimSpace(raw.String())), &one); err == nil {
 			if one.Error != nil {
-				return Response{}, fmt.Errorf("entry: api error: %s", one.Error.Message)
+				return Response{}, inBandError(one.Error.Code, one.Error.Message)
 			}
 			if one.Usage != nil {
 				c.addUsage(one.Usage.InputTokens, one.Usage.OutputTokens)

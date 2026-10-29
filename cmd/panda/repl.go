@@ -316,13 +316,21 @@ func runRepl(args []string) {
 	projStore := projectstore.NewStore(db)
 	var activeProjectName string
 	if workspaceAllowed && cwd != "" {
-		cfg.Storage.WorkPath = cwd
-		// Shared adoption: the launch directory is the project space — the
-		// existing project owning it wins, else a fresh one is created and
-		// marked active (see workspace.go).
-		activeProjectName = adoptWorkspaceProject(projStore, cwd)
-		if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
-			fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", cwd, "name", activeProjectName)))
+		// The launch directory becomes the work path only when the breadth rule
+		// accepts it. `panda repl` from $HOME used to relocate the whole
+		// session's work path there (node scratch under ~/.openpanda, every
+		// anonymous task's root), and adoption minted a project row for it that
+		// the executor then refused. Refusing keeps storage.work_path as
+		// configured — the launch directory is simply not a workspace.
+		if abs, aerr := filepath.Abs(cwd); aerr == nil && projectstore.ValidateWorkDir(abs) == nil {
+			cfg.Storage.WorkPath = abs
+			// Shared adoption: the launch directory is the project space — the
+			// existing project owning it wins, else a fresh one is created and
+			// marked active (see workspace.go).
+			activeProjectName = adoptWorkspaceProject(projStore, abs)
+			if activeProjectName != "" && interactive && !*yesFlag && !isTUI {
+				fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.Tf(detected, "cli.workspace.accepted", "path", abs, "name", activeProjectName)))
+			}
 		}
 	} else if !workspaceAllowed && cwd != "" && interactive {
 		fmt.Println(pal().Muted(pal().MarkBullet() + " " + i18n.T(detected, "cli.workspace.declined")))
@@ -1113,13 +1121,17 @@ func (r *repl) askMode(text, mode string) {
 	r.resetWatchBaseline()
 
 	if res.err != nil {
-		r.errf("%s\n", "panda: "+res.err.Error())
 		// A cancelled ask leaves no dangling turn worth pairing (the user
 		// aborted it); every other failure records one so the thread keeps
-		// its user/assistant alternation.
-		if !errors.Is(res.err, context.Canceled) {
-			r.recordErrorTurn(text, res.err)
+		// its user/assistant alternation. A cancel is also not a failure line:
+		// the user pressed the key, so it reads as a quiet note — the same
+		// wording the TUI uses — rather than "panda: model call canceled".
+		if errors.Is(res.err, context.Canceled) {
+			r.outln(pal().Muted(pal().MarkBullet() + " " + i18n.T(r.loc, "repl.interrupted")))
+			return
 		}
+		r.errf("%s\n", "panda: "+res.err.Error())
+		r.recordErrorTurn(text, res.err)
 		return
 	}
 	out := res.out
