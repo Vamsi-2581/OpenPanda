@@ -50,11 +50,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Hinzugefügt
 
+- **Die Modellregistrierung ist nach Verbindung gruppiert** — ein Endpunkt und ein Schlüssel sind ein Konto. Die Konsole listet dessen Modelle unter der Verbindung statt das Geheimnis in jeder Zeile zu wiederholen; das sechste Modell eines Schlüssels braucht kein erneutes Einfügen mehr, und zusammengehörige Zeilen sagen es.
 - **Ein Gespräch hat einen Berechtigungsmodus** — automatisch, manuell, Bearbeitungen übernehmen, Plan und Umgehung, gewählt im Eingabefeld und mit dem Thread gespeichert. Der Modus reist in jeder Aufgabenspezifikation mit, sodass die Ausführung dieselbe Politik anwendet: manuell hält jede ändernde Aktion für eine Vordergrundantwort an, Plan gibt dem Agenten die Nur-Lese-Werkzeugfläche und hält native Befehle an, Umgehung erlaubt alles und wird weiterhin auditiert.
 - **Eine Aufgabe kann einen ausführbaren Abnahmevertrag tragen** — `panda task add --accept "go test ./..."` (oder `--accept auto`) führt die Prüfungen nach dem Agentenlauf aus und zeichnet das Ergebnis an der Aufgabe auf.
 
 ### Behoben
 
+- **Ein beim Anmelden gestarteter Knoten kann seine Agents ausführen** —— das LaunchAgent enthielt kein `PATH`, der Daemon hatte also nur launchds `/usr/bin:/bin:/usr/sbin:/sbin`: jede Agent-CLI unter `~/.local/bin` oder `/opt/homebrew/bin` wurde zu „command not found", und eine Karte, die `node` deklarierte, verlor diese Fähigkeit beim Start — während derselbe Knoten von einem Terminal aus einwandfrei lief. Der Dienst setzt `PATH` jetzt auf die Verzeichnisse, die `carddetect` ohnehin durchsucht — sowohl im macOS-Plist als auch in der systemd-Unit unter Linux — und ein Vertragstest schlägt fehl, sobald die beiden Kopien auseinanderlaufen.
 - **Ein Arbeitsflächen-Panel lässt sich nicht mehr außer Sichtweite ziehen** — die Ablageposition wird auf den sichtbaren Bereich begrenzt (der Scroll-Offset wurde vom falschen Element gelesen), gespeicherte Koordinaten außerhalb der Fläche werden beim Laden korrigiert, und „Layout aufräumen“ stellt die Reihe wieder her.
 - **Die Aufgabenliste fügt ohne Umweg hinzu** — das Eingabefeld ist immer sichtbar, `n` springt von überall dorthin, die Filter zeigen ihre Anzahl, und eine leere Liste ist eine Zeile statt drei leerer Spalten.
 - **Ein Agent, den dieser Knoten nicht hat, ist nicht wählbar** — die Zeile nennt den Grund und bleibt nur zum Entfernen einer alten Auswahl klickbar.

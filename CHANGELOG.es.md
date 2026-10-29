@@ -50,11 +50,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Añadido
 
+- **El registro de modelos se agrupa por conexión** — un endpoint y una clave son una cuenta. La consola lista los modelos de esa conexión debajo de ella en vez de repetir el secreto en cada fila, así que añadir el sexto modelo de una clave ya no obliga a pegarla otra vez, y las filas que van juntas lo dicen.
 - **Una conversación tiene modo de permisos** — automático, manual, aceptar ediciones, plan y omitir permisos, elegido en el compositor y guardado con el hilo. El modo viaja en cada especificación de tarea, así que el ejecutor aplica la política elegida: manual detiene cada cambio para una respuesta en primer plano, plan da al agente la cara de solo lectura y detiene los comandos nativos, omitir ejecuta todo y queda auditado.
 - **Una tarea puede llevar un contrato de aceptación ejecutable** — `panda task add --accept "go test ./..."` (o `--accept auto`) ejecuta las comprobaciones al terminar el agente y las registra en la tarea.
 
 ### Corregido
 
+- **Un nodo iniciado al arrancar la sesión ya puede ejecutar los agentes que declara** —— el LaunchAgent no incluía `PATH`, así que el demonio solo disponía de `/usr/bin:/bin:/usr/sbin:/sbin` de launchd: cualquier CLI de agente instalada en `~/.local/bin` o `/opt/homebrew/bin` se resolvía como «command not found» y una tarjeta que declaraba `node` perdía esa capacidad al arrancar, mientras que el mismo nodo lanzado desde una terminal funcionaba. Ahora el servicio fija `PATH` a los directorios que `carddetect` ya registra —tanto en el plist de macOS como en la unidad systemd de Linux— y una prueba de contrato falla si esas dos copias se desvían.
 - **Un panel del espacio de trabajo ya no puede arrastrarse fuera de alcance** — la posición se limita a la banda visible (el desplazamiento se leía del elemento equivocado), las coordenadas guardadas fuera del lienzo se corrigen al cargar y el control «Ordenar diseño» rearma la fila.
 - **El tablero de pendientes añade sin desvío** — el campo está siempre visible y `n` lleva a él desde cualquier sitio, los filtros muestran su recuento y un tablero vacío es una línea, no tres columnas vacías.
 - **Un agente que este nodo no tiene no es un miembro elegible** — la fila explica por qué está deshabilitada y solo se puede pulsar para quitar una elección obsoleta.

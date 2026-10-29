@@ -231,7 +231,7 @@ English translation of [status.md](status.md)（中文版为准）· English
 > 0.1.0 nodes all publish one, so that plane needs the whole mesh upgraded
 > together (the WebSocket track is unaffected and punch frames keep their old
 > form).
-> Not done: UPnP/NAT-PMP, punch/dir
+>It also groups the model registry by connection (one endpoint and key per account, with its models listed under it) and gives the auto-start launchd/systemd service the same PATH `carddetect` searches — a daemon started at login now finds the agent CLIs a terminal session does, and a contract test keeps the two lists from drifting. Not done: UPnP/NAT-PMP, punch/dir
 > source-signature convergence, the daemon→panel mesh-metrics IPC, cross-node
 > hello replay.)
 
