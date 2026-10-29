@@ -2036,11 +2036,16 @@ class HarnessContractTest(unittest.TestCase):
         self.assertEqual(json.loads(payload["result"]), [["fix it"], ["--", "- please fix"]])
 
     def test_resolve_binary_prefers_an_installed_alias(self):
+        # Windows resolves executables through PATHEXT, so the fixture has to
+        # carry the .cmd extension there; the function returns the candidate
+        # name either way, which is what the caller spawns.
         payload, _ = run_harness(
             "import json, os, tempfile; "
             "d = tempfile.mkdtemp(); "
-            "open(os.path.join(d, 'claude-code'), 'w').close(); "
-            "os.chmod(os.path.join(d, 'claude-code'), 0o755); "
+            "name = 'claude-code.cmd' if os.name == 'nt' else 'claude-code'; "
+            "path = os.path.join(d, name); "
+            "open(path, 'w').close(); "
+            "os.chmod(path, 0o755); "
             "os.environ['PATH'] = d; "
             "_harness.emit(True, _harness.resolve_binary(['claude', 'claude-code']), 0)"
         )
