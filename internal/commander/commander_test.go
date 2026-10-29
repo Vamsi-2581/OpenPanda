@@ -540,10 +540,23 @@ func TestRealEnvironmentViability(t *testing.T) {
 	}
 }
 
+// TestUserCardSchedulingOrder checks the routing order a REAL operator card
+// produces. It is opt-in: the card lives outside the repository, and a test
+// that reads a fixed personal path either fails or silently skips depending on
+// what the machine happens to have — which is how this one failed the gate the
+// moment another package's test wrote the file mid-run. Point PANDA_USER_CARD
+// at the card to run it:
+//
+//	PANDA_USER_CARD=~/Library/Application\ Support/openpanda/capabilities.yaml \
+//	  go test ./internal/commander -run TestUserCardSchedulingOrder
 func TestUserCardSchedulingOrder(t *testing.T) {
-	card, err := ledger.LoadCard("/Users/xenith/Library/Application Support/openpanda/capabilities.yaml")
+	path := os.Getenv("PANDA_USER_CARD")
+	if path == "" {
+		t.Skip("set PANDA_USER_CARD=<capabilities.yaml> to check a live card's routing order")
+	}
+	card, err := ledger.LoadCard(path)
 	if err != nil {
-		t.Skipf("cannot load user capabilities.yaml: %v", err)
+		t.Fatalf("load %s: %v", path, err)
 	}
 	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 

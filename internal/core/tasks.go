@@ -245,9 +245,18 @@ type rowScanner interface {
 // decode leave their fields zeroed — the row itself is still usable (a
 // damaged requires_json must not strand the task's state machine) — and are
 // logged so a corrupt column is visible instead of silently reading as empty.
+//
+// Columns the base schema declares without NOT NULL (parent_id, project,
+// title, chain_json, created_at, updated_at) come in through Null* first.
+// Scanning one of them into a plain string aborts on the first NULL row, and
+// scanTasks aborts the whole list with it: a single row written before a
+// column existed took down /api/tasks for every task. A NULL here means "not
+// recorded", which is the same thing the zero value says.
 func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var t Task
-	var chainJSON string
+	var parentID, project, title sql.NullString
+	var chainJSON sql.NullString
+	var createdAt, updatedAt sql.NullInt64
 	var intent, spec, result sql.NullString
 	var lease sql.NullInt64
 	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
@@ -260,11 +269,11 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var screenOut int
 	var isolated int
 	var planID, stageID, needsJSON, inputsJSON, outputArt, scopePathsJSON sql.NullString
-	if err := row.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
+	if err := row.Scan(&t.TaskID, &parentID, &project, &title, &t.State, &t.OwnerNode,
 		&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
 		&result, &contextType, &contextHash, &complexity, &risk, &resource,
 		&requiresJSON, &approvalDisposition, &operationDecision, &lease,
-		&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
+		&createdAt, &updatedAt, &t.Authorized,
 		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &execWorkDir, &scheduled,
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
@@ -272,6 +281,11 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap, &scopePathsJSON, &isolated); err != nil {
 		return Task{}, err
 	}
+	t.ParentID = parentID.String
+	t.Project = project.String
+	t.Title = title.String
+	t.CreatedAt = createdAt.Int64
+	t.UpdatedAt = updatedAt.Int64
 	t.Isolate = isolated != 0
 	decode := func(col, raw string, v any) {
 		if raw == "" {
@@ -281,7 +295,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 			s.logger.Warn("decode task json column", "task", t.TaskID, "col", col, "err", err)
 		}
 	}
-	decode("chain_json", chainJSON, &t.Chain)
+	decode("chain_json", chainJSON.String, &t.Chain)
 	decode("requires_json", requiresJSON.String, &t.Requires)
 	decode("resource_keys_json", resourceKeysJSON.String, &t.ResourceKeys)
 	decode("scope_paths_json", scopePathsJSON.String, &t.ScopePaths)

@@ -2206,6 +2206,9 @@ func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
 	// maintain loop takes the exponential backoff path — two nodes with
 	// mismatched secrets otherwise redial each other every second forever.
 	if reason := conn.RejectReason(); reason != "" {
+		if reason == "binding" {
+			return ErrHelloBinding
+		}
 		return fmt.Errorf("%w: %s", ErrAuthRejected, reason)
 	}
 	// Our outbound conn ended. If the peer still reaches us on its own conn,
@@ -2229,6 +2232,27 @@ func (c *Core) MaintainPeer(ctx context.Context, addr string) error {
 		}
 	}
 	return nil
+}
+
+// helloBindTarget resolves the node id behind a dial address from the
+// addr→id bindings the last successful hello recorded. Empty when the address
+// has never produced a hello, when the lookup fails, or when it names this
+// node; the hello then goes out unbound and the receiver's legacy path
+// applies. The cost is one small table read per dial, and a dial only happens
+// on connect or reconnect (once per backoff step), never per message.
+func (c *Core) helloBindTarget(addr string) string {
+	if c.db == nil {
+		return ""
+	}
+	bindings, err := ledger.PeerAddrBindings(c.db)
+	if err != nil {
+		return ""
+	}
+	id := bindings[NormalizeDialAddr(addr)]
+	if id == "" || id == c.nodeID {
+		return ""
+	}
+	return id
 }
 
 // dial establishes a WS connection to addr and sends hello, advertising this
@@ -2267,6 +2291,12 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
+	// Address the hello at the node behind this address when the last
+	// successful hello recorded the binding. The receiver refuses a hello
+	// that names a different node, which is what stops a member from
+	// replaying our hello at a third peer; an address we have never seen
+	// produce a hello has no id to name, and goes out unbound.
+	to := c.helloBindTarget(addr)
 	hello := bus.HelloPayload{
 		NodeID:        c.nodeID,
 		Ver:           version.Version,
@@ -2275,9 +2305,13 @@ func (c *Core) dial(ctx context.Context, addr string) (*bus.Conn, error) {
 		Ts:            ts,
 		Nonce:         nonce,
 		Sig:           bus.HelloSigN(c.sharedSecretValue(), c.nodeID, ts, nonce),
+		To:            to,
 		UDPPort:       c.UDPPort(),
 		Caps:          c.helloCaps(),
 		Authoritative: c.edgeAuthority.Load(),
+	}
+	if to != "" {
+		hello.SigB = bus.HelloSigB(c.sharedSecretValue(), c.nodeID, to, ts, nonce)
 	}
 	conn.SetLocalNonce(nonce)
 	c.signHello(&hello, ts, nonce)
@@ -2355,6 +2389,9 @@ func (c *Core) signHello(p *bus.HelloPayload, ts int64, nonce string) {
 	}
 	p.PubKey = hex.EncodeToString(pub)
 	p.EdSig = bus.SignHelloEd(priv, p.NodeID, ts, nonce)
+	if p.To != "" {
+		p.EdSigB = bus.SignHelloEdB(priv, p.NodeID, p.To, ts, nonce)
+	}
 	if _, xpub, ok := c.nodeXKey(); ok {
 		p.XPub = hex.EncodeToString(xpub.Bytes())
 	}
@@ -2681,6 +2718,13 @@ func (c *Core) claimMsgID(env bus.Envelope) bool {
 // error keeps the log line saying "rejected", not "unreachable".
 var ErrAuthRejected = errors.New("peer rejected our hello")
 
+// ErrHelloBinding is the reject reason "binding": the peer has verified a
+// bound hello from us before and now refuses the unbound form. That is not a
+// secret mismatch — the remedy is to run a build that binds, or to clear the
+// peer (`nodes remove`, re-pair) if it was deliberately rolled back. It wraps
+// ErrAuthRejected so the backoff and custody behavior stay identical.
+var ErrHelloBinding = fmt.Errorf("%w: binding", ErrAuthRejected)
+
 // rejectHello answers a failed hello with hello_reject so the dialer learns
 // it was refused — not merely disconnected — then drops the conn. The frame
 // rides the still-unauthenticated leg deliberately: it carries a fixed reason
@@ -2736,8 +2780,10 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// (design §16 / P0-1). Fail closed: an unauthenticated or stale hello
 	// registers nothing and receives no reply — but it DOES receive a
 	// hello_reject first, so the dialer can tell "my credential is wrong"
-	// from "the network dropped us".
-	if !bus.VerifyHelloP(c.sharedSecretValue(), p, time.Now()) {
+	// from "the network dropped us". Our own id goes in so a hello bound to
+	// some other node — the shape a captured hello takes when a member
+	// replays it here — fails on the address, not just on the signature.
+	if !bus.VerifyHelloP(c.sharedSecretValue(), c.nodeID, p, time.Now()) {
 		c.logger.Warn("rejected hello: bad signature", "peer", p.NodeID)
 		c.rejectHello(conn, "auth")
 		return
@@ -2798,7 +2844,15 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	// same-second reconnect of theirs is rejected once, which its backoff
 	// retry clears.
 	c.mu.Lock()
-	key := p.NodeID + "|" + strconv.FormatInt(p.Ts, 10) + "|" + p.Sig
+	// The signature that actually authenticated this hello: the bound one for
+	// a hello addressed to us, the legacy one otherwise. Keying on p.Sig alone
+	// would let a bound hello, whose legacy Sig may be anything, share a key
+	// with an unrelated legacy hello.
+	authSig := p.Sig
+	if p.To != "" {
+		authSig = p.SigB
+	}
+	key := p.NodeID + "|" + strconv.FormatInt(p.Ts, 10) + "|" + authSig
 	if _, dup := c.helloSeen[key]; dup {
 		c.mu.Unlock()
 		c.logger.Warn("rejected hello: replayed signature", "peer", p.NodeID)
@@ -2816,6 +2870,27 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 		}
 	}
 	c.mu.Unlock()
+	// Downgrade guard: a node that has bound its hello before must keep
+	// binding. Without this, a member could take a captured bound hello,
+	// strip To/SigB/EdSigB, and replay the still-valid legacy signature at
+	// any peer — the binding would only defeat an attacker too careless to
+	// edit the payload. The record is written after a bound hello
+	// authenticates (see below), so a peer that has never bound, including
+	// one still running a pre-binding build, is unaffected.
+	//
+	// Only INBOUND conns count. The hello on an outbound conn is the peer's
+	// reply, which this side always binds, so recording from it would claim
+	// the peer binds its own dials too — and then refuse it the first time it
+	// dials us from an address it has not learned yet (the mutual-dial storm
+	// this package has tests for). What the record means is narrow and true:
+	// this peer has dialed us with a binding before.
+	if p.To == "" && c.db != nil && !conn.Outbound() && !ledger.SessionRowID(p.NodeID) {
+		if bound, err := ledger.HelloBindingKnown(c.db, p.NodeID); err == nil && bound {
+			c.logger.Warn("rejected hello: node that binds its hello sent an unbound one", "peer", p.NodeID)
+			c.rejectHello(conn, "binding")
+			return
+		}
+	}
 	conn.SetPeerID(p.NodeID)
 	// Wire-feature negotiation: the peer's advertised caps decide whether
 	// data-plane envelopes may leave as binary frames. Old peers send no
@@ -2868,6 +2943,17 @@ func (c *Core) handleHello(ctx context.Context, conn *bus.Conn, env bus.Envelope
 	if conn.Outbound() && !ledger.SessionRowID(p.NodeID) {
 		if err := ledger.RecordPeerAddr(c.db, NormalizeDialAddr(conn.DialAddr()), p.NodeID); err != nil {
 			c.logger.Debug("record peer addr binding", "peer", p.NodeID, "err", err)
+		}
+	}
+	// Remember that this peer binds the hello it dials with: from here on an
+	// unbound hello from it on an inbound conn is refused (the downgrade
+	// guard above). Only a hello that authenticated and reached this point
+	// counts, and only the inbound direction — an outbound conn's hello is
+	// the peer's reply, which this side always binds, so it says nothing
+	// about how the peer dials.
+	if p.To != "" && !conn.Outbound() && !ledger.SessionRowID(p.NodeID) {
+		if err := ledger.RecordHelloBinding(c.db, p.NodeID); err != nil {
+			c.logger.Debug("record hello binding", "peer", p.NodeID, "err", err)
 		}
 	}
 	// The verified reply is itself the reachability proof a probe reports on:
@@ -2986,6 +3072,9 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 	if host, _, err := net.SplitHostPort(conn.RemoteAddr()); err == nil {
 		observed = host
 	}
+	// The reply is addressed back to the node whose hello we just verified,
+	// so it can carry the bound signature unconditionally: the receiver is
+	// known here even when the dialer could not know us by address.
 	reply := bus.HelloPayload{
 		NodeID:        c.nodeID,
 		Ver:           version.Version,
@@ -2994,10 +3083,14 @@ func (c *Core) sendHelloReply(conn *bus.Conn, to string) {
 		Ts:            ts,
 		Nonce:         nonce,
 		Sig:           bus.HelloSigN(c.sharedSecretValue(), c.nodeID, ts, nonce),
+		To:            to,
 		UDPPort:       c.UDPPort(),
 		You:           observed,
 		Caps:          c.helloCaps(),
 		Authoritative: c.edgeAuthority.Load(),
+	}
+	if to != "" {
+		reply.SigB = bus.HelloSigB(c.sharedSecretValue(), c.nodeID, to, ts, nonce)
 	}
 	conn.SetLocalNonce(nonce)
 	c.signHello(&reply, ts, nonce)

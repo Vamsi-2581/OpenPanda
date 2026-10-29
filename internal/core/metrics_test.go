@@ -112,7 +112,11 @@ func TestTaskActivityByDay(t *testing.T) {
 // TestDelegationMetricRecordsFailure verifies that a failed remote execution
 // still writes a metric row with success=false.
 func TestDelegationMetricRecordsFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The whole submit→delegate→fail→adopt cycle takes ~4.6s with the race
+	// detector on, so a 5s budget left no room for a parallel package hogging
+	// the CPU — the test failed the gate at 5.02s while passing every time
+	// alone. The deadline guards against a hang; it is not measuring latency.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	entry := newCoreWithNative(t, "entry-fail", ledger.NativeAbility{

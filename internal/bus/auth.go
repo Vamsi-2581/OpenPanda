@@ -38,9 +38,41 @@ func HelloSig(secret, nodeID string, ts int64) string {
 // per-dial random value the caller carries in HelloPayload.Nonce; two hellos
 // that share a timestamp differ in the nonce, so each gets a unique signature
 // and the replay cache can reject one without collateral on the other.
+//
+// The signed fields are the DIALER's alone. A hello carrying this signature
+// therefore authenticates the sender to any holder of the secret, and a
+// captured one can be replayed to a third node inside the freshness window —
+// that node's replay cache has never seen it, and the replayer, being a
+// member, can derive the session key from the two nonces. HelloSigB closes
+// that hole by binding the receiver's node id; this form remains for peers
+// that predate the binding.
 func HelloSigN(secret, nodeID string, ts int64, nonce string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(nodeID + ":" + strconv.FormatInt(ts, 10) + ":" + nonce))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// helloBindDomain separates the receiver-bound hello signature from every
+// other HMAC this package mints, so no signature produced here can be read as
+// a different one.
+const helloBindDomain = "panda-hello-bind-v1"
+
+// helloBindBytes is the canonical byte string a receiver-bound hello signs:
+// the dialer id, the id of the node it is dialing, and the dial's timestamp
+// and nonce. Both ids are in the domain on purpose — the dialer half stops a
+// signature minted for another dialer from being reused, and the receiver
+// half is what a captured hello lacks when it is offered to the wrong node.
+func helloBindBytes(nodeID, to string, ts int64, nonce string) []byte {
+	return []byte(helloBindDomain + "\x00" + nodeID + "\x00" + to + "\x00" +
+		strconv.FormatInt(ts, 10) + "\x00" + nonce)
+}
+
+// HelloSigB signs a hello for one named receiver. A capture replayed at any
+// other node fails here, because that node's id is not the "to" this
+// signature was minted over.
+func HelloSigB(secret, nodeID, to string, ts int64, nonce string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(helloBindBytes(nodeID, to, ts, nonce))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -76,32 +108,61 @@ func VerifyHello(secret, nodeID string, ts int64, sig string, now time.Time) boo
 //     receiver still only records the key after this check, so identity
 //     metadata that fails verification never reaches the directory.
 //
+// receiverID is this node's own id. A hello that names a receiver ("to") must
+// name THIS one and carry the matching bound signature pair (SigB, and EdSigB
+// when it carries identity). Anything else is a hello minted for another
+// node — the shape a cross-node replay takes — and is refused outright. A
+// hello with no "to" is a peer that predates binding or one that could not
+// resolve us by address; it is verified the old way, and the caller decides
+// whether it may still be admitted (see the binding memory in core).
+//
 // Binding the advertised key to a node-id already known under a different key
 // (the pin check) is the caller's job — this function sees only the wire.
-func VerifyHelloP(secret string, p HelloPayload, now time.Time) bool {
+func VerifyHelloP(secret, receiverID string, p HelloPayload, now time.Time) bool {
 	if !helloFresh(p.Ts, now) {
 		return false
 	}
-	if secret == "" || p.Sig == "" {
+	if secret == "" {
 		return false
 	}
-	var member bool
-	if p.Nonce != "" {
-		member = hmac.Equal([]byte(HelloSigN(secret, p.NodeID, p.Ts, p.Nonce)), []byte(p.Sig))
+	if p.To != "" {
+		if receiverID == "" || p.To != receiverID || p.SigB == "" {
+			return false
+		}
+		if !hmac.Equal([]byte(HelloSigB(secret, p.NodeID, p.To, p.Ts, p.Nonce)), []byte(p.SigB)) {
+			return false
+		}
 	} else {
-		member = hmac.Equal([]byte(HelloSig(secret, p.NodeID, p.Ts)), []byte(p.Sig))
+		if p.Sig == "" {
+			return false
+		}
+		var member bool
+		if p.Nonce != "" {
+			member = hmac.Equal([]byte(HelloSigN(secret, p.NodeID, p.Ts, p.Nonce)), []byte(p.Sig))
+		} else {
+			member = hmac.Equal([]byte(HelloSig(secret, p.NodeID, p.Ts)), []byte(p.Sig))
+		}
+		if !member {
+			return false
+		}
 	}
-	if !member {
-		return false
-	}
-	if p.PubKey == "" && p.EdSig == "" {
+	if p.PubKey == "" && p.EdSig == "" && p.EdSigB == "" {
 		return true // legacy identity-less peer: membership is all it proves
 	}
-	if p.PubKey == "" || p.EdSig == "" {
+	if p.PubKey == "" {
 		return false // half an identity is a malformed (or stripped) hello
 	}
 	pub, err := hex.DecodeString(p.PubKey)
 	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	if p.To != "" {
+		if p.EdSigB == "" {
+			return false // a bound hello must bind the identity half too
+		}
+		return VerifyHelloEdB(pub, p.NodeID, p.To, p.Ts, p.Nonce, p.EdSigB)
+	}
+	if p.EdSig == "" {
 		return false
 	}
 	return VerifyHelloEd(pub, p.NodeID, p.Ts, p.Nonce, p.EdSig)

@@ -40,6 +40,12 @@ OpenPanda（**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **
 
 ## [Unreleased]
 
+### 修复
+
+- **抓到的 hello 不能再重放到别的节点** —— hello 现在写明它是签给谁的（`to`、`sig_b`、`ed_sig_b`），接收方拒绝指向别处的 hello。兼容性不变：不支持绑定的对端照旧入网，已经绑定过的节点则不得退回未绑定形态。
+- **澄清哨兵接受全角冒号** —— agent 写 `PANDA_QUESTION：`（中文输入法产出的冒号）现在会把任务停在待回答，而不是把这行留在正文里。
+- **一行损坏的任务不再让任务列表 500** —— 可空列（`chain_json`、`parent_id`、`project`、`title`、`created_at`、`updated_at`）按零值读出，`/api/tasks` 返回其余任务而不是整体失败。
+
 ## [0.1.1] - 2026-10-27 — "Constellation"
 
 **发布级版本线上的补丁版** —— 代号 **Constellation**：舰队仍是一片天空，接缝收紧了。入口客户端原生支持 OpenAI Responses 与 Google Gemini，一条对话的名册与节点 pin 进了终端，与控制台对齐，派发预算按你实际挑的团队计算，跨进程写入在文件锁后成为原子操作，任务可以钉自己的工作目录。项目不能再把一次已认证请求变成整盘浏览。配置与存储没变——无 schema 迁移、无改名的键——协议也没有新帧；唯一的格式变化是 UDP 数据报改为按对端密钥封帧，0.1.0 节点打不开它，所以整网要一起升级（见「破坏性变更」）。

@@ -10,6 +10,7 @@ package ledger
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -740,6 +741,12 @@ func PruneOffline(db *sql.DB, maxAgeSec int64, exclude []string) (int64, error) 
 		}
 		if k, _ := res.RowsAffected(); k > 0 {
 			n += k
+			// The id is gone from the directory, so its binding mark is dead
+			// weight: nothing will ever dial under it again and the table has
+			// no other pruner.
+			if _, err := db.Exec(`DELETE FROM hello_bindings WHERE node_id=?`, id); err != nil {
+				return n, fmt.Errorf("prune hello binding %s: %w", id, err)
+			}
 		}
 	}
 	return n, nil
@@ -758,6 +765,12 @@ func Remove(db *sql.DB, id string) (int64, error) {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("remove node %s: rows: %w", id, err)
+	}
+	// The hello-binding mark goes with the row. Removal is the operator's
+	// reset for a peer that was rebuilt or rolled back to a build without
+	// binding; keeping the mark would lock that peer out of this node.
+	if _, err := db.Exec(`DELETE FROM hello_bindings WHERE node_id=?`, id); err != nil {
+		return n, fmt.Errorf("remove hello binding %s: %w", id, err)
 	}
 	return n, nil
 }
@@ -859,6 +872,9 @@ func ReapKeySiblings(db *sql.DB, keepID, pubKey string, protected ...string) ([]
 	for _, id := range stale {
 		if _, err := db.Exec(`DELETE FROM employee_cache WHERE id=?`, id); err != nil {
 			return stale, fmt.Errorf("reap key sibling %s: %w", id, err)
+		}
+		if _, err := db.Exec(`DELETE FROM hello_bindings WHERE node_id=?`, id); err != nil {
+			return stale, fmt.Errorf("reap hello binding %s: %w", id, err)
 		}
 	}
 	return stale, nil
@@ -1052,6 +1068,42 @@ func PeerAddrBindings(db *sql.DB) (map[string]string, error) {
 		out[addr] = id
 	}
 	return out, rows.Err()
+}
+
+// RecordHelloBinding remembers that nodeID signs its hellos for the receiver
+// it names. The receiver refuses an unbound hello from a node on this list,
+// so a captured bound hello cannot be downgraded by stripping its binding
+// fields and replaying the legacy signature. Only a bound hello that
+// authenticated is recorded; a node that never binds (an older build) never
+// appears, so mixed fleets keep working.
+//
+// A node that is downgraded to a pre-binding build is therefore locked out
+// until the operator clears the peer (`panda nodes remove`, then re-pair) —
+// the same operator action a key re-install already requires.
+func RecordHelloBinding(db *sql.DB, nodeID string) error {
+	if db == nil || nodeID == "" {
+		return nil
+	}
+	_, err := db.Exec(`INSERT INTO hello_bindings (node_id, bound_at) VALUES (?, ?)
+		ON CONFLICT(node_id) DO UPDATE SET bound_at=excluded.bound_at`,
+		nodeID, storage.Now())
+	return err
+}
+
+// HelloBindingKnown reports whether nodeID has ever sent a bound hello here.
+func HelloBindingKnown(db *sql.DB, nodeID string) (bool, error) {
+	if db == nil || nodeID == "" {
+		return false, nil
+	}
+	var one int
+	err := db.QueryRow(`SELECT 1 FROM hello_bindings WHERE node_id = ?`, nodeID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // UpsertPending records a discovery beacon. first_seen survives across

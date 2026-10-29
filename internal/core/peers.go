@@ -103,7 +103,13 @@ func (c *Core) maintainPeerLoop(ctx context.Context, peer string) {
 			// peer that is simply off. Keep a sparse beat every ~20th failure
 			// so the outage stays greppable without owning the log.
 			if dialFails == 1 || dialFails%peerFailLogEvery == 0 {
-				if errors.Is(err, ErrAuthRejected) {
+				if errors.Is(err, ErrHelloBinding) {
+					// The peer wants the bound hello and this build does not
+					// send one, or it still remembers a binding from a build
+					// that did. Neither is a secret problem.
+					c.logger.Warn("peer requires a bound hello — update this node, or remove and re-pair the peer",
+						"peer", peer, "err", err, "consecutive", dialFails)
+				} else if errors.Is(err, ErrAuthRejected) {
 					// The peer is online and refusing our credential —
 					// the remedy is fixing shared_secret, not the network.
 					c.logger.Warn("peer rejecting our authentication — verify shared_secret matches the peer",

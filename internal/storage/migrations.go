@@ -95,6 +95,7 @@ var migrations = []Migration{
 	// mesh columns, so it moves behind them (the same collision v50 had).
 	{Version: 61, Name: "add_todos", Apply: migrateV61},
 	{Version: 62, Name: "add_employee_dir_signer", Apply: migrateV62},
+	{Version: 63, Name: "add_hello_bindings", Apply: migrateV63},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -120,6 +121,22 @@ func migrateV62(tx MigrationExec) error {
 		return err
 	}
 	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_employee_dir_signer ON employee_cache(dir_signer)`)
+	return err
+}
+
+// migrateV63 adds hello_bindings: the node ids that have sent a hello signed
+// for the receiver it names. A hello's legacy signature covers only the
+// sender, so a captured one replays at any node inside the freshness window; a
+// bound hello names its receiver and fails anywhere else. This table is what
+// stops the replay from simply being downgraded — a node known to bind, whose
+// hello arrives unbound, is refused rather than falling back to the legacy
+// path. Rows are written only after a bound hello authenticates, so a peer
+// running a build without binding never gets one and keeps working.
+func migrateV63(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS hello_bindings (
+		node_id TEXT PRIMARY KEY,
+		bound_at INTEGER NOT NULL
+	)`)
 	return err
 }
 
