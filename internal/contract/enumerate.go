@@ -36,6 +36,28 @@ const (
 // and running it during verification could have side effects.
 var interestingTarget = regexp.MustCompile(`(?i)(^|[-_])(test|tests|check|lint|vet|fmt|build|verify|ci|e2e|unit)([-_]|$)`)
 
+// verifyRank orders candidates for selection: the contract asks "did the work
+// hold up", which a test suite answers and a cross-compile does not. Without
+// this, a Makefile that lists eight build-* targets first crowded `test` out
+// of the cap entirely.
+func verifyRank(run string) int {
+	for _, w := range strings.Fields(run) {
+		lower := strings.ToLower(w)
+		switch {
+		case strings.Contains(lower, "test"), strings.Contains(lower, "check"),
+			strings.Contains(lower, "lint"), strings.Contains(lower, "vet"),
+			strings.Contains(lower, "e2e"), strings.Contains(lower, "verify"),
+			strings.Contains(lower, "unit"), strings.Contains(lower, "spec"):
+			return 0
+		case strings.Contains(lower, "fmt"):
+			return 1
+		case strings.Contains(lower, "build"):
+			return 2
+		}
+	}
+	return 3
+}
+
 // makeTargetRE matches a target declaration up to its colon. Go's regexp has
 // no lookahead, so the `:=` assignment check is done on the byte after the
 // match instead.
@@ -144,7 +166,9 @@ func Enumerate(root string) []Candidate {
 	seen := map[string]bool{}
 	add := func(id, run, source string) {
 		run = strings.TrimSpace(run)
-		if run == "" || seen[run] || len(out) >= maxCandidates {
+		// Collect a bounded surplus and rank afterwards: the cap has to be
+		// applied to the best entries, not the first ones read.
+		if run == "" || seen[run] || len(out) >= maxCandidates*4 {
 			return
 		}
 		if _, err := SplitCommand(run); err != nil {
@@ -174,6 +198,11 @@ func Enumerate(root string) []Candidate {
 	}
 	for _, run := range ciRuns(root) {
 		add("ci:"+sanitizeID(run), run, "CI workflow")
+	}
+	// Verification-shaped entries first, then the cap.
+	sort.SliceStable(out, func(i, j int) bool { return verifyRank(out[i].Run) < verifyRank(out[j].Run) })
+	if len(out) > maxCandidates {
+		out = out[:maxCandidates]
 	}
 	return out
 }
