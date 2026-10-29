@@ -830,13 +830,18 @@ def run_stream(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, on_line=None, on_stderr=N
     return proc.returncode, "".join(err_chunks), timed_out
 
 
-def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
+def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None, heartbeat_s=0):
     """One-shot runtime: capture stdout/stderr verbatim with a hard timeout.
 
     input (optional) is piped to the child's stdin — the generic adapter's
     {stdin} placeholder delivers the prompt this way, both for CLIs whose
     headless contract reads stdin and for prompts too large for an argv
     element. Unset keeps stdin at DEVNULL so a CLI that asks cannot block.
+
+    heartbeat_s (optional) emits a progress line that often while the child
+    runs. A CLI with no machine-readable stream is silent for the whole run,
+    and the Go side's silence watchdog cannot tell "thinking for four minutes"
+    from "hung" — a heartbeat turns that ambiguity into a visible wait.
 
     Returns (returncode, stdout, stderr). Raises subprocess.TimeoutExpired
     (with the whole tree already killed) when the deadline passes and
@@ -851,6 +856,16 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
         stderr=subprocess.PIPE, env=os.environ.copy(), cwd=cwd,
         **GROUP_KW,
     )
+    stop_beat = threading.Event()
+    if heartbeat_s and heartbeat_s > 0:
+        label = cmd[0] if cmd else "cli"
+
+        def _beat():
+            started = time.monotonic()
+            while not stop_beat.wait(heartbeat_s):
+                progress("%s still running (%ds)" % (label, int(time.monotonic() - started)))
+
+        threading.Thread(target=_beat, daemon=True).start()
     try:
         out, err = proc.communicate(
             input=input.encode("utf-8") if isinstance(input, str) else input,
@@ -859,10 +874,44 @@ def run_plain(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, input=None):
         kill_tree(proc)
         proc.communicate()  # reap + drain: the closed pipes return immediately
         raise
+    finally:
+        stop_beat.set()
     return proc.returncode, decode_cli(out or b""), decode_cli(err or b"")
 
 
-def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None):
+def resolve_binary(candidates, default=None):
+    """First candidate that resolves on PATH.
+
+    Registry and adapter used to disagree about a CLI's name: the roster probe
+    accepted any of the registry's binaries while the adapter spawned one
+    hardcoded name, so a `claude-code`-only install showed as installed and
+    then exited 127 at dispatch. Resolving here keeps both views on the same
+    answer.
+    """
+    for name in candidates:
+        if not name:
+            continue
+        hit = shutil.which(name)
+        if hit:
+            return name
+    return default or (candidates[0] if candidates else "")
+
+
+def prompt_argv(prompt):
+    """The prompt as a trailing argv element, guarded against leading '-'.
+
+    A prompt that begins with a dash ("- please fix …") was parsed as a flag
+    by every CLI that takes the message positionally. `--` ends option parsing;
+    it is only emitted when it is needed, so the common case keeps the argv the
+    contract tests pin.
+    """
+    if prompt.startswith("-"):
+        return ["--", prompt]
+    return [prompt]
+
+
+def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None,
+               heartbeat_s=0):
     """Full plain-adapter main loop: run cmd and emit the unified result.
 
     stdout is the result (verbatim); on failure the stderr diagnosis is the
@@ -883,7 +932,8 @@ def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None):
     emit_event("tool_use", id=label, name=label,
                input={"argc": max(0, len(cmd) - 1)})
     try:
-        returncode, out, err = run_plain(cmd, cwd=cwd, timeout=timeout, input=input)
+        returncode, out, err = run_plain(cmd, cwd=cwd, timeout=timeout, input=input,
+                                         heartbeat_s=heartbeat_s)
     except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError,
             OSError) as ex:
         if isinstance(ex, subprocess.TimeoutExpired):

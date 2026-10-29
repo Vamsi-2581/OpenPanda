@@ -19,6 +19,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/core"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/sessions"
@@ -173,6 +174,10 @@ type patchSessionRequest struct {
 	// "absent" (leave the roster alone) and "empty" (clear it — no
 	// restriction) stay distinguishable; the console sends [] to clear.
 	Team *[]string `json:"team,omitempty"`
+	// PermissionMode replaces the thread's permission policy (auto, manual,
+	// edits, plan, bypass). A pointer so "absent" (leave it alone) and ""
+	// (back to auto) stay distinguishable.
+	PermissionMode *string `json:"permission_mode,omitempty"`
 }
 
 // patchSession serves PATCH /api/sessions/{id} — updates title, project
@@ -219,6 +224,19 @@ func (h *handler) patchSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.sessions.SetTeam(id, team); err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if req.PermissionMode != nil {
+		mode := defense.NormalizeMode(*req.PermissionMode)
+		// NormalizeMode maps "" to auto, so an explicit clear works; anything
+		// else the caller sent must be a real policy, not a typo.
+		if *req.PermissionMode != "" && !defense.ValidMode(*req.PermissionMode) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown permission mode %q", *req.PermissionMode))
+			return
+		}
+		if err := h.sessions.SetPermissionMode(id, mode); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
 	}
@@ -492,6 +510,11 @@ type sessionAskRequest struct {
 	// empty list means "no restriction" — the same distinction PATCH makes,
 	// so a pick made a moment before sending does not need a second request.
 	Agents []string `json:"agents"`
+	// PermissionMode overrides the session's stored permission policy for
+	// this turn only. Absent means "use the thread's policy" — the console
+	// normally PATCHes the session when the user flips the switch, so a
+	// resumed thread on another device keeps the same answer.
+	PermissionMode string `json:"permission_mode"`
 }
 
 // statusEventOf is the JSON one progress event becomes on the SSE stream.
@@ -578,6 +601,20 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
+	}
+
+	// The conversation's permission policy: an explicit per-turn value wins
+	// over the thread's stored mode, and an unknown value is a client bug
+	// worth refusing rather than silently downgrading to auto — "the mode I
+	// picked was ignored" is exactly the failure this feature exists to
+	// prevent.
+	permission := sess.PermissionMode
+	if req.PermissionMode != "" {
+		if !defense.ValidMode(req.PermissionMode) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown permission mode %q", req.PermissionMode))
+			return
+		}
+		permission = req.PermissionMode
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -669,9 +706,18 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var streamed strings.Builder
 	cb := askengine.StreamCallbacks{
 		OnReasoning: func(text string) { send("reasoning", map[string]string{"text": text}) },
-		OnDelta:     func(text string) { send("delta", map[string]string{"text": text}) },
+		OnDelta: func(text string) {
+			// The streamed prose is the only copy of a reply that a cancelled
+			// turn will ever have: once execCtx dies the model is never asked
+			// again, so a turn that stops mid-answer used to persist the error
+			// line alone and lose everything the user had already read. Keep
+			// it here and file it with the stopped turn below.
+			streamed.WriteString(text)
+			send("delta", map[string]string{"text": text})
+		},
 		// OnProgress (not OnStatus) so the structured event survives: the
 		// browser re-localizes retry milestones from the fields instead of
 		// scraping the English fallback sentence.
@@ -700,8 +746,11 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// personal memory never enters a session prompt.
 	workDir := sess.Worktree
 	if workDir == "" && sess.Project != "" && h.projectStore != nil {
-		if p, err := h.projectStore.Get(sess.Project); err == nil && p.WorkDir != "" {
-			workDir = p.WorkDir
+		// UsableWorkDir: a row naming $HOME predates the breadth rule and would
+		// otherwise pin this turn's work dir to a path the executor refuses, so
+		// every ask in the thread fails on a rule the user never invoked.
+		if p, err := h.projectStore.Get(sess.Project); err == nil {
+			workDir = p.UsableWorkDir()
 		}
 	}
 	if workDir == "" {
@@ -741,11 +790,12 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 	// included it would overstate a fast reply.
 	askStarted := time.Now()
 	out, err := eng.AskTurnsScoped(execCtx, history, req.Prompt, askengine.AskScope{
-		Project:   sess.Project,
-		WorkDir:   workDir,
-		SessionID: sess.ID,
-		Node:      req.Node,
-		Agents:    team,
+		Project:        sess.Project,
+		WorkDir:        workDir,
+		SessionID:      sess.ID,
+		Node:           req.Node,
+		Agents:         team,
+		PermissionMode: permission,
 	}, req.Authorize, cb)
 	askDuration := time.Since(askStarted).Milliseconds()
 	if err != nil {
@@ -789,8 +839,23 @@ func (h *handler) sessionAsk(w http.ResponseWriter, r *http.Request) {
 		send("error", errPayload)
 		// The failed turn carries its duration too: "it died after 40 seconds"
 		// is the first thing you want to know about a timeout.
+		//
+		// A stopped turn keeps the prose it already showed: the reply is not
+		// coming back — cancellation ends the ask — so filing only the error
+		// line would erase from the thread everything the user just read. The
+		// partial answer is filed as the turn's text and the stop note rides
+		// along, rather than the other way round.
+		text := "⚠ " + msg
+		kind := "error"
+		if status == core.StateCancelled {
+			kind = "answer"
+			text = strings.TrimRight(streamed.String(), " \t\r\n")
+			if text == "" {
+				text = msg
+			}
+		}
 		_, _ = h.sessions.AppendTurn(sess.ID, sessions.Turn{
-			Role: "assistant", Text: "⚠ " + msg, Kind: "error", Code: code,
+			Role: "assistant", Text: text, Kind: kind, Code: code,
 			ErrKind: errKind, ErrDetail: errDetail,
 			DurationMS: askDuration,
 		})

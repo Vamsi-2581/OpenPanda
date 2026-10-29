@@ -21,6 +21,50 @@ const (
 	TierIrreversible = 2
 )
 
+// Permission modes — the per-conversation answer to "how much may this thread
+// do without asking". They sit above the tier model: the tier decides what an
+// operation *is*, the mode decides what may run unseen.
+//
+//	ModeAuto    reversible operations run; irreversible ones ask. The default.
+//	ModeManual  every state-changing operation asks, however cheap. Reads and
+//	            answering stay free, so a conversation remains useful.
+//	ModeEdits   file edits are accepted without asking; shell commands follow
+//	            the auto rules. This is what an agent CLI's own "accept edits"
+//	            switch already does, stated as a conversation policy.
+//	ModePlan    nothing changes: agents run with the read-only tool face and
+//	            native commands are held for a foreground answer.
+//	ModeBypass  nothing asks, irreversible operations included. Audited.
+const (
+	ModeAuto   = "auto"
+	ModeManual = "manual"
+	ModeEdits  = "edits"
+	ModePlan   = "plan"
+	ModeBypass = "bypass"
+)
+
+// NormalizeMode maps an unknown or empty mode to ModeAuto. A mode is a
+// tightening policy, so an unrecognized value must never grant more than the
+// default — but it must not refuse the ask either, which is why this is a
+// fallback rather than an error.
+func NormalizeMode(mode string) string {
+	switch mode {
+	case ModeAuto, ModeManual, ModeEdits, ModePlan, ModeBypass:
+		return mode
+	default:
+		return ModeAuto
+	}
+}
+
+// ValidMode reports whether mode names a known policy. Used by setters that
+// must reject a typo instead of silently falling back to auto.
+func ValidMode(mode string) bool {
+	switch mode {
+	case ModeAuto, ModeManual, ModeEdits, ModePlan, ModeBypass:
+		return true
+	}
+	return false
+}
+
 // ErrNotAuthorized reports a Tier-2 command executed without authorization.
 var ErrNotAuthorized = errors.New("defense: tier-2 command requires authorization")
 

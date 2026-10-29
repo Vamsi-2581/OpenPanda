@@ -11,6 +11,19 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
+// isolateTeamTest moves the per-user dirs under temp. The bare-roster path
+// falls back to config.Default() when cliConfigPath names no file, and
+// resolving the active project opens that default store — against the real
+// ~/Library/Application Support/openpanda unless HOME moves too.
+func isolateTeamTest(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("APPDATA", home)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+}
+
 // TestParseTeamCommand pins the /team grammar: a bare list is a set, verbs
 // mutate, and missing operands are a usage error rather than a silent clear.
 func TestParseTeamCommand(t *testing.T) {
@@ -73,7 +86,7 @@ func TestNormalizeTeamCanonicalises(t *testing.T) {
 // and removed by an empty set — the "no restriction" state is the absence of a
 // file, not an empty pick.
 func TestBareTeamRoundTrip(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	isolateTeamTest(t)
 	old := cliConfigPath
 	cliConfigPath = filepath.Join(t.TempDir(), "missing.yaml") // no ambient project / DB
 	t.Cleanup(func() { cliConfigPath = old })
@@ -109,7 +122,7 @@ func TestBareTeamRoundTrip(t *testing.T) {
 // TestTeamCommandAppliesDelta covers the user-facing /team verbs against a
 // real bare roster file.
 func TestTeamCommandAppliesDelta(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	isolateTeamTest(t)
 	old := cliConfigPath
 	cliConfigPath = filepath.Join(t.TempDir(), "missing.yaml")
 	t.Cleanup(func() { cliConfigPath = old })
@@ -139,7 +152,7 @@ func TestTeamCommandAppliesDelta(t *testing.T) {
 // conversation's roster; a one-shot ask does not, and an explicit --team always
 // wins.
 func TestResolveAskTeamInheritsBarePick(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	isolateTeamTest(t)
 	old := cliConfigPath
 	cliConfigPath = filepath.Join(t.TempDir(), "missing.yaml")
 	t.Cleanup(func() { cliConfigPath = old })

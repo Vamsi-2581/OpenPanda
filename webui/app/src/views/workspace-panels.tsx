@@ -90,6 +90,10 @@ export interface WorkspacePanelsProps {
   runningLabel: string
   /** A machine that advertises no agents at all. */
   noneLabel: string
+  /** Bumped by the parent's 整理布局 control. Every increment throws the
+   *  saved arrangement away and re-forms the tidy row: the one guaranteed way
+   *  back from a card parked somewhere the reader cannot see. */
+  resetSignal?: number
 }
 
 /** The agent a task's newest event names, if it names one. The ledger stamps
@@ -160,6 +164,47 @@ function writeSlots(slots: Record<string, Slot>, live: Set<string>): void {
   } catch {
     /* preference not saved — the arrangement still holds for this visit */
   }
+}
+
+/** The ancestor that actually scrolls the surface. `.ws-panels-grid` never
+ *  does — `.ws-map` does — so reading `scrollLeft`/`scrollTop` off the grid
+ *  returned 0 and a card dropped on a scrolled surface landed somewhere else
+ *  entirely. */
+function scrollerOf(el: HTMLElement | null): HTMLElement | null {
+  for (let n = el?.parentElement ?? null; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY
+    if (oy === 'auto' || oy === 'scroll') return n
+  }
+  return null
+}
+
+/** The box a pointer can actually reach, in the grid's own coordinates: the
+ *  scroller's visible window shifted by the current scroll offset. A card
+ *  dropped outside it used to be written to localStorage at a y the reader
+ *  could not scroll to, which is how a panel vanished for good. */
+function reachableBand(
+  grid: HTMLElement,
+  view: HTMLElement | null,
+  inset: number,
+): { x0: number; x1: number; y0: number; y1: number } {
+  const gr = grid.getBoundingClientRect()
+  const vr = view?.getBoundingClientRect() ?? gr
+  const ox = view?.scrollLeft ?? 0
+  const oy = view?.scrollTop ?? 0
+  return {
+    x0: Math.max(0, vr.left + inset - gr.left + ox),
+    x1: Math.max(0, vr.right - inset - gr.left + ox),
+    y0: Math.max(0, vr.top + inset - gr.top + oy),
+    y1: Math.max(0, vr.bottom - inset - gr.top + oy),
+  }
+}
+
+/** Pin a panel's top-left into the reachable band: the result is the nearest
+ *  position in [lo, hi] that keeps a `size`-long panel inside it, so a card
+ *  dropped past an edge lands flush against it rather than out of sight. */
+function clampInto(v: number, lo: number, hi: number, size: number): number {
+  const top = Math.min(v, Math.max(lo, hi - size))
+  return Math.max(lo, top)
 }
 
 interface Press {
@@ -236,11 +281,17 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
       if (!cur) return
       const grid = gridRef.current
       if (grid) {
-        // Viewport coordinates back into the grid's own frame: the surface
-        // scrolls, so its scroll offset is part of the answer.
+        const view = scrollerOf(grid)
+        // Viewport coordinates back into the grid's own frame. The scroll
+        // offset comes from the surface, not from the grid (which never
+        // scrolls), and the result is pinned to the band the pointer can
+        // reach so a card can never be parked out of sight.
         const gr = grid.getBoundingClientRect()
-        const x = Math.max(0, cur.x - cur.grabX - gr.left + grid.scrollLeft)
-        const y = Math.max(0, cur.y - cur.grabY - gr.top + grid.scrollTop)
+        const band = reachableBand(grid, view, 8)
+        const rawX = cur.x - cur.grabX - gr.left + (view?.scrollLeft ?? 0)
+        const rawY = cur.y - cur.grabY - gr.top + (view?.scrollTop ?? 0)
+        const x = clampInto(rawX, band.x0, band.x1, cur.w)
+        const y = clampInto(rawY, band.y0, band.y1, cur.h)
         setSlots((prev) => {
           const next = { ...prev, [cur.id]: { x, y, w: cur.w, h: cur.h } }
           writeSlots(next, new Set(devices.map((d) => d.id)))
@@ -272,6 +323,20 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
     return () => document.removeEventListener('keydown', onKey, true)
   }, [dragging])
 
+  // Re-form the tidy row on request. The saved arrangement is a preference,
+  // not state, so forgetting it is a complete recovery.
+  const resetSignal = props.resetSignal ?? 0
+  useEffect(() => {
+    if (!resetSignal) return
+    try {
+      localStorage.removeItem(POS_KEY)
+    } catch {
+      /* a blocked localStorage has nothing saved to forget */
+    }
+    setSlots({})
+    applyDrag(null)
+  }, [resetSignal])
+
   // Freeze the tidy layout. The panels render in a wrapping row first; this
   // measures the pixels they landed on and turns them into coordinates, so
   // the first paint is unchanged and every later frame is absolute. A machine
@@ -280,16 +345,39 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
   useLayoutEffect(() => {
     const grid = gridRef.current
     if (!grid || dragRef.current) return
-    const missing = devices.filter((d) => !slots[d.id])
+    // A saved arrangement outlives the window it was made in. Pull every
+    // stored card back inside the surface that exists now — a narrower
+    // window, or a card stored before the band clamp existed, otherwise
+    // leaves a panel parked past the right edge with no way back.
+    const maxX = Math.max(0, grid.clientWidth)
+    const repaired: Record<string, Slot> = {}
+    let changed = false
+    for (const [id, s] of Object.entries(slots)) {
+      // A y this far down predates the band clamp and has no scroll extent
+      // under it; dropping the entry re-forms the row instead of leaving a
+      // card nobody can reach.
+      if (!Number.isFinite(s.y) || s.y < 0 || s.y > 20_000) {
+        changed = true
+        continue
+      }
+      const x = Math.min(Math.max(0, s.x), Math.max(0, maxX - s.w))
+      if (x !== s.x) changed = true
+      repaired[id] = { ...s, x }
+    }
+    if (changed) {
+      setSlots(repaired)
+      writeSlots(repaired, new Set(devices.map((d) => d.id)))
+    }
+    const missing = devices.filter((d) => !repaired[d.id])
     if (missing.length === 0) return
     const gr = grid.getBoundingClientRect()
-    const next = { ...slots }
+    const next = { ...repaired }
     // The first pass is the tidy row and is measured as drawn. A machine that
     // turns up later has no row to be part of — the rest of the fleet is
     // already pinned — so it goes under the lowest card instead.
-    const firstPass = Object.keys(slots).length === 0
+    const firstPass = Object.keys(repaired).length === 0
     let floor = 0
-    for (const s of Object.values(slots)) floor = Math.max(floor, s.y + s.h)
+    for (const s of Object.values(repaired)) floor = Math.max(floor, s.y + s.h)
     for (const d of missing) {
       const el = els.current.get(d.id)
       if (!el) continue
@@ -299,7 +387,7 @@ export function WorkspacePanels(props: WorkspacePanelsProps) {
         : { x: 0, y: floor + 18, w: r.width, h: r.height }
       floor = Math.max(floor, next[d.id]!.y + r.height)
     }
-    if (Object.keys(next).length !== Object.keys(slots).length) setSlots(next)
+    if (Object.keys(next).length !== Object.keys(repaired).length) setSlots(next)
   })
 
   if (devices.length === 0) return <p class="dim ws-empty">{emptyLabel}</p>

@@ -95,6 +95,10 @@ var migrations = []Migration{
 	// mesh columns, so it moves behind them (the same collision v50 had).
 	{Version: 61, Name: "add_todos", Apply: migrateV61},
 	{Version: 62, Name: "add_employee_dir_signer", Apply: migrateV62},
+	{Version: 63, Name: "add_hello_bindings", Apply: migrateV63},
+	// The delivery contract's verification tables arrived while upstream was
+	// claiming 63 for hello bindings, so they move behind it.
+	{Version: 64, Name: "add_task_checks_and_verification", Apply: migrateV64},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -120,6 +124,22 @@ func migrateV62(tx MigrationExec) error {
 		return err
 	}
 	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_employee_dir_signer ON employee_cache(dir_signer)`)
+	return err
+}
+
+// migrateV63 adds hello_bindings: the node ids that have sent a hello signed
+// for the receiver it names. A hello's legacy signature covers only the
+// sender, so a captured one replays at any node inside the freshness window; a
+// bound hello names its receiver and fails anywhere else. This table is what
+// stops the replay from simply being downgraded — a node known to bind, whose
+// hello arrives unbound, is refused rather than falling back to the legacy
+// path. Rows are written only after a bound hello authenticates, so a peer
+// running a build without binding never gets one and keeps working.
+func migrateV63(tx MigrationExec) error {
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS hello_bindings (
+		node_id TEXT PRIMARY KEY,
+		bound_at INTEGER NOT NULL
+	)`)
 	return err
 }
 
@@ -1509,4 +1529,40 @@ func migrateV61(tx MigrationExec) error {
 	}
 	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(due_at)`)
 	return err
+}
+
+// migrateV63 adds the acceptance layer: tasks.verification carries the
+// contract verdict (verified / failed / partial / skipped, empty for tasks
+// that never had one), and task_checks records every check the orchestrator
+// ran, by phase. The rows are evidence, not a cache: the baseline phase is
+// what lets the report say "this suite was already red" instead of blaming
+// the run, and the final phase is what a task is actually judged on.
+func migrateV64(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_checks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL,
+		phase TEXT NOT NULL,
+		check_id TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT 'command',
+		command TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		exit_code INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		output_head TEXT NOT NULL DEFAULT '',
+		output_tail TEXT NOT NULL DEFAULT '',
+		reason TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_task_checks_task ON task_checks(task_id, id)`); err != nil {
+		return err
+	}
+	// Legacy fixtures migrate from a partial schema; without a tasks table
+	// there is nothing to stamp. The same guard every column migration uses.
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "verification", "TEXT NOT NULL DEFAULT ''")
 }

@@ -2804,3 +2804,44 @@ func TestSettleExpiredDeadlineStillBindsRotated(t *testing.T) {
 		t.Fatalf("deadline-expired rotated row = %s, want failed", got.State)
 	}
 }
+
+// TestListSurvivesNullColumns covers the row an older schema leaves behind.
+// The baseline tasks table declares parent_id, project, title, chain_json,
+// created_at and updated_at without NOT NULL, so a row written before a column
+// existed carries NULL there. Scanning one of those into a plain value fails,
+// and scanTasks aborts the whole list with it — one such row took down
+// /api/tasks for every task. A NULL means "not recorded", which is exactly
+// what the zero value says.
+func TestListSurvivesNullColumns(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, err := s.db.Exec(`INSERT INTO tasks
+		(task_id, state, owner_node, attempt_id, state_version)
+		VALUES ('legacy-null', ?, 'root', 'a1', 0)`, StateQueued); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	tasks, err := s.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("ListActive over a NULL-column row: %v", err)
+	}
+	var found bool
+	for _, tk := range tasks {
+		if tk.TaskID != "legacy-null" {
+			continue
+		}
+		found = true
+		if tk.ParentID != "" || tk.Project != "" || tk.Title != "" ||
+			len(tk.Chain) != 0 || tk.CreatedAt != 0 || tk.UpdatedAt != 0 {
+			t.Fatalf("NULL columns hydrated as non-zero: %+v", tk)
+		}
+	}
+	if !found {
+		t.Fatal("legacy row missing from the list")
+	}
+	if _, err := s.ListByState(ctx, StateQueued); err != nil {
+		t.Fatalf("ListByState over a NULL-column row: %v", err)
+	}
+	if _, err := s.Get(ctx, "legacy-null"); err != nil {
+		t.Fatalf("Get over a NULL-column row: %v", err)
+	}
+}

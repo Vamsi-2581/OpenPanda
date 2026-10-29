@@ -43,6 +43,16 @@ type HelloPayload struct {
 	Sig    string          `json:"sig"`
 	PubKey string          `json:"pub_key,omitempty"` // Ed25519 public key hex (cryptographic identity)
 	EdSig  string          `json:"ed_sig,omitempty"`  // Ed25519 signature over NodeID:Ts:Nonce
+	// To names the node this hello is addressed to. When set, the hello is
+	// signed for that receiver alone (SigB/EdSigB) and a receiver will refuse
+	// it unless the id is its own — the cross-node replay a member could
+	// otherwise mount with a captured hello inside the freshness window.
+	// Empty means the sender predates binding, or could not resolve the
+	// address it dialed to a node id; such a hello is verified the legacy way
+	// and SigB/EdSigB carry nothing.
+	To     string `json:"to,omitempty"`
+	SigB   string `json:"sig_b,omitempty"`    // HMAC over NodeID:To:Ts:Nonce
+	EdSigB string `json:"ed_sig_b,omitempty"` // Ed25519 over the same bytes
 	// XPub is the node's X25519 identity key (hex) — the second half of the
 	// dual-key identity (cross-network mesh design §3): Ed25519 signs,
 	// X25519 agrees transit keys. It is self-asserted like UDPPort: only
@@ -84,9 +94,11 @@ type HelloPayload struct {
 // whose hello failed. Reason is a stable machine-readable code:
 // "auth" (signature/secret mismatch — the usual case, and the one a dialer
 // must surface so an operator knows the peer is online but rejecting us),
-// "identity" (claimed id collides or re-keys a verified identity), and
-// "replay" (a consumed signature). It deliberately carries nothing derived
-// from the secret — the frame rides the still-unauthenticated channel.
+// "identity" (claimed id collides or re-keys a verified identity),
+// "binding" (the peer has bound its hello before and sent an unbound one —
+// a downgrade, or a rollback to a build without binding), and "replay" (a
+// consumed signature). It deliberately carries nothing derived from the
+// secret — the frame rides the still-unauthenticated channel.
 type HelloRejectPayload struct {
 	Reason string `json:"reason"`
 }
@@ -725,10 +737,22 @@ type TaskResultPayload struct {
 	// WorkDir is the workspace the executor actually ran in — the derived
 	// directory, not the submitter's pin — so the origin can locate the
 	// produced files on the machine that ran the work.
-	WorkDir        string `json:"work_dir,omitempty"`
-	Agent          string `json:"agent,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Injected       bool   `json:"injected,omitempty"`
+	WorkDir  string `json:"work_dir,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Injected bool   `json:"injected,omitempty"`
+	// Verified and Verification carry the delivery-contract verdict. Verified
+	// is true only when every selected check ran and passed; Verification is
+	// the status word (verified|failed|partial|skipped) and is empty when the
+	// task carried no contract. A done task without Verified is exactly what a
+	// surface must not present as an unqualified success.
+	Verified     bool   `json:"verified,omitempty"`
+	Verification string `json:"verification,omitempty"`
+	// NoRetry marks a verdict a blind re-run cannot improve: the work ran to
+	// completion and failed its contract, so the orchestrator's retry budget
+	// must not re-execute the same task and pay for the same result. The row
+	// stays failed; the caller or a human decides what happens next.
+	NoRetry        bool   `json:"no_retry,omitempty"`
 	DurationMS     int64  `json:"duration_ms,omitempty"`
 	SessionID      string `json:"session_id,omitempty"`
 	AgentSessionID string `json:"agent_session_id,omitempty"`

@@ -961,8 +961,11 @@ def main():
 
     # Model resolution:
     # Always pass the build's permission flag so non-interactive runs
-    # auto-approve tool permissions. Keep print-logs=false to avoid polluting
-    # stdout with internal runtime diagnostics.
+    # auto-approve tool permissions. print-logs stays ON for the streaming
+    # run on purpose: opencode writes those diagnostics to stderr, which the
+    # harness drains for progress, while stdout carries only the --format json
+    # event stream. (The plain path below keeps it off — nothing parses its
+    # stdout, so the logs would only add noise to the result text.)
     base = ["opencode", "run", "--print-logs=true"] + auto
     if flags["format"]:
         base += ["--format", "json"]
@@ -1106,7 +1109,7 @@ def main():
         # already minted rather than re-entering at the outer handle.
         if resumed:
             c += ["--session", resumed]
-        c.append(prompt)
+        c += harness.prompt_argv(prompt)
         return c
 
     if not flags["format"]:
@@ -1250,7 +1253,7 @@ def _run_plain(prompt, cwd, timeout, resume, model, auto,
         plain += ["--agent", agent_face]
     if resume:
         plain += ["--session", resume]
-    plain.append(prompt)
+    plain += harness.prompt_argv(prompt)
     try:
         returncode, text, err = harness.run_plain(plain, cwd=cwd, timeout=timeout)
     except subprocess.TimeoutExpired:

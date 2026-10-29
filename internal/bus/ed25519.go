@@ -36,6 +36,25 @@ func VerifyHelloEd(pubKey ed25519.PublicKey, nodeID string, ts int64, nonce stri
 	return ed25519.Verify(pubKey, msg, sig)
 }
 
+// SignHelloEdB signs a hello for one named receiver — the identity half of
+// the binding HelloSigB provides for the HMAC half. The signed bytes cover
+// both node ids, so a captured hello replayed at a third node cannot be made
+// to verify there even by a member holding the shared secret.
+func SignHelloEdB(privKey ed25519.PrivateKey, nodeID, to string, ts int64, nonce string) string {
+	sig := ed25519.Sign(privKey, helloBindBytes(nodeID, to, ts, nonce))
+	return hex.EncodeToString(sig)
+}
+
+// VerifyHelloEdB checks a receiver-bound hello signature against the sender's
+// public key and the receiver it names.
+func VerifyHelloEdB(pubKey ed25519.PublicKey, nodeID, to string, ts int64, nonce string, sigHex string) bool {
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(pubKey, helloBindBytes(nodeID, to, ts, nonce), sig)
+}
+
 // AuthMsgBytes constructs the canonical byte slice for a signed Tier-2
 // authorization grant. This v1 form binds only the task id — it approves a
 // NAME, not a task, and a relay that rewrites the payload between origin and

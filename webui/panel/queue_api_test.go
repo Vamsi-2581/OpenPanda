@@ -41,6 +41,7 @@ capacity:
 // POST /api/tasks can enqueue and actually execute a task.
 func newQueueEngine(t *testing.T) *askengine.Engine {
 	t.Helper()
+	isolateUserDirs(t)
 	dir := t.TempDir()
 	cardPath := filepath.Join(dir, "capabilities.yaml")
 	if err := os.WriteFile(cardPath, []byte(queueCardYAML), 0o644); err != nil {
@@ -77,6 +78,7 @@ func newQueueEngine(t *testing.T) *askengine.Engine {
 
 func newApprovalQueueEngine(t *testing.T) (*askengine.Engine, string) {
 	t.Helper()
+	isolateUserDirs(t)
 	dir := t.TempDir()
 	counter := filepath.Join(dir, "runs.txt")
 	script := filepath.Join(dir, "run-once.sh")

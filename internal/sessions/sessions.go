@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/util"
 )
 
@@ -139,6 +140,13 @@ type Session struct {
 	// not one message, and a thread reopened on another device must remember
 	// which hands are allowed to touch it.
 	Team []string `json:"team,omitempty"`
+	// PermissionMode is the conversation's permission policy (defense.Mode*):
+	// how much this thread may do before asking. It lives on the session for
+	// the same reason Team does — it describes the conversation, not one
+	// message, and a thread reopened on another device must remember how much
+	// autonomy the user granted it. Empty means "never picked", which reads
+	// as auto.
+	PermissionMode string `json:"permission_mode,omitempty"`
 }
 
 // Operation is the latest durable ask operation for a session. It lets a
@@ -619,7 +627,34 @@ func (s *Store) SetTeam(id string, team []string) error {
 	return s.save(sess)
 }
 
-// SetTitle updates the title of a session.
+// SetPermissionMode writes the conversation's permission policy. An empty
+// mode clears it (back to auto). Validation lives here because every surface
+// funnels through this setter: a typo must be refused, never normalized into
+// a policy the user did not choose.
+func (s *Store) SetPermissionMode(id, mode string) error {
+	if mode != "" && !defense.ValidMode(mode) {
+		return fmt.Errorf("sessions: unknown permission mode %q", mode)
+	}
+	unlock, err := lockStore(s.root)
+	if err != nil {
+		return fmt.Errorf("sessions: lock: %w", err)
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	if mode == defense.ModeAuto {
+		mode = ""
+	}
+	sess.PermissionMode = mode
+	sess.UpdatedAt = time.Now()
+	return s.save(sess)
+}
+
+// SetTitle updates a session's title.
 func (s *Store) SetTitle(id, title string) error {
 	unlock, err := lockStore(s.root)
 	if err != nil {

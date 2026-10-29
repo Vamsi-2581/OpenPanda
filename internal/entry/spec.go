@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
 
@@ -51,6 +52,13 @@ func ValidateTaskSpec(t *TaskSpec) error {
 	}
 	if err := validateActionSpec(t.Spec.ActionSpec); err != nil {
 		return err
+	}
+	if len(t.Spec.Acceptance) > 0 {
+		checks, err := contract.Validate(t.Spec.Acceptance)
+		if err != nil {
+			return fmt.Errorf("entry: %w", err)
+		}
+		t.Spec.Acceptance = checks
 	}
 	return nil
 }

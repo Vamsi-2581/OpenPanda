@@ -40,6 +40,29 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Añadido
+
+### Corregido
+
+## [0.1.2] - 2026-10-29 — "Constellation"
+
+**El parche de la línea de calidad** — nombre en clave **Constellation**: una conversación puede declarar su grado de autonomía y una tarea puede llevar la evidencia de su propio éxito. Cinco modos de permisos se sitúan sobre los niveles de comando y viajan con cada especificación de tarea; `panda task add --accept` convierte una definición de éxito en comprobaciones que el orquestador ejecuta, y el ejecutor rechaza las escritas por otro nodo o irreversibles. La consola recibe el mismo trato: los paneles del espacio de trabajo ya no se pierden fuera de alcance, el tablero de pendientes añade sin desvío y un agente no instalado no es seleccionable. La configuración y los datos guardados son compatibles; el esquema gana una migración (v64) para las tablas del contrato, que se aplica sola.
+
+### Añadido
+
+- **Una conversación tiene modo de permisos** — automático, manual, aceptar ediciones, plan y omitir permisos, elegido en el compositor y guardado con el hilo. El modo viaja en cada especificación de tarea, así que el ejecutor aplica la política elegida: manual detiene cada cambio para una respuesta en primer plano, plan da al agente la cara de solo lectura y detiene los comandos nativos, omitir ejecuta todo y queda auditado.
+- **Una tarea puede llevar un contrato de aceptación ejecutable** — `panda task add --accept "go test ./..."` (o `--accept auto`) ejecuta las comprobaciones al terminar el agente y las registra en la tarea.
+
+### Corregido
+
+- **Un panel del espacio de trabajo ya no puede arrastrarse fuera de alcance** — la posición se limita a la banda visible (el desplazamiento se leía del elemento equivocado), las coordenadas guardadas fuera del lienzo se corrigen al cargar y el control «Ordenar diseño» rearma la fila.
+- **El tablero de pendientes añade sin desvío** — el campo está siempre visible y `n` lleva a él desde cualquier sitio, los filtros muestran su recuento y un tablero vacío es una línea, no tres columnas vacías.
+- **Un agente que este nodo no tiene no es un miembro elegible** — la fila explica por qué está deshabilitada y solo se puede pulsar para quitar una elección obsoleta.
+- **Un hello capturado ya no se reproduce en otro nodo** —— el hello nombra al receptor para el que fue firmado (`to`, `sig_b`, `ed_sig_b`), y un nodo rechaza un hello dirigido a otro. El despliegue es compatible hacia atrás: un par que no puede vincular sigue siendo admitido, y un nodo que ya vinculó no puede volver a la forma sin vínculo.
+- **El marcador de aclaración acepta dos puntos de ancho completo** —— un agente que escribe `PANDA_QUESTION：` (los dos puntos que produce un IME chino) ahora deja la tarea en espera de respuesta en lugar de dejar la línea en el texto.
+- **Una fila de tarea dañada ya no hace fallar la lista con 500** —— las columnas anulables (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) se leen como valores cero, y `/api/tasks` sirve el resto del tablero.
+- **Una comprobación de aceptación ya no es una segunda vía de ejecución** — las comprobaciones de una tarea delegada se escribían en otro nodo y se ejecutaban aquí fuera del control de niveles; el campo se descarta en el límite del cable, los comandos irreversibles se rechazan y se registran como omitidos, los pasos de CI deben nombrar un subcomando de verificación (`npm publish` o `make release` ya no entran) y una comprobación de artefacto sobre `.` —que siempre pasa— se rechaza. La enumeración se limita al techo del contrato y se ordena, así que `--accept auto` elige pruebas antes que compilaciones cruzadas.
+
 ## [0.1.1] - 2026-10-27 — "Constellation"
 
 **El parche sobre la línea de calidad de lanzamiento** — nombre en clave **Constellation**: la flota sigue siendo un solo cielo, con las costuras apretadas. El cliente de entrada habla OpenAI Responses y Google Gemini de forma nativa, la plantilla de un hilo y su fijación de nodo llegan al terminal junto a la consola, el presupuesto de despacho sigue al equipo que elegiste, las escrituras entre procesos son atómicas tras un bloqueo de archivo y una tarea puede fijar su propio directorio de trabajo. Un proyecto ya no puede convertir una petición autenticada en un visor de todo el disco. La configuración y los datos guardados no cambian — sin migración de esquema, sin claves renombradas — y el protocolo no añade fotogramas. El único cambio de formato es el sellado por par de los datagramas UDP, que un nodo 0.1.0 no puede abrir: actualiza la malla entera a la vez (ver **Cambios incompatibles**).

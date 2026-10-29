@@ -36,6 +36,69 @@ func sseReadError(err error) error {
 	return &transientError{err: fmt.Errorf("read stream: %w", err)}
 }
 
+// streamEnded reports why a stream stopped after its read loop. A read that is
+// cut short because the CALLER cancelled the context is a cancelled turn, and it
+// must say so: returning the partial accumulator as a successful Response is
+// what made a stopped turn look finished — the panel and the TUI then filed
+// half a sentence as the assistant's whole reply and billed it as complete.
+//
+// The order matters. Only a scanner error can mean the body was cut short; a
+// clean EOF is the provider closing the stream after it finished writing, and a
+// cancel that lands just after that EOF must not discard a complete answer. So
+// the caller's context decides the classification of a broken read, and an
+// intact one stays intact.
+func streamEnded(ctx context.Context, scanErr error) error {
+	if scanErr == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return sseReadError(scanErr)
+}
+
+// inBandError classifies a failure the provider delivered inside a 200 answer —
+// an SSE error event, or the error object a non-streaming body can carry. There
+// is no HTTP status to read, so the type it names is mapped onto the status the
+// provider would have used (Anthropic publishes overload as 529, OpenAI names
+// the same condition server_error / rate_limit_exceeded). That keeps these
+// failures on the same retry / failover / user-message paths as the identical
+// failure delivered as a status code, instead of degrading into an unclassified
+// "stream error" no caller could act on.
+func inBandError(kind, msg string) error {
+	if msg == "" {
+		msg = "stream error"
+	}
+	status := 0
+	switch kind {
+	case "overloaded_error", "server_error", "api_error", "internal_error":
+		status = http.StatusServiceUnavailable
+	case "rate_limit_error", "rate_limit_exceeded":
+		status = http.StatusTooManyRequests
+	case "authentication_error", "invalid_api_key":
+		status = http.StatusUnauthorized
+	case "permission_error", "insufficient_quota":
+		status = http.StatusForbidden
+	case "not_found_error", "model_not_found":
+		status = http.StatusNotFound
+	case "invalid_request_error", "context_length_exceeded":
+		status = http.StatusBadRequest
+	}
+	body := msg
+	if kind != "" {
+		body = fmt.Sprintf("%s: %s", kind, msg)
+	}
+	if status == 0 {
+		// An unknown in-band type is not provably retryable, so it surfaces
+		// as-is rather than spending the ladder on it.
+		return fmt.Errorf("entry: api error: %s", body)
+	}
+	if status == http.StatusTooManyRequests || status >= 500 {
+		return &retryableError{status: status, body: body}
+	}
+	return &statusError{status: status, body: body}
+}
+
 // StreamTurnsWithTools runs one call with a conversation history, an optional
 // tool set, and a text-delta callback: answer text is delivered live as the
 // provider streams it, while tool_use blocks and the final Response are
@@ -420,7 +483,14 @@ type anthropicStreamEvent struct {
 	Index        int            `json:"index"`
 	ContentBlock ContentBlock   `json:"content_block"`
 	Delta        anthropicDelta `json:"delta"`
-	Message      struct {
+	// Error is the in-band failure envelope: {"type":"error","error":{"type":
+	// "overloaded_error","message":"…"}}. Its type is what lets the failure keep
+	// the retry/failover classification it would have had as a status code.
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+	Message struct {
 		Usage *anthropicUsage `json:"usage"`
 	} `json:"message"`
 	Usage *anthropicUsage `json:"usage"`
@@ -598,21 +668,58 @@ func (c *Client) streamAnthropic(ctx context.Context, system string, turns []Tur
 					acc.truncated = true
 				}
 			case "error":
-				msg := "stream error"
-				if ev.Delta.Text != "" {
-					msg = ev.Delta.Text
-				}
-				return Response{}, fmt.Errorf("entry: api error: %s", msg)
+				// The provider reported the failure in-band, after 200. Use the
+				// event's own type so the shared ladder can retry an overload
+				// and the surfaces can phrase a quota error, instead of a
+				// generic "stream error" no caller can classify.
+				return Response{}, inBandError(ev.Error.Type, ev.Error.Message)
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, sseReadError(err)
+	if err := streamEnded(ctx, scanner.Err()); err != nil {
+		return Response{}, err
 	}
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.
 	c.addUsage(acc.usageIn, acc.usageOut)
 	return acc.result(), nil
+}
+
+// googleErrorKind maps a Gemini error envelope onto the kind names
+// inBandError understands. A status word wins when both are present: it
+// is the API's own canonical name, while the numeric code can arrive as a gRPC
+// status (14 = UNAVAILABLE) rather than an HTTP one.
+func googleErrorKind(e *googleError) string {
+	switch strings.ToUpper(e.Status) {
+	case "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED", "UNKNOWN":
+		return "server_error"
+	case "RESOURCE_EXHAUSTED":
+		return "rate_limit_exceeded"
+	case "UNAUTHENTICATED":
+		return "authentication_error"
+	case "PERMISSION_DENIED":
+		return "permission_error"
+	case "NOT_FOUND":
+		return "not_found_error"
+	case "INVALID_ARGUMENT", "FAILED_PRECONDITION", "OUT_OF_RANGE":
+		return "invalid_request_error"
+	}
+	switch e.Code {
+	case http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	}
+	if e.Code >= 500 || e.Code == 14 { // 14 is gRPC UNAVAILABLE
+		return "server_error"
+	}
+	return ""
 }
 
 // sendOAIStream sends one streaming Chat Completions request with msgs and
@@ -781,13 +888,16 @@ func (c *Client) streamOpenAI(ctx context.Context, system string, turns []Turn, 
 				continue // unknown chunk shape; skip
 			}
 			if chunk.Error != nil {
-				return Response{}, fmt.Errorf("entry: api error: %s", chunk.Error.Message)
+				// Same in-band rule as the Anthropic path: the provider answered
+				// 200 and then reported the failure inside the stream, so its
+				// own type is the only classification available.
+				return Response{}, inBandError(chunk.Error.Type, chunk.Error.Message)
 			}
 			acc.feed(&chunk, onDelta, onReasoning)
 		}
 	}
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		return Response{}, sseReadError(err)
+	if err := streamEnded(ctx, scanner.Err()); err != nil {
+		return Response{}, err
 	}
 	// Bill this attempt's usage only on success: a failed attempt that got
 	// replaced by a retry must not be counted.

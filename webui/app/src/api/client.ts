@@ -1366,7 +1366,7 @@ export const api = {
 
   patchSession(
     id: string,
-    body: { title?: string; project?: string; pinned?: boolean; team?: string[] },
+    body: { title?: string; project?: string; pinned?: boolean; team?: string[]; permission_mode?: string },
   ): Promise<Session> {
     return request('PATCH', `/api/sessions/${encodeURIComponent(id)}`, body)
   },
@@ -2154,6 +2154,9 @@ export interface Session {
   /** The thread's agent roster — who may take this conversation's work.
    *  Empty/absent means no restriction. */
   team?: string[]
+  /** The thread's permission policy (auto/manual/edits/plan/bypass). Absent
+   *  reads as auto. Saved with the thread so it follows it across devices. */
+  permission_mode?: string
 }
 
 export interface SessionBulkDeleteResult {
@@ -2341,10 +2344,14 @@ export async function askSessionStream(
   /** The thread's roster as the composer shows it. Undefined keeps whatever
    *  the session already carries; an empty array clears the restriction. */
   agents?: string[],
+  /** The permission mode to send this turn under. Undefined keeps the
+   *  thread's stored policy; the console normally PATCHes the session on a
+   *  flip, so this only covers a send that races the PATCH. */
+  permissionMode?: string,
 ): Promise<void> {
   await openSSE(`/api/sessions/${encodeURIComponent(id)}/ask`, {
     method: 'POST',
-    body: { prompt, authorize, node: node || undefined, agents },
+    body: { prompt, authorize, node: node || undefined, agents, permission_mode: permissionMode || undefined },
     signal,
     onEvent: (event, data) => {
       let payload: any

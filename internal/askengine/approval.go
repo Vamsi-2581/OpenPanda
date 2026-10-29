@@ -29,6 +29,7 @@ import (
 	"fmt"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 )
 
@@ -50,6 +51,20 @@ type approvalVerdict struct {
 	// decisionScope records which store supplied decision (session|project),
 	// so surfaces can say "remembered for this session" honestly.
 	decisionScope string
+	// permission is the conversation's permission mode (defense.Mode*). It is
+	// the coarser question above mode: mode tunes when a *tier-2* operation
+	// may run, permission says what the conversation may do at all —
+	// bypass runs everything, plan runs nothing that writes, manual asks
+	// before every state-changing step.
+	permission string
+}
+
+// withPermission stamps the conversation's permission mode onto the verdict.
+// Empty and unrecognized values normalize to auto, so a thread that never
+// picked a mode keeps the behavior it had.
+func (v approvalVerdict) withPermission(mode string) approvalVerdict {
+	v.permission = defense.NormalizeMode(mode)
+	return v
 }
 
 // decisionKey scopes a session decision to its conversation AND its project:
@@ -112,7 +127,18 @@ func (e *Engine) approvalFor(sessionID, project string) approvalVerdict {
 // choice. In on-request a remembered approve consents standing; a remembered
 // deny refuses before any task exists, so the loop cannot burn rounds
 // re-asking a question the user already answered.
+//
+// The conversation's permission mode outranks both: bypass consents to
+// everything, plan and manual consent to nothing that needs asking — a
+// remembered approve, an --authorize grant and a global "never" alike. A mode
+// the user picked *after* those answers is the more recent intent.
 func (v approvalVerdict) gate(grant bool) (authorized, denied bool) {
+	switch v.permission {
+	case defense.ModeBypass:
+		return true, false
+	case defense.ModeManual, defense.ModePlan:
+		return false, false
+	}
 	switch v.mode {
 	case config.ApprovalModeNever:
 		return true, false
@@ -236,5 +262,7 @@ func scopeLabel(scope string) string {
 // policy that deliberately outranks a stored answer. Surfaces use it to keep
 // showing the approval card instead of trusting ConsentSource blindly.
 func (v approvalVerdict) NeedsForeground() bool {
-	return v.mode == config.ApprovalModeAlways
+	return v.mode == config.ApprovalModeAlways ||
+		v.permission == defense.ModeManual ||
+		v.permission == defense.ModePlan
 }

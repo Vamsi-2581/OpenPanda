@@ -332,11 +332,24 @@ func runDaemon(args []string) {
 		// "project" at a prompt, not a reason to relocate the node's work
 		// space. Interactive entry points (ask, repl) keep the wider set via
 		// ambientProject → looksLikeWorkspace.
+		//
+		// The breadth rule gates the relocation itself, not just the project
+		// row: $HOME carries ~/.claude on most developer machines, so it looks
+		// like a workspace and would otherwise become the node's work path —
+		// scratch under ~/.openpanda and a sandbox writable root the executor
+		// refuses for a pinned task. Refusing here keeps the configured
+		// data-dir layout, which is the state before adoption existed.
 		if cwd, err := os.Getwd(); err == nil && cwd != "" && looksLikeWorkspaceStrong(cwd) {
-			abs, _ := filepath.Abs(cwd)
-			cfg.Storage.WorkPath = abs
-			if adopted := adoptWorkspaceProject(projectstore.NewStore(db), abs); adopted != "" {
-				logger.Info("workspace adopted", "dir", abs, "project", adopted)
+			if abs, aerr := filepath.Abs(cwd); aerr == nil {
+				if verr := projectstore.ValidateWorkDir(abs); verr != nil {
+					logger.Warn("not adopting the launch directory as the work path",
+						"dir", abs, "reason", verr)
+				} else {
+					cfg.Storage.WorkPath = abs
+					if adopted := adoptWorkspaceProject(projectstore.NewStore(db), abs); adopted != "" {
+						logger.Info("workspace adopted", "dir", abs, "project", adopted)
+					}
+				}
 			}
 		}
 	}
@@ -468,6 +481,7 @@ func runDaemon(args []string) {
 	// deep-learning stage runs far longer than a code edit, so both are operator
 	// knobs; SetTimeouts also keeps the lease above the agent's hard limit.
 	coreNode.SetTimeouts(cfg.Timeouts)
+	coreNode.SetAcceptanceConfig(cfg.Execution.Acceptance)
 	coreNode.SetMessageBudget(cfg.Messages.Budget)
 
 	// Attach the memory layer (design §17/§8): daily logging that feeds the

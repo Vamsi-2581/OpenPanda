@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	projectstore "github.com/Xustalis/OpenPanda/internal/projects"
 	"github.com/Xustalis/OpenPanda/internal/storage"
 )
@@ -167,5 +168,46 @@ func TestRememberApprovalScopeRules(t *testing.T) {
 	if st.Decision != projectstore.DecisionApprove || st.DecisionScope != projectstore.ScopeSession ||
 		st.Mode != config.ApprovalModeOnRequest || st.Scope != projectstore.ScopeSession || st.Project != "pa" {
 		t.Fatalf("ApprovalState = %+v", st)
+	}
+}
+
+func TestPermissionModeOverridesTheGate(t *testing.T) {
+	// The conversation's mode is the most recent intent and outranks a
+	// remembered answer, a standing grant and the global approval mode. This
+	// is the property that makes the switch honest: flipping to bypass must
+	// not require also clearing a remembered deny, and flipping to manual must
+	// not be defeated by a remembered approve.
+	e := newApprovalTestEngine(t, config.ApprovalModeOnRequest)
+	v := e.approvalFor("s1", "").withPermission(defense.ModeBypass)
+	if ok, denied := v.gate(false); !ok || denied {
+		t.Fatalf("bypass: gate = (%v,%v), want (true,false)", ok, denied)
+	}
+	if err := e.RememberApproval("s1", "", projectstore.ScopeSession, projectstore.DecisionApprove); err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	for _, mode := range []string{defense.ModeManual, defense.ModePlan} {
+		v := e.approvalFor("s1", "").withPermission(mode)
+		if ok, denied := v.gate(true); ok || denied {
+			t.Fatalf("%s: gate = (%v,%v), want (false,false) — a remembered approve "+
+				"must not satisfy a mode that exists to ask", mode, ok, denied)
+		}
+		if !v.NeedsForeground() {
+			t.Fatalf("%s: NeedsForeground = false, want true", mode)
+		}
+	}
+	// Auto leaves the old semantics untouched.
+	v = e.approvalFor("s1", "").withPermission(defense.ModeAuto)
+	if ok, _ := v.gate(false); !ok {
+		t.Fatal("auto: a remembered session approve must still consent")
+	}
+	// A project-level deny is a decision, not a mode; it still refuses.
+	if err := e.projStore.SetApprovalPolicy("p", config.ApprovalModeOnRequest, projectstore.ScopeSession); err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+	if err := e.projStore.SetApprovalDecision("p", projectstore.DecisionDeny); err != nil {
+		t.Fatalf("deny: %v", err)
+	}
+	if ok, denied := e.approvalFor("s1", "p").withPermission(defense.ModeAuto).gate(true); ok || !denied {
+		t.Fatalf("project deny: gate = (%v,%v), want (false,true)", ok, denied)
 	}
 }

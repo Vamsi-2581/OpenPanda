@@ -42,8 +42,10 @@ import (
 // teamFileName is the suffix the bare roster shares with its conversation.
 const teamFileName = ".team.json"
 
-// bareTeamPath returns the roster file for the active project, or "" when the
-// node has no state directory.
+// bareTeamPath returns the roster file for the project active in the CLI's
+// global config, or "" when the node has no state directory. One-shot commands
+// use it; a live repl resolves through its own project state instead (see
+// bareTeamPathNow) so it never opens a store named by a different config.
 func bareTeamPath() string {
 	d := cliStateDir()
 	if d == "" {
@@ -75,12 +77,16 @@ func bareTeamFileFor(project string) string {
 	return filepath.Join(d, "conversations", name+teamFileName)
 }
 
-// loadBareTeam reads the active conversation's roster. A missing or corrupt
-// file means "no restriction" — the same degradation an unset session roster
-// has. Entries are re-validated so a hand-edited file cannot inject a name
-// that would make every task in the conversation unroutable.
-func loadBareTeam() []string {
-	p := bareTeamPath()
+// loadBareTeam reads the roster for the project active in the CLI's global
+// config. One-shot commands use it; a live repl resolves through its own
+// project state instead (see bareTeamPathNow).
+func loadBareTeam() []string { return readTeamFile(bareTeamPath()) }
+
+// readTeamFile reads one roster file. A missing or corrupt file means "no
+// restriction" — the same degradation an unset session roster has. Entries are
+// re-validated so a hand-edited file cannot inject a name that would make
+// every task in the conversation unroutable.
+func readTeamFile(p string) []string {
 	if p == "" {
 		return nil
 	}
@@ -101,11 +107,14 @@ func loadBareTeam() []string {
 	return team
 }
 
-// saveBareTeam persists the active conversation's roster. An empty roster
-// removes the file instead of writing an empty one: "no restriction" is the
-// absence of a pick, not a pick of nobody.
-func saveBareTeam(team []string) error {
-	p := bareTeamPath()
+// saveBareTeam persists the CLI-global project's roster. One-shot writers and
+// tests use it; a live repl writes through its own method below.
+func saveBareTeam(team []string) error { return writeTeamFile(bareTeamPath(), team) }
+
+// writeTeamFile persists one roster. An empty roster removes the file instead
+// of writing an empty one: "no restriction" is the absence of a pick, not a
+// pick of nobody.
+func writeTeamFile(p string, team []string) error {
 	if p == "" {
 		return errors.New("no state directory")
 	}
@@ -175,7 +184,31 @@ func (r *repl) teamForAsk() []string {
 		// A stale session id degrades to the bare scope rather than failing
 		// the ask; askContext takes the same path for the transcript.
 	}
-	return loadBareTeam()
+	return r.loadBareTeam()
+}
+
+// bareTeamPathNow resolves the roster file from the project this repl is bound
+// to. It deliberately avoids bareTeamPath: that path re-reads the CLI's global
+// config and calls activeProject, which opens — and on a fresh machine creates
+// — the store named there. teamNow runs on every frame, so a repl started
+// against another config would otherwise touch the wrong node's database.
+func (r *repl) bareTeamPathNow() string {
+	if r == nil {
+		return ""
+	}
+	project := r.currentProject()
+	if strings.TrimSpace(project) == "" && r.projStore != nil {
+		project, _ = r.projStore.Active()
+	}
+	return bareTeamFileFor(project)
+}
+
+// loadBareTeam reads the roster for this repl's project.
+func (r *repl) loadBareTeam() []string { return readTeamFile(r.bareTeamPathNow()) }
+
+// saveBareTeam persists the roster for this repl's project.
+func (r *repl) saveBareTeam(team []string) error {
+	return writeTeamFile(r.bareTeamPathNow(), team)
 }
 
 // teamNow is the display read: cached because contextLine runs on every frame,
@@ -199,10 +232,10 @@ func (r *repl) teamNow() []string {
 			team = append([]string(nil), sess.Team...)
 		} else {
 			// Stale binding: the bare scope is what the next ask will use.
-			team = loadBareTeam()
+			team = r.loadBareTeam()
 		}
 	} else {
-		team = loadBareTeam()
+		team = r.loadBareTeam()
 	}
 
 	r.sessMu.Lock()
@@ -227,7 +260,7 @@ func (r *repl) setTeam(team []string) error {
 		if err := r.sessionsSt.SetTeam(sid, clean); err != nil {
 			return err
 		}
-	} else if err := saveBareTeam(clean); err != nil {
+	} else if err := r.saveBareTeam(clean); err != nil {
 		return err
 	}
 	r.sessMu.Lock()

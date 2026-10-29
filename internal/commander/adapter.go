@@ -727,9 +727,12 @@ func resolveAdapterDir() string {
 // adapterCandidateDirs lists the adapters/ directories to probe for a given
 // executable path, in priority order. A packaged install (one-click script,
 // Homebrew) symlinks the real binary onto PATH (e.g. ~/.local/bin/panda →
-// ~/.local/share/openpanda/panda), so we follow the link and look beside the
-// real binary — alongside the repo-layout “../adapters“ fallback — or the
-// spawned adapter would name a missing path and die.
+// ~/.local/share/openpanda/bin/panda), so we follow the link and look beside
+// the real binary first — alongside the repo-layout “../adapters“ fallback —
+// or the spawned adapter would name a missing path and die. The symlink's own
+// directory is probed only after the real install: an old ~/.local/adapters
+// left by a previous layout otherwise shadows the adapters shipped with the
+// binary that is actually running.
 func adapterCandidateDirs(exe string) []string {
 	if exe == "" {
 		return nil
@@ -747,7 +750,7 @@ func adapterCandidateDirs(exe string) []string {
 			out = append(out, p)
 		}
 	}
-	for _, base := range []string{exe, real} {
+	for _, base := range []string{real, exe} {
 		add(filepath.Join(filepath.Dir(base), "adapters"))
 		add(filepath.Join(filepath.Dir(base), "..", "adapters"))
 		add(filepath.Join(filepath.Dir(base), "..", "share", "openpanda", "adapters"))

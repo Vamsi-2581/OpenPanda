@@ -61,6 +61,15 @@ func TestProgressForEvent(t *testing.T) {
 		{"delegate request carries scope lanes", "delegate_request", map[string]any{"child": "t-9", "title": "api", "paths": []string{"pkg/api", "pkg/util"}}, Progress{Kind: ProgressSpawn, Name: "api", Detail: "pkg/api, pkg/util"}, true},
 		{"delegate request mode survives the JSON form", "delegate_request", []byte(`{"child":"t-9","title":"api","paths":["pkg/api"],"isolate":false}`), Progress{Kind: ProgressSpawn, Name: "api", Detail: "pkg/api"}, true},
 		{"unrelated event is silent", core.EvSubmit, map[string]any{}, Progress{}, false},
+		// The delegated agent's own activity. Without these the only sign of
+		// life during a long task is the watchdog's "no output for Ns" note.
+		{"agent tool call names the command", core.EvAgentEvent, map[string]any{"ev": "tool_use", "name": "Bash", "input": map[string]any{"command": "mkdir -p out"}}, Progress{Kind: ProgressTool, Name: "Bash: mkdir -p out"}, true},
+		{"agent tool call prefers the description", core.EvAgentEvent, map[string]any{"ev": "tool_use", "name": "Read", "input": map[string]any{"description": "Read config", "file_path": "/tmp/a"}}, Progress{Kind: ProgressTool, Name: "Read: Read config"}, true},
+		{"agent tool call survives the JSON form", core.EvAgentEvent, []byte(`{"ev":"tool_use","name":"Read","input":{"file_path":"/tmp/a"}}`), Progress{Kind: ProgressTool, Name: "Read: /tmp/a"}, true},
+		{"agent prose streams", core.EvAgentEvent, map[string]any{"ev": "text", "text": "I found the config."}, Progress{Kind: ProgressAgentText, Detail: "I found the config."}, true},
+		{"agent thinking stays off the wire", core.EvAgentEvent, map[string]any{"ev": "thinking", "thinking": "hmm"}, Progress{}, false},
+		{"successful tool result stays off the wire", core.EvAgentEvent, map[string]any{"ev": "tool_result", "content": "ok"}, Progress{}, false},
+		{"errored tool result is worth showing", core.EvAgentEvent, map[string]any{"ev": "tool_result", "is_error": true, "content": "permission denied"}, Progress{Kind: ProgressAgentText, Name: "error", Detail: "permission denied"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

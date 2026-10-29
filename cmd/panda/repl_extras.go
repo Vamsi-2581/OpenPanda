@@ -322,7 +322,7 @@ func (r *repl) bindProject() {
 	dir := ""
 	if r.projStore != nil {
 		if pr, gerr := r.projStore.Get(name); gerr == nil {
-			dir = pr.WorkDir
+			dir = pr.UsableWorkDir()
 		}
 	}
 	r.engine.Load().SetProject(name, dir)

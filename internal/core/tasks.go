@@ -17,6 +17,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/guard"
 	"github.com/Xustalis/OpenPanda/internal/scheduler/queue"
 	"github.com/Xustalis/OpenPanda/internal/storage"
@@ -245,9 +246,18 @@ type rowScanner interface {
 // decode leave their fields zeroed — the row itself is still usable (a
 // damaged requires_json must not strand the task's state machine) — and are
 // logged so a corrupt column is visible instead of silently reading as empty.
+//
+// Columns the base schema declares without NOT NULL (parent_id, project,
+// title, chain_json, created_at, updated_at) come in through Null* first.
+// Scanning one of them into a plain string aborts on the first NULL row, and
+// scanTasks aborts the whole list with it: a single row written before a
+// column existed took down /api/tasks for every task. A NULL here means "not
+// recorded", which is the same thing the zero value says.
 func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var t Task
-	var chainJSON string
+	var parentID, project, title sql.NullString
+	var chainJSON sql.NullString
+	var createdAt, updatedAt sql.NullInt64
 	var intent, spec, result sql.NullString
 	var lease sql.NullInt64
 	var contextType, contextHash, risk, resource, requiresJSON sql.NullString
@@ -260,18 +270,25 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 	var screenOut int
 	var isolated int
 	var planID, stageID, needsJSON, inputsJSON, outputArt, scopePathsJSON sql.NullString
-	if err := row.Scan(&t.TaskID, &t.ParentID, &t.Project, &t.Title, &t.State, &t.OwnerNode,
+	var verification sql.NullString
+	if err := row.Scan(&t.TaskID, &parentID, &project, &title, &t.State, &t.OwnerNode,
 		&t.AttemptID, &t.StateVersion, &chainJSON, &intent, &spec,
 		&result, &contextType, &contextHash, &complexity, &risk, &resource,
 		&requiresJSON, &approvalDisposition, &operationDecision, &lease,
-		&t.CreatedAt, &t.UpdatedAt, &t.Authorized,
+		&createdAt, &updatedAt, &t.Authorized,
 		&t.Priority, &t.Seq, &sessionID, &resourceKeysJSON, &workDir, &execWorkDir, &scheduled,
 		&planID, &stageID, &needsJSON, &inputsJSON, &outputArt,
 		&t.Transport, &t.DeadlineUnix, &t.DelegationBudget, &t.TokenBudget,
 		&agentSession, &agentSessionNode, &agentSessionAdapter, &t.AuthSig, &t.AuthPub, &t.AuthTs,
-		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap, &scopePathsJSON, &isolated); err != nil {
+		&remote, &screenOut, &t.SpawnDepth, &t.SpawnCap, &scopePathsJSON, &isolated, &verification); err != nil {
 		return Task{}, err
 	}
+	t.ParentID = parentID.String
+	t.Project = project.String
+	t.Title = title.String
+	t.CreatedAt = createdAt.Int64
+	t.UpdatedAt = updatedAt.Int64
+	t.Verification = verification.String
 	t.Isolate = isolated != 0
 	decode := func(col, raw string, v any) {
 		if raw == "" {
@@ -281,7 +298,7 @@ func (s *TaskStore) scanTask(row rowScanner) (Task, error) {
 			s.logger.Warn("decode task json column", "task", t.TaskID, "col", col, "err", err)
 		}
 	}
-	decode("chain_json", chainJSON, &t.Chain)
+	decode("chain_json", chainJSON.String, &t.Chain)
 	decode("requires_json", requiresJSON.String, &t.Requires)
 	decode("resource_keys_json", resourceKeysJSON.String, &t.ResourceKeys)
 	decode("scope_paths_json", scopePathsJSON.String, &t.ScopePaths)
@@ -321,6 +338,70 @@ func (s *TaskStore) SetScreenOutput(ctx context.Context, taskID string) error {
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET screen_output=1 WHERE task_id=?`, taskID); err != nil {
 		return fmt.Errorf("set screen_output: %w", err)
+	}
+	return nil
+}
+
+// CheckRow is one persisted acceptance check result: the evidence behind a
+// verification verdict, readable by `panda task verdict` and the panel long
+// after the run.
+type CheckRow struct {
+	Phase      string `json:"phase"`
+	CheckID    string `json:"check_id"`
+	Kind       string `json:"kind"`
+	Command    string `json:"command,omitempty"`
+	Status     string `json:"status"`
+	ExitCode   int    `json:"exit_code"`
+	DurationMS int64  `json:"duration_ms"`
+	OutputHead string `json:"output_head,omitempty"`
+	OutputTail string `json:"output_tail,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
+}
+
+// RecordCheck persists one acceptance check outcome. Recording is best-effort
+// relative to the verdict: a failed insert must not hide the verdict itself,
+// so callers log the error and continue.
+func (s *TaskStore) RecordCheck(ctx context.Context, taskID string, r contract.Result) error {
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO task_checks (task_id, phase, check_id, kind, command, status,
+			exit_code, duration_ms, output_head, output_tail, reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, r.Phase, r.CheckID, r.Kind, r.Command, string(r.Status),
+		r.ExitCode, r.DurationMS, r.OutputHead, r.OutputTail, r.Reason, s.now()); err != nil {
+		return fmt.Errorf("record check: %w", err)
+	}
+	return nil
+}
+
+// Checks returns a task's check rows in execution order.
+func (s *TaskStore) Checks(ctx context.Context, taskID string) ([]CheckRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT phase, check_id, kind, command, status, exit_code, duration_ms,
+			output_head, output_tail, reason, created_at
+		FROM task_checks WHERE task_id=? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("load checks: %w", err)
+	}
+	defer rows.Close()
+	var out []CheckRow
+	for rows.Next() {
+		var r CheckRow
+		if err := rows.Scan(&r.Phase, &r.CheckID, &r.Kind, &r.Command, &r.Status,
+			&r.ExitCode, &r.DurationMS, &r.OutputHead, &r.OutputTail, &r.Reason, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SetVerification stamps the contract verdict on the task row. Empty clears
+// it (a retried task starts without a verdict).
+func (s *TaskStore) SetVerification(ctx context.Context, taskID, status string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET verification=? WHERE task_id=?`, status, taskID); err != nil {
+		return fmt.Errorf("set verification: %w", err)
 	}
 	return nil
 }
@@ -3771,7 +3852,7 @@ const taskColumns = `task_id, parent_id, project, title, state, owner_node, atte
 	priority, seq, session_id, resource_keys_json, work_dir, exec_work_dir, scheduled,
 	plan_id, stage_id, needs_json, input_artifacts_json, output_artifact,
 	transport, deadline_unix, delegation_budget, token_budget, agent_session_id, agent_session_node,
-	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap, scope_paths_json, isolate`
+	agent_session_adapter, auth_sig, auth_pub, auth_ts, remote, screen_output, spawn_depth, spawn_cap, scope_paths_json, isolate, verification`
 
 func (s *TaskStore) scanTasks(rows *sql.Rows) ([]Task, error) {
 	var out []Task

@@ -216,11 +216,11 @@ func TestExecAgentActiveFailoverOnExecutionError(t *testing.T) {
 }
 
 // TestExecAgentTimeoutWithSessionSkipsFailover: a watchdog timeout (exit 124)
-// whose run already minted an agent session is a checkpoint, not a dead end —
-// the retry loop resumes that session, so execAgent must return it instead of
-// cold-starting an alternate (which would overwrite the persisted handle with
-// the alternate's fresh session). A timeout with no session minted — and any
-// non-124 failure — keeps the normal failover.
+// is always returned to the caller, session or not. With a session minted the
+// retry loop resumes the checkpoint; without one the timeout still may have
+// done half the work, so cold-starting a different CLI would duplicate the side
+// effects and report them under another agent's name. The retry/resume path
+// above owns that decision; execAgent does not.
 func TestExecAgentTimeoutWithSessionSkipsFailover(t *testing.T) {
 	card := scoreCard()
 	card.Agents["cheap"] = ledger.Agent{Adapter: "opencode.py", Capabilities: []string{"code:modify"}, CostTier: "low", Tier: 1}
@@ -249,8 +249,9 @@ func TestExecAgentTimeoutWithSessionSkipsFailover(t *testing.T) {
 		t.Fatalf("ran = %v, want only opencode.py (no cold-start failover)", ran)
 	}
 
-	// Same timeout but no session minted: nothing resumable exists, so the
-	// failover chain still rescues the task.
+	// Same timeout but no session minted: still no failover. A timeout says
+	// nothing about whether the agent's model rejected the run, and the work it
+	// had already done is not something a second agent can see.
 	ran = nil
 	r.SetAdapterRunner(func(_ context.Context, adapter, _, _ string) AgentResult {
 		ran = append(ran, adapter)
@@ -260,8 +261,11 @@ func TestExecAgentTimeoutWithSessionSkipsFailover(t *testing.T) {
 		return AgentResult{OK: true, Result: "done via alternate", ExitCode: 0}
 	})
 	res = r.Execute(context.Background(), plan, "big task", "", false)
-	if !res.OK || res.Agent != "expensive" {
-		t.Fatalf("sessionless timeout result = %+v, want failover success", res)
+	if res.OK || res.Agent != "cheap" {
+		t.Fatalf("sessionless timeout result = %+v, want the timeout returned as-is", res)
+	}
+	if len(ran) != 1 {
+		t.Fatalf("ran = %v, want no second agent after a timeout", ran)
 	}
 }
 
@@ -424,10 +428,13 @@ func TestRankAgentsDemotesBlockedAgent(t *testing.T) {
 	}
 }
 
-// TestRoutePinnedAgentCarriesAlternates verifies that when an agent is pinned
-// by name (e.g. "agent:cheap"), Route still populates Alternates with other
-// agents on the card so active failover can rescue a failed primary.
-func TestRoutePinnedAgentCarriesAlternates(t *testing.T) {
+// TestRoutePinnedAgentHasNoAlternates: a task pinned by name ("agent:cheap")
+// is a task about that agent. Staffing the fallback chain with the rest of the
+// card meant a failed pin was re-run on another CLI and reported green under
+// the pinned name — the substitution masked exactly the failure the pin was
+// there to observe. The pinned plan carries no alternates; a dispatch failure
+// is returned with its reason.
+func TestRoutePinnedAgentHasNoAlternates(t *testing.T) {
 	card := scoreCard()
 	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 	plan, err := r.Route([]string{"agent:cheap"})
@@ -437,7 +444,7 @@ func TestRoutePinnedAgentCarriesAlternates(t *testing.T) {
 	if plan.Agent != "cheap" {
 		t.Fatalf("primary = %q, want cheap", plan.Agent)
 	}
-	if len(plan.Alternates) != 2 || plan.Alternates[0] != "expensive" || plan.Alternates[1] != "web" {
-		t.Fatalf("alternates = %v, want [expensive web]", plan.Alternates)
+	if len(plan.Alternates) != 0 {
+		t.Fatalf("alternates = %v, want none for a pinned plan", plan.Alternates)
 	}
 }

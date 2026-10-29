@@ -434,7 +434,7 @@ func (h *handler) bindEngineProject(store *projectstore.Store, name string) {
 	}
 	dir := ""
 	if p, err := store.Get(name); err == nil {
-		dir = p.WorkDir
+		dir = p.UsableWorkDir()
 	}
 	eng.SetProject(name, dir)
 }

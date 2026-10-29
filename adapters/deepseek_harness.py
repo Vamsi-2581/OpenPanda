@@ -28,10 +28,22 @@ The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the dsh difference: the
 command line.
 """
+import json
 import os
 import tempfile
 
 import _harness as harness
+
+# What the CLI may be called on PATH. The registry probes the same list
+# (internal/agents/registry.go), so the roster and the adapter agree about
+# whether `dsh` is installed instead of the roster saying yes and the spawn
+# exiting 127.
+BINARIES = ["dsh", "deepseek-harness"]
+
+# How often a silent run says it is still alive. dsh emits no machine-readable
+# stream, so without this the Go silence watchdog sees a dead pipe for the
+# entire run and cannot tell a long inference from a hang.
+HEARTBEAT_S = 20
 
 # The profile entry that chooses the model. Its shipped config is
 # {provider: deepseek-official, model: deepseek-flash}; a patch entry's config
@@ -45,20 +57,22 @@ MAX_TOKENS = 131072
 def model_patch(model):
     """Write the profile patch pinning dsh's default model; return its path.
 
-    The model name comes from panda's config, so it is emitted as a
-    double-quoted YAML scalar with backslashes and quotes escaped: a name
-    carrying ':' or '#' must not become a mapping or a comment.
+    The model name comes from panda's config, so it is emitted as a quoted
+    YAML scalar. json.dumps is the escaper: a JSON string is a valid
+    double-quoted YAML scalar, and it handles newlines, tabs and control
+    characters that a hand-rolled backslash/quote escape let through — a model
+    name carrying a line break could open a new mapping entry.
     """
-    escaped = model.replace("\\", "\\\\").replace('"', '\\"')
+    quoted = json.dumps(str(model))
     body = (
         "- id: %s\n"
         "  config:\n"
         "    provider: %s\n"
-        '    model: "%s"\n'
+        '    model: %s\n'
         "- id: %s\n"
         "  config:\n"
         "    maxTokens: %d\n"
-        % (MODEL_ENTRY_ID, MODEL_PROVIDER, escaped, PROVIDER_ENTRY_ID, MAX_TOKENS)
+        % (MODEL_ENTRY_ID, MODEL_PROVIDER, quoted, PROVIDER_ENTRY_ID, MAX_TOKENS)
     )
     fd, path = tempfile.mkstemp(prefix="panda-dsh-model-", suffix=".yml")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -68,7 +82,8 @@ def model_patch(model):
 
 def main():
     prompt, timeout, cwd = harness.read_request()
-    argv = ["dsh", "--profile", "headless"]
+    binary = harness.resolve_binary(BINARIES, default="dsh")
+    argv = [binary, "--profile", "headless"]
     patch = ""
     model = (os.environ.get("DEEPSEEK_MODEL") or "").strip()
     if model:
@@ -81,9 +96,10 @@ def main():
             # never applied.
             harness.progress("dsh: model patch skipped (%s)" % ex)
             patch = ""
-    argv.append(prompt)
+    argv += harness.prompt_argv(prompt)
     try:
-        harness.run_simple(argv, cwd=cwd, timeout=timeout)
+        harness.run_simple(argv, cwd=cwd, timeout=timeout,
+                           heartbeat_s=HEARTBEAT_S)
     finally:
         if patch:
             try:

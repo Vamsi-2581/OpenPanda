@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Xustalis/OpenPanda/internal/contract"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/memory"
 	"github.com/Xustalis/OpenPanda/internal/security"
@@ -52,6 +54,23 @@ func taskToolsPolicy(specJSON string) string {
 	return spec.ToolsPolicy
 }
 
+// taskPermissionMode extracts the conversation permission policy that created
+// this task (entry.TaskSpecDetail.PermissionMode). Empty means the thread
+// never picked one, which reads as auto. Parsing failure yields empty: an
+// unreadable spec must not grant more than the default.
+func taskPermissionMode(specJSON string) string {
+	if specJSON == "" {
+		return ""
+	}
+	var spec struct {
+		PermissionMode string `json:"permission_mode"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return ""
+	}
+	return defense.NormalizeMode(spec.PermissionMode)
+}
+
 // taskMaxTurns extracts the per-task agent turn cap from a task's persisted
 // spec JSON (entry.TaskSpecDetail.MaxTurns). A parse failure or a non-positive
 // value yields 0 (the adapter's own default).
@@ -78,9 +97,10 @@ func taskSpecEnvelope(specJSON string) string {
 		return ""
 	}
 	var spec struct {
-		Scope             string   `json:"scope"`
-		SuccessDefinition string   `json:"success_definition"`
-		Constraints       []string `json:"constraints"`
+		Scope             string           `json:"scope"`
+		SuccessDefinition string           `json:"success_definition"`
+		Constraints       []string         `json:"constraints"`
+		Acceptance        []contract.Check `json:"acceptance"`
 	}
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		return ""
@@ -96,6 +116,17 @@ func taskSpecEnvelope(specJSON string) string {
 	}
 	if scope := strings.TrimSpace(spec.Scope); scope != "" {
 		b.WriteString("\nallowed scope: " + scope + " — modify only files under these paths")
+	}
+	for _, c := range spec.Acceptance {
+		if run := strings.TrimSpace(c.Run); run != "" {
+			b.WriteString("\nacceptance check (the orchestrator runs this after you finish): " + run)
+		}
+		if len(c.Exists) > 0 {
+			b.WriteString("\nacceptance artifact (must exist when you finish): " + strings.Join(c.Exists, ", "))
+		}
+	}
+	if len(spec.Acceptance) > 0 {
+		b.WriteString("\nrun these acceptance checks yourself before claiming done; a claim without their output is not completion.")
 	}
 	if b.Len() == 0 {
 		return ""

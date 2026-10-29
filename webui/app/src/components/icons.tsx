@@ -42,6 +42,7 @@ export type IconName =
   | 'git-fork'
   | 'image'
   | 'kanban'
+  | 'layout'
   | 'lightbulb'
   | 'list-checks'
   | 'menu'
@@ -250,6 +251,14 @@ const paths: Record<IconName, JSX.Element> = {
       <path d="M4.5 5v14" />
       <path d="M12 5v8" />
       <path d="M19.5 5v12" />
+    </>
+  ),
+  layout: (
+    <>
+      <rect x="3" y="3" width="7.5" height="9" rx="1.5" />
+      <rect x="13.5" y="3" width="7.5" height="5.5" rx="1.5" />
+      <rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.5" />
+      <rect x="3" y="15" width="7.5" height="6" rx="1.5" />
     </>
   ),
   lightbulb: (

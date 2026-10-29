@@ -61,6 +61,12 @@ import {
   useTaskBrief,
 } from '../components/chat-cast'
 import { ScopeSelect } from '../components/scope-select'
+import {
+  PermissionPicker,
+  authorizeRelevant,
+  normalizePermission,
+  type PermissionMode,
+} from '../components/permission-picker'
 import { NodePicker } from '../components/node-picker'
 import { ComposerPet } from '../components/composer-pet'
 import { OrchestrateCard } from '../components/orchestrate'
@@ -528,6 +534,10 @@ export function SessionsView({
   // True while a file is over the composer, so the box can say so.
   const [dropping, setDropping] = useState(false)
   const [authorize, setAuthorize] = useState(false)
+  // The conversation's permission policy. It outranks the authorize switch:
+  // bypass consents to everything, manual and plan to nothing, so the switch
+  // only shows in the modes where an explicit per-turn grant still matters.
+  const [permission, setPermission] = useState<PermissionMode>('auto')
   // The composer's environment pick: empty = let the scheduler route by
   // capability; a node id pins this turn's spawned task to that executor.
   const [nodePref, setNodePref] = useState('')
@@ -890,6 +900,7 @@ export function SessionsView({
       // A brand-new thread starts with no roster: the pick in the footer is
       // for the conversation about to be created, not the last one.
       setTeam([])
+      setPermission('auto')
       editorClear(composer.current)
       // Timings are filed by transcript index, so they belong to the thread
       // that produced them and must not follow the pane to another one.
@@ -920,6 +931,7 @@ export function SessionsView({
         setSession(s)
         setLoadError('')
         setTeam(s.team ?? [])
+        setPermission(normalizePermission(s.permission_mode))
         setTurnMs({})
         setLiveFrom(0)
         setMsgs((s.turns ?? []).map((turn, i) => ({ ...turn, k: `srv-${i}` })))
@@ -1192,6 +1204,33 @@ export function SessionsView({
     api.patchSession(activeId, { team: names }).catch((err: unknown) => toastError(err))
   }
 
+  /** Change the thread's permission policy. Saved on the session so it
+   *  survives a reload and a second device; the ask also carries it every
+   *  turn, so a failed patch (offline, restarting daemon) costs the memory,
+   *  never the current turn. */
+  function pickPermission(mode: PermissionMode) {
+    const prev = permission
+    setPermission(mode)
+    // Speak only after the server agrees. Announcing the switch first meant a
+    // failed PATCH reverted the chip while the toast still claimed bypass was
+    // on — the one message about this feature that must never be wrong.
+    const announce = () => {
+      if (mode === 'bypass') toast(t('perm.bypassOn'))
+      else if (prev === 'bypass') toast(t('perm.bypassOff'))
+    }
+    if (!activeId) {
+      announce()
+      return
+    }
+    api
+      .patchSession(activeId, { permission_mode: mode })
+      .then(announce)
+      .catch((err: unknown) => {
+        setPermission(prev)
+        toastError(err)
+      })
+  }
+
   /** Put a starter prompt in the composer, ready to edit or send. The chip is
    *  a suggestion, not a send button: a replaceable draft is cheaper to
    *  correct than a turn that already left. */
@@ -1452,6 +1491,13 @@ export function SessionsView({
       if (!id) {
         const s = await api.createSession(prompt.slice(0, 48), threadProject, team)
         id = s.id
+        // A mode picked before the first send has no row to live on until
+        // now; persist it so reopening the thread does not silently widen it.
+        if (permission !== 'auto') {
+          api.patchSession(s.id, { permission_mode: permission }).catch(() => {
+            /* the ask below still carries the mode for this turn */
+          })
+        }
         setSession(s)
         setSessions((ls) => [s, ...ls])
         openThread(s.id)
@@ -1576,6 +1622,10 @@ export function SessionsView({
         // edited mid-thread, and the ask carries the answer rather than
         // trusting whatever the session stored before the edit landed.
         team,
+        // The permission policy as the picker shows it. The session PATCH
+        // keeps it across reloads; sending it here keeps this turn honest
+        // even if the patch has not landed yet.
+        permission,
       )
       patch((m) => ({ ...m, streaming: false, status: undefined }))
       finishTurn()
@@ -2662,21 +2712,24 @@ export function SessionsView({
                 onAttach={addFiles}
                 project={session?.project || activeProject || ''}
               />
-              <label class="ask-authorize" title={t('approval.stateHint')}>
-                {/* A switch, not a tick box: this is a mode you leave on, not a
-                    one-off box you tick. The knob rides a <span> rather than a
-                    pseudo-element on the <input> — ::after on an input is not
-                    reliably rendered. */}
-                <span class="switch">
-                  <input
-                    type="checkbox"
-                    checked={authorize}
-                    onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
-                  />
-                  <span class="switch-track" aria-hidden="true" />
-                </span>
-                {t('sessions.authorize')}
-              </label>
+              <PermissionPicker value={permission} onChange={pickPermission} />
+              {authorizeRelevant(permission) && (
+                <label class="ask-authorize" title={t('approval.stateHint')}>
+                  {/* A switch, not a tick box: this is a mode you leave on, not a
+                      one-off box you tick. The knob rides a <span> rather than a
+                      pseudo-element on the <input> — ::after on an input is not
+                      reliably rendered. */}
+                  <span class="switch">
+                    <input
+                      type="checkbox"
+                      checked={authorize}
+                      onChange={(e) => setAuthorize((e.target as HTMLInputElement).checked)}
+                    />
+                    <span class="switch-track" aria-hidden="true" />
+                  </span>
+                  {t('sessions.authorize')}
+                </label>
+              )}
               {approval && (approval.mode !== 'on-request' || approval.decision) && (
                 // The standing answer a remember left behind — or a mode that
                 // is not the usual on-request — is the thing a composer must
