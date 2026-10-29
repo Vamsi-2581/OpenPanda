@@ -307,31 +307,54 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		acceptanceChecks, acceptanceBaseline)
 }
 
-// taskAllowAgents returns the agent roster a task carries in its spec — the
-// chat thread's team pick, which the ask engine copies into spec_json so it
-// persists and travels. Nil means "no restriction": every CLI submission and
-// every row written before rosters existed reads that way, and so does a
-// spec this build cannot parse.
-func (c *Core) taskAllowAgents(ctx context.Context, taskID string) []string {
+// taskSpec reads a task's persisted spec once for the routing decisions that
+// need it — the roster and the permission mode both live there, and two point
+// reads of the same row answered one question twice. A missing row or an
+// unreadable spec yields the zero value: no roster, auto permission.
+func (c *Core) taskSpec(ctx context.Context, taskID string) entry.TaskSpecDetail {
 	t, err := c.store.Get(ctx, taskID)
 	if err != nil || t.SpecJSON == "" {
-		return nil
+		return entry.TaskSpecDetail{}
 	}
 	var spec entry.TaskSpecDetail
 	if err := json.Unmarshal([]byte(t.SpecJSON), &spec); err != nil {
-		return nil
+		return entry.TaskSpecDetail{}
 	}
-	return spec.AllowAgents
+	return spec
 }
 
-// taskPermissionFor reads the conversation permission mode that created a
-// task. Empty (or an unreadable spec) reads as auto: the ordinary tier gate.
-func (c *Core) taskPermissionFor(ctx context.Context, taskID string) string {
-	t, err := c.store.Get(ctx, taskID)
-	if err != nil {
-		return defense.ModeAuto
+// planModeAgent picks the agent a plan-mode task can actually be staffed on.
+// The commander refuses a restricted request to an adapter with no read-only
+// tool face (fail closed), so a plan-mode primary that lacks one would fail
+// every run with a hint — "authorize the task" — that cannot help: the
+// conversation itself is what demands read-only. Swap in the first capable
+// alternate; if the route has none, say so in terms the user can act on.
+func planModeAgent(router *commander.Router, plan commander.Plan) (commander.Plan, error) {
+	if commander.AdapterSupportsRestricted(plan.Adapter) {
+		return plan, nil
 	}
-	return taskPermissionMode(t.SpecJSON)
+	for i, alt := range plan.Alternates {
+		ag, ok := router.Agent(alt)
+		if !ok || !commander.AdapterSupportsRestricted(ag.Adapter) {
+			continue
+		}
+		rest := make([]string, 0, len(plan.Alternates))
+		rest = append(rest, plan.Agent)
+		rest = append(rest, plan.Alternates[:i]...)
+		rest = append(rest, plan.Alternates[i+1:]...)
+		plan.Alternates = rest
+		plan.Agent = alt
+		plan.Ability = alt
+		plan.Adapter = ag.Adapter
+		plan.Tier = ag.Tier
+		if plan.Tier == 0 {
+			plan.Tier = defense.TierReversible
+		}
+		return plan, nil
+	}
+	return plan, fmt.Errorf(
+		"plan mode needs an agent that can run read-only, and %s cannot on this node; pick another agent for the thread or change the permission mode",
+		plan.Agent)
 }
 
 // tightenForPermission raises the plan's tier to what the conversation's
@@ -420,7 +443,8 @@ func (c *Core) resolveRunPlan(ctx context.Context, taskID string, required []str
 	// hands must not quietly hand the work to someone else. The roster rides
 	// spec_json, so a task delegated to another node arrives with the same
 	// restriction instead of being re-opened to every agent there.
-	if roster := c.taskAllowAgents(ctx, taskID); len(roster) > 0 {
+	spec := c.taskSpec(ctx, taskID)
+	if roster := spec.AllowAgents; len(roster) > 0 {
 		// "The roster wins" used to mean "rank the roster instead", which
 		// swapped the employee while leaving the task's own text intact. A task
 		// that names an agent is a task ABOUT that agent: three "test
@@ -553,7 +577,22 @@ func (c *Core) resolveRunPlan(ctx context.Context, taskID string, required []str
 			}
 		}
 	}
-	tightenForPermission(&plan, c.taskPermissionFor(ctx, taskID))
+	perm := defense.NormalizeMode(spec.PermissionMode)
+	tightenForPermission(&plan, perm)
+	if perm == defense.ModePlan && plan.Kind == "agent" {
+		was := plan.Agent
+		p, perr := planModeAgent(router, plan)
+		if perr != nil {
+			return commander.Plan{}, nil, "", perr
+		}
+		// The breaker records failures by agent name; a swap that left the key
+		// pointing at the agent this task will never run would blame the wrong
+		// CLI for the outcome.
+		if p.Agent != was {
+			breakerKey = "agent:" + p.Agent
+		}
+		plan = p
+	}
 	return plan, router, breakerKey, nil
 }
 
