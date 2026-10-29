@@ -35,6 +35,7 @@ import { WorkspacePanels } from './workspace-panels'
 import {
   PermissionPicker,
   authorizeRelevant,
+  normalizePermission,
   type PermissionMode,
 } from '../components/permission-picker'
 
@@ -682,6 +683,24 @@ function WorkspaceComposer(props: {
   // autonomy it was given at the bench.
   const [permission, setPermission] = useState<PermissionMode>('auto')
 
+  // The chip must show the policy the send will actually use. A picked thread
+  // carries its own mode, and a bench that kept showing "auto" while sending
+  // into a manual thread would be misreporting what Enter does.
+  useEffect(() => {
+    if (props.picked) setPermission(normalizePermission(props.picked.permission_mode))
+  }, [props.picked?.id])
+
+  /** Change the policy this bench sends under. A picked thread already exists,
+   *  so the choice is saved on it; a new thread gets the same write when the
+   *  first send creates it. The ask carries the mode either way, so a failed
+   *  patch costs the memory, never the current turn. */
+  function pickPermission(mode: PermissionMode) {
+    setPermission(mode)
+    if (props.picked) {
+      api.patchSession(props.picked.id, { permission_mode: mode }).catch(toastError)
+    }
+  }
+
   useEffect(() => {
     composer.current?.focus()
     // No abort on unmount on purpose: this is a dispatch surface, and a turn
@@ -752,7 +771,7 @@ function WorkspaceComposer(props: {
         undefined,
         undefined,
         undefined,
-        props.picked ? undefined : permission,
+        permission,
       ).catch(toastError)
       editorClear(composer.current)
       setInput('')
@@ -824,7 +843,7 @@ function WorkspaceComposer(props: {
           }}
         />
         <div class="composer-actions">
-          <PermissionPicker value={permission} onChange={setPermission} disabled={sending} />
+          <PermissionPicker value={permission} onChange={pickPermission} disabled={sending} />
           {authorizeRelevant(permission) && (
             <label class="ask-authorize" title={t('approval.stateHint')}>
               <span class="switch">

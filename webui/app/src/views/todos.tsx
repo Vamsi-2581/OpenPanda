@@ -197,7 +197,12 @@ export function TodosView({ onOpenTask }: { onOpenTask(id: string): void }) {
         await api.patchTodo(card.id, { status: LANE_STATUS[lane] })
       }
       const visibleIds = lanes[lane].map((x) => x.id)
-      const anchor = index < visibleIds.length ? visibleIds[index] : null
+      let anchor = index < visibleIds.length ? visibleIds[index] : null
+      // Dropping a card onto its own slot is a no-op, not "move to the end":
+      // the anchor would be the dragged card itself, which is absent from the
+      // list being spliced into, so the index lookup would fall through to
+      // append. Aim at the next card instead.
+      if (anchor === d.id) anchor = visibleIds[index + 1] ?? null
       const ids = (todos ?? [])
         .filter((x) => laneOf(x.status) === lane && x.id !== d.id)
         .map((x) => x.id)

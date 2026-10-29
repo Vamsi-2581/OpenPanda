@@ -199,8 +199,9 @@ function reachableBand(
   }
 }
 
-/** Pin a panel's top-left into the reachable band. `w`/`h` of 0 means "do not
- *  clamp that axis" — used while measuring. */
+/** Pin a panel's top-left into the reachable band: the result is the nearest
+ *  position in [lo, hi] that keeps a `size`-long panel inside it, so a card
+ *  dropped past an edge lands flush against it rather than out of sight. */
 function clampInto(v: number, lo: number, hi: number, size: number): number {
   const top = Math.min(v, Math.max(lo, hi - size))
   return Math.max(lo, top)

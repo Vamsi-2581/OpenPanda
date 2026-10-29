@@ -1211,13 +1211,24 @@ export function SessionsView({
   function pickPermission(mode: PermissionMode) {
     const prev = permission
     setPermission(mode)
-    if (mode === 'bypass') toast(t('perm.bypassOn'))
-    else if (prev === 'bypass') toast(t('perm.bypassOff'))
-    if (!activeId) return
-    api.patchSession(activeId, { permission_mode: mode }).catch((err: unknown) => {
-      setPermission(prev)
-      toastError(err)
-    })
+    // Speak only after the server agrees. Announcing the switch first meant a
+    // failed PATCH reverted the chip while the toast still claimed bypass was
+    // on — the one message about this feature that must never be wrong.
+    const announce = () => {
+      if (mode === 'bypass') toast(t('perm.bypassOn'))
+      else if (prev === 'bypass') toast(t('perm.bypassOff'))
+    }
+    if (!activeId) {
+      announce()
+      return
+    }
+    api
+      .patchSession(activeId, { permission_mode: mode })
+      .then(announce)
+      .catch((err: unknown) => {
+        setPermission(prev)
+        toastError(err)
+      })
   }
 
   /** Put a starter prompt in the composer, ready to edit or send. The chip is
