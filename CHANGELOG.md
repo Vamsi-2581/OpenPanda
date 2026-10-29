@@ -50,6 +50,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+## [0.1.3] - 2026-10-30 — "Constellation"
+
+**The patch that keeps the console live and the run alive** — codename **Constellation**: a console left open across a sleeping laptop, a reverse proxy or a busy node no longer freezes, and watching a run no longer costs more than the work it watches. A long agent run that prints nothing while it thinks is no longer killed as stalled, and the pre-first-output grace window now applies at all. Configuration and stored data are compatible; the schema gains one additive index migration (v65), which runs automatically.
+
+### Fixed
+
 - **A silent agent CLI is no longer killed as stalled** — the hermes adapter runs `--cli` in one blocking call that prints nothing until the task finishes, so a healthy run past the default 4-minute silence limit was killed as `adapter stalled` and every retry re-ran into the same kill. The adapter now heartbeats every 20 seconds while the CLI works, the same way the deepseek harness does; a genuinely wedged run is still bounded by the hard agent budget.
 
 - **A commander kill is no longer blamed on the provider** — the silence watchdog, the tool-call fuse and the hard deadline all end a run with exit 124 and a verdict containing "timeout", which the injection fallback read as provider trouble and answered with a full re-run under the injected model: the silent CLI stalled again on the same bound four minutes later, and any side effects the first attempt had performed ran twice. Those verdicts now stay out of the rescue. The openclaw adapter also heartbeats every 20 seconds, like hermes, because its one-shot run is equally silent.

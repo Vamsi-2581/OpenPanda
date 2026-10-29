@@ -10,11 +10,10 @@ package version
 // Version is the semantic version of this build, and the default for a build
 // that does not go through release packaging.
 //
-// It tracks the newest tag on main — currently v0.1.2, the patch that gave a
-// conversation a permission mode and a task an executable acceptance contract
-// — so ad-hoc builds identify themselves with the branch's latest published
-// lineage.
-var Version = "0.1.2"
+// It tracks the newest tag on main — currently v0.1.3, the patch that keeps a
+// live console live and a silent long-running agent run alive — so ad-hoc
+// builds identify themselves with the branch's latest published lineage.
+var Version = "0.1.3"
 
 // Codename is the release line's thematic name — "Constellation": the fleet
 // drawn as one sky. The workspace page renders every device as a plate on a
@@ -23,9 +22,9 @@ var Version = "0.1.2"
 // consolidates into the single place that constellation is commanded from.
 // v0.1.0 opened this line and the patches keep it: the same shape, with the
 // entry dialects, the terminal roster, the atomic store, the work-dir breadth
-// rule, and now the conversation permission modes and acceptance contracts
-// added on top. Surfaced by `panda version` and /api/version; not part of the
-// semver itself.
+// rule, the conversation permission modes, the acceptance contracts and now a
+// console that stays live and cheap, added on top. Surfaced by `panda version`
+// and /api/version; not part of the semver itself.
 var Codename = "Constellation"
 
 // ReleaseDate is the day this release line shipped, "2006-01-02". It is the
@@ -34,7 +33,7 @@ var Codename = "Constellation"
 // Version and Codename when a release is cut, and left empty for ad-hoc
 // builds that never had a release day. The console's profile page prints it
 // as "发布于 …" and falls back to omitting the line when it is empty.
-var ReleaseDate = "2026-10-29"
+var ReleaseDate = "2026-10-30"
 
 // Build provenance classes — which channel produced a binary. They ride the
 // wire as hello/heartbeat `prov`. The unset default normalizes to
