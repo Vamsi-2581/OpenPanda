@@ -42,6 +42,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Añadido
 
+### Corregido
+
+## [0.1.2] - 2026-10-29 — "Constellation"
+
+**El parche de la línea de calidad** — nombre en clave **Constellation**: una conversación puede declarar su grado de autonomía y una tarea puede llevar la evidencia de su propio éxito. Cinco modos de permisos se sitúan sobre los niveles de comando y viajan con cada especificación de tarea; `panda task add --accept` convierte una definición de éxito en comprobaciones que el orquestador ejecuta, y el ejecutor rechaza las escritas por otro nodo o irreversibles. La consola recibe el mismo trato: los paneles del espacio de trabajo ya no se pierden fuera de alcance, el tablero de pendientes añade sin desvío y un agente no instalado no es seleccionable. La configuración y los datos guardados son compatibles; el esquema gana una migración (v64) para las tablas del contrato, que se aplica sola.
+
+### Añadido
+
 - **Una conversación tiene modo de permisos** — automático, manual, aceptar ediciones, plan y omitir permisos, elegido en el compositor y guardado con el hilo. El modo viaja en cada especificación de tarea, así que el ejecutor aplica la política elegida: manual detiene cada cambio para una respuesta en primer plano, plan da al agente la cara de solo lectura y detiene los comandos nativos, omitir ejecuta todo y queda auditado.
 - **Una tarea puede llevar un contrato de aceptación ejecutable** — `panda task add --accept "go test ./..."` (o `--accept auto`) ejecuta las comprobaciones al terminar el agente y las registra en la tarea.
 
@@ -53,6 +61,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Un hello capturado ya no se reproduce en otro nodo** —— el hello nombra al receptor para el que fue firmado (`to`, `sig_b`, `ed_sig_b`), y un nodo rechaza un hello dirigido a otro. El despliegue es compatible hacia atrás: un par que no puede vincular sigue siendo admitido, y un nodo que ya vinculó no puede volver a la forma sin vínculo.
 - **El marcador de aclaración acepta dos puntos de ancho completo** —— un agente que escribe `PANDA_QUESTION：` (los dos puntos que produce un IME chino) ahora deja la tarea en espera de respuesta en lugar de dejar la línea en el texto.
 - **Una fila de tarea dañada ya no hace fallar la lista con 500** —— las columnas anulables (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) se leen como valores cero, y `/api/tasks` sirve el resto del tablero.
+- **Una comprobación de aceptación ya no es una segunda vía de ejecución** — las comprobaciones de una tarea delegada se escribían en otro nodo y se ejecutaban aquí fuera del control de niveles; el campo se descarta en el límite del cable, los comandos irreversibles se rechazan y se registran como omitidos, los pasos de CI deben nombrar un subcomando de verificación (`npm publish` o `make release` ya no entran) y una comprobación de artefacto sobre `.` —que siempre pasa— se rechaza. La enumeración se limita al techo del contrato y se ordena, así que `--accept auto` elige pruebas antes que compilaciones cruzadas.
 
 ## [0.1.1] - 2026-10-27 — "Constellation"
 

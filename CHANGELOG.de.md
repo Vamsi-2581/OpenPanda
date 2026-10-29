@@ -42,6 +42,14 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Hinzugefügt
 
+### Behoben
+
+## [0.1.2] - 2026-10-29 — "Constellation"
+
+**Der Patch der Release-Linie** — Codename **Constellation**: ein Gespräch kann seinen Grad an Autonomie erklären, und eine Aufgabe kann den Beleg ihres eigenen Erfolgs tragen. Fünf Berechtigungsmodi liegen über den Befehlsklassen und reisen mit jeder Aufgabenspezifikation; `panda task add --accept` macht aus einer Erfolgsdefinition Prüfungen, die der Orchestrator selbst ausführt, und die Ausführung lehnt fremd verfasste wie irreversible Einträge ab. Die Konsole bekommt dieselbe Behandlung: Arbeitsflächen-Panels lassen sich nicht mehr außer Sichtweite ziehen, die Aufgabenliste fügt ohne Umweg hinzu, und ein nicht installierter Agent ist nicht wählbar. Konfiguration und gespeicherte Daten bleiben kompatibel; das Schema erhält eine Migration (v64) für die Vertragstabellen, die automatisch läuft.
+
+### Hinzugefügt
+
 - **Ein Gespräch hat einen Berechtigungsmodus** — automatisch, manuell, Bearbeitungen übernehmen, Plan und Umgehung, gewählt im Eingabefeld und mit dem Thread gespeichert. Der Modus reist in jeder Aufgabenspezifikation mit, sodass die Ausführung dieselbe Politik anwendet: manuell hält jede ändernde Aktion für eine Vordergrundantwort an, Plan gibt dem Agenten die Nur-Lese-Werkzeugfläche und hält native Befehle an, Umgehung erlaubt alles und wird weiterhin auditiert.
 - **Eine Aufgabe kann einen ausführbaren Abnahmevertrag tragen** — `panda task add --accept "go test ./..."` (oder `--accept auto`) führt die Prüfungen nach dem Agentenlauf aus und zeichnet das Ergebnis an der Aufgabe auf.
 
@@ -53,6 +61,7 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **Ein abgefangenes hello lässt sich nicht mehr an einem anderen Knoten wiedergeben** —— das hello nennt den Empfänger, für den es signiert wurde (`to`, `sig_b`, `ed_sig_b`), und ein Knoten lehnt ein anders adressiertes hello ab. Die Auslieferung bleibt abwärtskompatibel: ein Peer ohne Bindung wird weiterhin aufgenommen, und ein Knoten, der bereits gebunden hat, darf nicht auf die ungebundene Form zurückfallen.
 - **Die Klärungsmarke akzeptiert einen Vollbreiten-Doppelpunkt** —— schreibt ein Agent `PANDA_QUESTION：` (der Doppelpunkt einer chinesischen IME), bleibt die Aufgabe nun auf Antwort wartend stehen, statt die Zeile im Text zu lassen.
 - **Eine beschädigte Aufgabenzeile lässt die Aufgabenliste nicht mehr mit 500 scheitern** —— die nullbaren Spalten (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) werden als Nullwerte gelesen, und `/api/tasks` liefert den Rest des Boards.
+- **Eine Abnahmeprüfung ist keine zweite Ausführungsroute mehr** — die Prüfungen einer delegierten Aufgabe wurden auf einem anderen Knoten verfasst und hier außerhalb der Stufenprüfung ausgeführt; das Feld wird an der Wire-Grenze verworfen, irreversible Befehle werden abgelehnt und als übersprungen vermerkt, CI-Schritte müssen einen Verifikations-Unterbefehl nennen (`npm publish`, `make release` entfallen), und eine Artefaktprüfung auf `.` — die immer besteht — wird abgelehnt. Die Aufzählung ist auf die Obergrenze des Vertrags begrenzt und sortiert, sodass `--accept auto` Tests vor Cross-Builds wählt.
 
 ## [0.1.1] - 2026-10-27 — "Constellation"
 
