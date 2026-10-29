@@ -444,6 +444,12 @@ func isolatedUIConfig(t *testing.T) *config.Config {
 	prevConfig, prevCard := cliConfigPath, cliCardPath
 	cliConfigPath, cliCardPath = filepath.Join(tmp, "config.yaml"), ""
 	t.Cleanup(func() { cliConfigPath, cliCardPath = prevConfig, prevCard })
+	// The engine also takes a node-identity lock through os.UserConfigDir,
+	// which ignores the config it was handed, so the platform config vars
+	// move to the temp dir as well.
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("APPDATA", tmp)
 
 	cfg := &config.Config{}
 	cfg.Node.CardPath = filepath.Join(tmp, "capabilities.yaml")

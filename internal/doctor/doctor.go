@@ -87,7 +87,16 @@ func Run(configPath string) []Check {
 	}
 
 	if cfg, err := config.Load(configPath); err == nil {
-		add(pass("doctor.config.ok", "path", config.ResolvePath(configPath), "name", cfg.Node.Name))
+		// Load synthesizes defaults when the file is missing and returns no
+		// error, so "loaded" is not "a config exists". Say which it is: on a
+		// fresh machine the report used to claim a config the user had never
+		// written.
+		resolved := config.ResolvePath(configPath)
+		if _, statErr := os.Stat(resolved); statErr != nil {
+			add(pass("doctor.config.defaults", "path", resolved))
+		} else {
+			add(pass("doctor.config.ok", "path", resolved, "name", cfg.Node.Name))
+		}
 		if st, err := os.Stat(cfg.Storage.DBPath); err == nil {
 			add(pass("doctor.db.ok", "path", cfg.Storage.DBPath, "size", fmt.Sprintf("%d B", st.Size())))
 			if c := checkSchemaVersion(cfg); c.Key != "" {
@@ -312,7 +321,10 @@ func AdaptersDir() string {
 		if r, err := filepath.EvalSymlinks(exe); err == nil {
 			real = r
 		}
-		for _, base := range []string{exe, real} {
+		// Follow the PATH symlink first: a packaged install puts the real
+		// binary and its adapters/ under the prefix, while the symlink's own
+		// directory may hold a stale adapters/ from an older layout.
+		for _, base := range []string{real, exe} {
 			candidates = append(candidates,
 				filepath.Join(filepath.Dir(base), "adapters"),
 				filepath.Join(filepath.Dir(base), "..", "adapters"),

@@ -4,6 +4,7 @@ package doctor
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,6 +95,59 @@ func TestRunChecksAreWellFormed(t *testing.T) {
 		if c.Key == "" {
 			t.Fatalf("check with empty key: %+v", c)
 		}
+	}
+}
+
+// isolatedDoctorEnv keeps Run from touching the developer's real user dirs.
+func isolatedDoctorEnv(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("APPDATA", root)
+	t.Setenv("OPENPANDA_DB_PATH", filepath.Join(root, "missing.db"))
+}
+
+// A missing config file used to render as a passing "config <path>" line:
+// config.Load synthesizes defaults and returns no error, so the report claimed
+// a config the user had never written. It must say "defaults" instead.
+func TestRunReportsDefaultConfigWhenFileMissing(t *testing.T) {
+	isolatedDoctorEnv(t)
+	path := filepath.Join(t.TempDir(), "missing-config.yaml")
+	key := ""
+	for _, c := range Run(path) {
+		if strings.HasPrefix(c.Key, "doctor.config.") {
+			if !c.OK {
+				t.Fatalf("missing config is not a hard failure: %+v", c)
+			}
+			key = c.Key
+		}
+	}
+	if key != "doctor.config.defaults" {
+		t.Fatalf("config check = %q, want doctor.config.defaults", key)
+	}
+}
+
+// With a config on disk the line goes back to naming the file and node.
+func TestRunReportsConfigWhenFileExists(t *testing.T) {
+	isolatedDoctorEnv(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("node:\n  name: doctor-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, name := "", ""
+	for _, c := range Run(path) {
+		if strings.HasPrefix(c.Key, "doctor.config.") {
+			key = c.Key
+			for i := 0; i+1 < len(c.Pairs); i += 2 {
+				if c.Pairs[i] == "name" {
+					name = c.Pairs[i+1]
+				}
+			}
+		}
+	}
+	if key != "doctor.config.ok" || name != "doctor-test" {
+		t.Fatalf("config check = %q name %q, want doctor.config.ok / doctor-test", key, name)
 	}
 }
 
