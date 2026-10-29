@@ -57,9 +57,40 @@ const line = (lines: string[], i: number): string => lines[i] ?? ''
 const char = (s: string, i: number): string => s[i] ?? ''
 const group = (m: RegExpExecArray, n: number): string => m[n] ?? ''
 
-/** Parse a Markdown document into a block list. */
-export function parseBlocks(src: string): Block[] {
-  return parseLines(src.replace(/\r\n?/g, '\n').split('\n'), 0)
+/** Parsed documents, keyed by their source text.
+ *
+ *  The console re-renders a whole transcript on every change frame while any
+ *  task on the node is moving, and every finished reply re-parsed its
+ *  Markdown from scratch each time. Parsing is pure, so a result is safe to
+ *  hand back; the cache is bounded by both entry count and document size so a
+ *  long thread cannot grow it without limit.
+ *
+ *  Streaming text is not cached: it changes with every delta, so its entries
+ *  could never hit and would only evict the history that does. */
+const PARSED_MAX_ENTRIES = 128
+const PARSED_MAX_CHARS = 32 * 1024
+const parsedBlocks = new Map<string, Block[]>()
+
+/** Parse a Markdown document into a block list. `cache: false` parses without
+ *  keeping the result — for text that is still changing. */
+export function parseBlocks(src: string, cache = true): Block[] {
+  if (!cache) return parseLines(src.replace(/\r\n?/g, '\n').split('\n'), 0)
+  const hit = parsedBlocks.get(src)
+  if (hit) {
+    // Refresh recency, so what stays on screen survives a scroll.
+    parsedBlocks.delete(src)
+    parsedBlocks.set(src, hit)
+    return hit
+  }
+  const blocks = parseLines(src.replace(/\r\n?/g, '\n').split('\n'), 0)
+  if (src.length <= PARSED_MAX_CHARS) {
+    if (parsedBlocks.size >= PARSED_MAX_ENTRIES) {
+      const oldest = parsedBlocks.keys().next().value
+      if (oldest !== undefined) parsedBlocks.delete(oldest)
+    }
+    parsedBlocks.set(src, blocks)
+  }
+  return blocks
 }
 
 /** Deepest block nesting this parser will build.

@@ -2133,6 +2133,11 @@ export function SessionsView({
   // the newest thing in the thread, whatever the position of the bubble that
   // dispatched it (see `liveTaskIds`).
   const liveIds = sessionTasks ? liveTaskIds(sessionTasks) : []
+  // The same rows keyed for the transcript. A task bubble renders from here
+  // instead of fetching its own copy on every change frame: a thread with
+  // several dispatch turns was issuing that many extra requests per frame,
+  // all competing with the event stream for the browser's six connections.
+  const tasksById = new Map((sessionTasks ?? []).map((t) => [t.id, t]))
 
   return (
     <section class="chat">
@@ -2345,6 +2350,7 @@ export function SessionsView({
                  a reload. */
               elapsedMs={turnMs[i] ?? m.duration_ms}
               liveFrom={liveFrom}
+              listTask={m.kind === 'task' && m.ref ? tasksById.get(m.ref) : undefined}
               onOpenTask={openTaskInPlace}
             />
           ))}
@@ -3395,7 +3401,7 @@ function ChatBubble(props: {
             </>
           ) : (
             <>
-              {text && <Markdown text={text} class="msg-text" />}
+              {text && <Markdown text={text} class="msg-text" streaming={msg.streaming} />}
               {/* The orchestration: who got the job, which stage, how it stands.
                   For a plan, the stages the panda cut it into. */}
               {isTaskKind && task && <TaskCast task={task} />}
@@ -3413,7 +3419,7 @@ function ChatBubble(props: {
                   the decision lived on another page — so it waited, or worse,
                   was never seen. Nothing else may answer it on the user's
                   behalf: this is the web twin of the TUI's approval card. */}
-              <TaskApproval taskId={msg.ref} />
+              <TaskApproval taskId={msg.ref} hint={task} />
               {msg.result?.report && <Markdown text={msg.result.report} class="task-report" />}
               {msg.result?.stdout && <TaskOutput text={msg.result.stdout} />}
               {/* One quiet row of controls: open the chain, talk to the
@@ -3425,7 +3431,7 @@ function ChatBubble(props: {
                 <button class="chain-toggle" onClick={() => setChainOpen((v) => !v)}>
                   {chainOpen ? t('sessions.chainHide') : t('sessions.chainShow')}
                 </button>
-                <TaskQuickSend taskId={msg.ref} />
+                <TaskQuickSend taskId={msg.ref} hint={task} />
                 <a
                   class="task-card-open"
                   href={`#/task/${encodeURIComponent(msg.ref)}`}
@@ -3525,11 +3531,26 @@ function ChatTurn(props: {
   onOpenTask(id: string): void
   elapsedMs?: number
   liveFrom?: number
+  /** The session's own row for this bubble's task, when the thread's list
+   *  carries one. It is fresher than a fetch and costs no request; the fetch
+   *  is the fallback for a task outside the list (one delegated elsewhere, or
+   *  the first paint before the list lands). */
+  listTask?: Task | null
 }) {
-  const { msg } = props
-  const task = useTaskBrief(msg.kind === 'task' ? msg.ref : undefined)
+  const { msg, onOpenTask, elapsedMs, liveFrom, listTask } = props
+  const fetched = useTaskBrief(listTask ? undefined : msg.kind === 'task' ? msg.ref : undefined)
+  const task = listTask ?? fetched
   const plan = usePlanBrief(msg.kind === 'plan' ? msg.ref : undefined)
-  return <ChatBubble {...props} task={task} plan={plan} />
+  return (
+    <ChatBubble
+      msg={msg}
+      onOpenTask={onOpenTask}
+      elapsedMs={elapsedMs}
+      liveFrom={liveFrom}
+      task={task}
+      plan={plan}
+    />
+  )
 }
 
 /** Whether the thread's round still has work in flight.
@@ -3648,13 +3669,25 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
  *  views use; needs_changed_input disables Approve, because consent alone
  *  cannot continue that task and a button that silently does nothing is worse
  *  than an honest disabled one. */
-function TaskApproval({ taskId, preselect }: { taskId: string; preselect?: ApprovalScope }) {
+function TaskApproval({
+  taskId,
+  preselect,
+  hint,
+}: {
+  taskId: string
+  preselect?: ApprovalScope
+  /** The bubble's own copy of the row, when it has one — the thread's task
+   *  list is already polled once per frame, so a second fetch per bubble is
+   *  load with no fresher answer. */
+  hint?: Task | null
+}) {
   const change = useChangeSignal()
-  const { data: task } = useAsync<Task | null>(
-    () => api.taskBrief(taskId).catch(() => null),
-    [taskId],
+  const { data: fetched } = useAsync<Task | null>(
+    () => (hint ? Promise.resolve(null) : api.taskBrief(taskId).catch(() => null)),
+    [taskId, Boolean(hint)],
     change,
   )
+  const task = hint ?? fetched
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // The remember scope: where this answer lands for the gates that come after.
@@ -3729,13 +3762,14 @@ function TaskApproval({ taskId, preselect }: { taskId: string; preselect?: Appro
  *  next round, aborting the in-flight one when this console runs the task).
  *  Renders nothing once the task is terminal: a finished task refuses
  *  messages, and a button that can only fail is worse than none. */
-function TaskQuickSend({ taskId }: { taskId: string }) {
+function TaskQuickSend({ taskId, hint }: { taskId: string; hint?: Task | null }) {
   const change = useChangeSignal()
-  const { data: task } = useAsync<Task | null>(
-    () => api.taskBrief(taskId).catch(() => null),
-    [taskId],
+  const { data: fetched } = useAsync<Task | null>(
+    () => (hint ? Promise.resolve(null) : api.taskBrief(taskId).catch(() => null)),
+    [taskId, Boolean(hint)],
     change,
   )
+  const task = hint ?? fetched
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)

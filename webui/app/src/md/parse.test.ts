@@ -249,3 +249,21 @@ test('nesting below the ceiling still nests', () => {
   const outer = blocks[0] as { kids: Block[] }
   assert.deepEqual(kinds(outer.kids), ['para', 'quote'])
 })
+
+// The parsed-document cache: a finished reply is re-rendered on every change
+// frame, and parsing it again each time was the transcript's per-frame cost.
+test('a finished document is parsed once and reused', () => {
+  const src = '## heading\n\n- one\n- two'
+  const first = parseBlocks(src)
+  const second = parseBlocks(src)
+  assert.equal(second, first, 'the same source must hand back the cached tree')
+  assert.deepEqual(second, first, 'and it must still be the same document')
+})
+
+test('text that is still streaming is never cached', () => {
+  const src = 'half an answer'
+  const a = parseBlocks(src, false)
+  const b = parseBlocks(src, false)
+  assert.notEqual(a, b, 'uncached parses are independent')
+  assert.deepEqual(a, b)
+})

@@ -9,9 +9,19 @@ import { t } from '../i18n'
 // there is no `innerHTML` anywhere, so model output can never inject markup
 // and the console needs no sanitizer.
 
-/** Render a Markdown string as vnodes. Used for every assistant reply. */
-export function Markdown({ text, class: cls }: { text: string; class?: string }): JSX.Element {
-  return <div class={cls ? `md ${cls}` : 'md'}>{renderBlocks(parseBlocks(text))}</div>
+/** Render a Markdown string as vnodes. Used for every assistant reply.
+ *  `streaming` marks text that is still arriving: it is parsed without being
+ *  cached, because a document that changes with every delta can never hit. */
+export function Markdown({
+  text,
+  class: cls,
+  streaming = false,
+}: {
+  text: string
+  class?: string
+  streaming?: boolean
+}): JSX.Element {
+  return <div class={cls ? `md ${cls}` : 'md'}>{renderBlocks(parseBlocks(text, !streaming))}</div>
 }
 
 export function renderBlocks(blocks: Block[]): JSX.Element[] {
