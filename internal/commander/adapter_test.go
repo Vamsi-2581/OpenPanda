@@ -355,12 +355,14 @@ func TestAdapterSilenceHeartbeatNotes(t *testing.T) {
 	}
 }
 
-// startThenSilentAdapter emits one progress line then goes quiet forever —
-// the mid-run wedge the tight silence limit exists to catch.
+// startThenSilentAdapter emits one raw stderr line then goes quiet forever —
+// the mid-run wedge the tight silence limit exists to catch. The line is
+// deliberately not an adapter protocol frame: raw stderr is the CLI speaking,
+// so the startup grace window is already closed by the time the silence starts.
 const startThenSilentAdapter = `#!/usr/bin/env python3
 import json, sys, time
 req = json.loads(sys.stdin.read())
-print(json.dumps({"type": "progress", "note": "started"}), file=sys.stderr, flush=True)
+print("cli started", file=sys.stderr, flush=True)
 time.sleep(3600)
 print(json.dumps({"ok": True, "result": "done", "exit_code": 0}))
 `
@@ -434,6 +436,89 @@ func TestAdapterStartupGraceKill(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("startup grace not enforced promptly: %v", elapsed)
+	}
+}
+
+// spawnThenSilentAdapter emits only the adapter's own spawn bookkeeping and
+// then nothing — no model output ever arrives.
+const spawnThenSilentAdapter = `#!/usr/bin/env python3
+import json, sys, time
+req = json.loads(sys.stdin.read())
+print(json.dumps({"type": "event", "ev": "tool_use", "phase": "spawn",
+                  "id": "t", "name": "t", "input": {"argc": 1}}),
+      file=sys.stderr, flush=True)
+time.sleep(3600)
+print(json.dumps({"ok": True, "result": "done", "exit_code": 0}))
+`
+
+// TestAdapterStartupGraceSurvivesSpawnBookkeeping pins the pre-first-output
+// window against the adapter's own startup frame: {"phase":"spawn"} says the
+// task was handed to the CLI, not that a model has spoken. It used to count
+// as output, so the grace window closed the instant the process started and
+// could never apply no matter what silence_s was set to.
+func TestAdapterStartupGraceSurvivesSpawnBookkeeping(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "slow.py"), []byte(spawnThenSilentAdapter), 0o755); err != nil {
+		t.Fatalf("write adapter: %v", err)
+	}
+	oldDir := adapterDir
+	adapterDir = dir
+	defer func() { adapterDir = oldDir }()
+	oldSilence := silenceTimeout
+	silenceTimeout = 200 * time.Millisecond
+	defer func() { silenceTimeout = oldSilence }()
+	oldGrace := adapterStartupGrace
+	adapterStartupGrace = 600 * time.Millisecond
+	defer func() { adapterStartupGrace = oldGrace }()
+	oldHB := silenceHeartbeat
+	silenceHeartbeat = 100 * time.Millisecond
+	defer func() { silenceHeartbeat = oldHB }()
+
+	start := time.Now()
+	res := runAdapterProcess(context.Background(), "slow.py", "x", "", nil)
+	elapsed := time.Since(start)
+	if res.OK {
+		t.Fatalf("silent adapter reported success")
+	}
+	if res.ExitCode != 124 || !strings.Contains(res.Result, "startup grace") {
+		t.Fatalf("res = %+v, want exit-124 startup grace; the spawn frame must not close the window", res)
+	}
+	if elapsed < 550*time.Millisecond {
+		t.Fatalf("killed at %v, before startup grace 600ms — the spawn frame counted as output", elapsed)
+	}
+}
+
+// TestProgressWriterOutputTracking separates liveness from output: spawn
+// bookkeeping, progress heartbeats and session handles only mark activity,
+// while raw stderr and real agent events mark output.
+func TestProgressWriterOutputTracking(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		output bool
+	}{
+		{"spawn bookkeeping", `{"type":"event","ev":"tool_use","phase":"spawn","id":"t"}`, false},
+		{"progress heartbeat", `{"type":"progress","note":"still running"}`, false},
+		{"session handle", `{"type":"event","ev":"session","id":"s1"}`, false},
+		{"agent text", `{"type":"event","ev":"text","text":"hello"}`, true},
+		{"agent tool use", `{"type":"event","ev":"tool_use","id":"t","name":"Bash"}`, true},
+		{"raw stderr", "cli started", true},
+	}
+	for _, tc := range cases {
+		var activity, output bool
+		w := &progressWriter{
+			onActivity: func() { activity = true },
+			onOutput:   func() { output = true },
+		}
+		if _, err := w.Write([]byte(tc.line + "\n")); err != nil {
+			t.Fatalf("%s: write: %v", tc.name, err)
+		}
+		if !activity {
+			t.Fatalf("%s: no activity recorded", tc.name)
+		}
+		if output != tc.output {
+			t.Fatalf("%s: output=%v, want %v", tc.name, output, tc.output)
+		}
 	}
 }
 

@@ -678,7 +678,7 @@ def _clamp_field(key, value):
     return value
 
 
-def emit_event(ev, **fields):
+def emit_event(ev, phase=None, **fields):
     """Emit one typed agent-activity event as NDJSON on stderr.
 
     ev names the block kind — "text", "thinking", "tool_use", "tool_result"
@@ -686,8 +686,15 @@ def emit_event(ev, **fields):
     bounds; "parent" carries the tool_use id a sub-agent block belongs to,
     which is what lets the display layer nest one agent's activity under the
     Task node that spawned it — the everything-is-a-node view.
+
+    phase (optional) tags adapter bookkeeping that is not agent output. A
+    "spawn" event says the task was handed to the CLI; the Go side keeps the
+    startup-grace silence window open because no model has produced anything
+    yet.
     """
     payload = {"type": "event", "ev": ev}
+    if phase:
+        payload["phase"] = phase
     for k, v in fields.items():
         payload[k] = _clamp_field(k, v)
     sys.stderr.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -930,7 +937,7 @@ def run_simple(cmd, cwd=None, timeout=DEFAULT_TIMEOUT, label=None, input=None,
     """
     label = label or (cmd[0] if cmd else "cli")
     emit_event("tool_use", id=label, name=label,
-               input={"argc": max(0, len(cmd) - 1)})
+               input={"argc": max(0, len(cmd) - 1)}, phase="spawn")
     try:
         returncode, out, err = run_plain(cmd, cwd=cwd, timeout=timeout, input=input,
                                          heartbeat_s=heartbeat_s)

@@ -437,6 +437,12 @@ type progressWriter struct {
 	sink       ProgressFunc
 	evSink     AgentEventFunc
 	onActivity func() // set before Start; read-only afterwards
+	// onOutput fires only when the CLI itself speaks — a non-protocol stderr
+	// line or a real agent event. The adapter's own spawn bookkeeping and
+	// silence heartbeats prove the process is alive (onActivity) but not that
+	// a model has produced anything yet, which is what the startup grace
+	// window is measuring.
+	onOutput func() // set before Start; read-only afterwards
 	// adapterName is the adapter file this process runs — stamped onto
 	// session events so the persisting consumer attributes the minted
 	// handle to the adapter that must resume it.
@@ -536,6 +542,11 @@ func (w *progressWriter) line(b []byte) {
 	}
 	w.capture.Write(b)
 	w.capture.Write([]byte("\n"))
+	// Raw stderr is the CLI's own voice: output has begun, so the startup
+	// grace window closes and the ordinary silence limit applies.
+	if w.onOutput != nil {
+		w.onOutput()
+	}
 }
 
 // maxAgentEventText is the Go-side hard cap per text-bearing event field.
@@ -552,6 +563,7 @@ const maxAgentEventInput = 8 * 1024
 func (w *progressWriter) event(b []byte) {
 	var ev struct {
 		Ev        string          `json:"ev"`
+		Phase     string          `json:"phase"`
 		ID        string          `json:"id"`
 		Parent    string          `json:"parent"`
 		Name      string          `json:"name"`
@@ -585,6 +597,12 @@ func (w *progressWriter) event(b []byte) {
 			}
 		}
 		return
+	}
+	// The adapter's spawn-time bookkeeping ({"phase":"spawn"}) says the task
+	// was submitted, not that the CLI produced anything — the startup grace
+	// window stays open. Every other event is real agent activity.
+	if w.onOutput != nil && ev.Phase != "spawn" {
+		w.onOutput()
 	}
 	if w.evSink == nil {
 		return
@@ -1187,10 +1205,22 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 		startupStall bool
 		cappedCalls  bool
 	)
+	// touch records real output: the startup grace window is over and the
+	// ordinary silence limit applies from here on.
 	touch := func() {
 		actMu.Lock()
 		lastActivity = time.Now()
 		sawOutput = true
+		actMu.Unlock()
+	}
+	// alive records that the adapter process is still doing something without
+	// claiming output. Its spawn bookkeeping and silence heartbeats arrive on
+	// stderr before the CLI has said anything, and treating them as output
+	// closed the startup grace window at process start — the window then never
+	// applied no matter what silence_s was set to.
+	alive := func() {
+		actMu.Lock()
+		lastActivity = time.Now()
 		actMu.Unlock()
 	}
 
@@ -1275,7 +1305,8 @@ func runAdapterProcess(ctx context.Context, name string, prompt string, cwd stri
 	var stdout activityWriter
 	stdout.onActivity = touch
 	var stderr progressWriter
-	stderr.onActivity = touch
+	stderr.onActivity = alive
+	stderr.onOutput = touch
 	stderr.sink = progressSink
 	stderr.evSink = AgentEvents(ctx)
 	stderr.adapterName = name
@@ -1716,6 +1747,12 @@ func startAgentSession(spawnCtx, turnCtx context.Context, name string, req Adapt
 	// starts with the process, so an assignment afterwards would race its
 	// Write reads.
 	stderr.onActivity = func() {
+		s.lastAct.Store(time.Now().UnixNano())
+	}
+	// turnSeen measures the turn's pre-first-output window, so it follows
+	// real output only — the adapter's own protocol frames say the turn is
+	// live, not that the CLI has answered yet.
+	stderr.onOutput = func() {
 		s.lastAct.Store(time.Now().UnixNano())
 		s.turnSeen.Store(true)
 	}
