@@ -40,6 +40,20 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Ein Gespräch hat einen Berechtigungsmodus** — automatisch, manuell, Bearbeitungen übernehmen, Plan und Umgehung, gewählt im Eingabefeld und mit dem Thread gespeichert. Der Modus reist in jeder Aufgabenspezifikation mit, sodass die Ausführung dieselbe Politik anwendet: manuell hält jede ändernde Aktion für eine Vordergrundantwort an, Plan gibt dem Agenten die Nur-Lese-Werkzeugfläche und hält native Befehle an, Umgehung erlaubt alles und wird weiterhin auditiert.
+- **Eine Aufgabe kann einen ausführbaren Abnahmevertrag tragen** — `panda task add --accept "go test ./..."` (oder `--accept auto`) führt die Prüfungen nach dem Agentenlauf aus und zeichnet das Ergebnis an der Aufgabe auf.
+
+### Behoben
+
+- **Ein Arbeitsflächen-Panel lässt sich nicht mehr außer Sichtweite ziehen** — die Ablageposition wird auf den sichtbaren Bereich begrenzt (der Scroll-Offset wurde vom falschen Element gelesen), gespeicherte Koordinaten außerhalb der Fläche werden beim Laden korrigiert, und „Layout aufräumen“ stellt die Reihe wieder her.
+- **Die Aufgabenliste fügt ohne Umweg hinzu** — das Eingabefeld ist immer sichtbar, `n` springt von überall dorthin, die Filter zeigen ihre Anzahl, und eine leere Liste ist eine Zeile statt drei leerer Spalten.
+- **Ein Agent, den dieser Knoten nicht hat, ist nicht wählbar** — die Zeile nennt den Grund und bleibt nur zum Entfernen einer alten Auswahl klickbar.
+- **Ein abgefangenes hello lässt sich nicht mehr an einem anderen Knoten wiedergeben** —— das hello nennt den Empfänger, für den es signiert wurde (`to`, `sig_b`, `ed_sig_b`), und ein Knoten lehnt ein anders adressiertes hello ab. Die Auslieferung bleibt abwärtskompatibel: ein Peer ohne Bindung wird weiterhin aufgenommen, und ein Knoten, der bereits gebunden hat, darf nicht auf die ungebundene Form zurückfallen.
+- **Die Klärungsmarke akzeptiert einen Vollbreiten-Doppelpunkt** —— schreibt ein Agent `PANDA_QUESTION：` (der Doppelpunkt einer chinesischen IME), bleibt die Aufgabe nun auf Antwort wartend stehen, statt die Zeile im Text zu lassen.
+- **Eine beschädigte Aufgabenzeile lässt die Aufgabenliste nicht mehr mit 500 scheitern** —— die nullbaren Spalten (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) werden als Nullwerte gelesen, und `/api/tasks` liefert den Rest des Boards.
+
 ## [0.1.1] - 2026-10-27 — "Constellation"
 
 **Der Patch auf der reifen Linie** — Codename **Constellation**: die Flotte bleibt ein Himmel, die Nähte sind enger. Der Entry-Client spricht OpenAI Responses und Google Gemini nativ, Kader und Knoten-Pin eines Threads erreichen das Terminal neben der Konsole, das Dispatch-Budget folgt dem Team, das du wirklich gewählt hast, schreibende Zugriffe über Prozessgrenzen hinweg sind hinter einer Dateisperre atomar, und eine Aufgabe kann sich ein eigenes Arbeitsverzeichnis anheften. Ein Projekt kann aus einer authentifizierten Anfrage nicht mehr ein Betrachter der ganzen Festplatte machen. Konfiguration und gespeicherte Daten bleiben unverändert — keine Schema-Migration, kein umbenannter Schlüssel — und der Draht bekommt keinen neuen Frame. Die einzige Formatänderung ist die paarweise Versiegelung der UDP-Datagramme, die ein 0.1.0-Knoten nicht öffnen kann: aktualisiere ein Mesh gemeinsam (siehe **Inkompatible Änderungen**).

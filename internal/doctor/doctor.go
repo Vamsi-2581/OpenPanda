@@ -32,6 +32,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/providers"
 	"github.com/Xustalis/OpenPanda/internal/pyexec"
 	"github.com/Xustalis/OpenPanda/internal/security"
+	"github.com/Xustalis/OpenPanda/internal/storage"
 )
 
 // Check is one self-check line: the i18n key that describes it, the ordered
@@ -86,9 +87,21 @@ func Run(configPath string) []Check {
 	}
 
 	if cfg, err := config.Load(configPath); err == nil {
-		add(pass("doctor.config.ok", "path", config.ResolvePath(configPath), "name", cfg.Node.Name))
+		// Load synthesizes defaults when the file is missing and returns no
+		// error, so "loaded" is not "a config exists". Say which it is: on a
+		// fresh machine the report used to claim a config the user had never
+		// written.
+		resolved := config.ResolvePath(configPath)
+		if _, statErr := os.Stat(resolved); statErr != nil {
+			add(pass("doctor.config.defaults", "path", resolved))
+		} else {
+			add(pass("doctor.config.ok", "path", resolved, "name", cfg.Node.Name))
+		}
 		if st, err := os.Stat(cfg.Storage.DBPath); err == nil {
 			add(pass("doctor.db.ok", "path", cfg.Storage.DBPath, "size", fmt.Sprintf("%d B", st.Size())))
+			if c := checkSchemaVersion(cfg); c.Key != "" {
+				add(c)
+			}
 			if c := checkDBGrowth(cfg); c.Key != "" {
 				add(c)
 			}
@@ -308,7 +321,10 @@ func AdaptersDir() string {
 		if r, err := filepath.EvalSymlinks(exe); err == nil {
 			real = r
 		}
-		for _, base := range []string{exe, real} {
+		// Follow the PATH symlink first: a packaged install puts the real
+		// binary and its adapters/ under the prefix, while the symlink's own
+		// directory may hold a stale adapters/ from an older layout.
+		for _, base := range []string{real, exe} {
 			candidates = append(candidates,
 				filepath.Join(filepath.Dir(base), "adapters"),
 				filepath.Join(filepath.Dir(base), "..", "adapters"),
@@ -341,6 +357,34 @@ func joinPaths(ps []string) string { return strings.Join(ps, ", ") }
 // thousands of dead rows every bounded board query still pays the index
 // scan, and a full clear becomes a multi-second delete.
 const doctorSettledWarn = 20000
+
+// checkSchemaVersion reports a database written by a NEWER binary than the one
+// on this machine. storage.Migrate refuses that data directory outright, so the
+// daemon exits at startup — and under launchd/systemd KeepAlive it exits again
+// on every restart interval, forever, with nothing in the operator's vocabulary
+// saying why. `panda doctor` is where that becomes one line instead of a wall of
+// identical stderr.
+//
+// The comparison is against storage.LatestVersion() (this binary's migration
+// ceiling) rather than a literal, so the answer cannot drift from the migrations.
+func checkSchemaVersion(cfg *config.Config) Check {
+	db, err := sql.Open("sqlite",
+		fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(2000)", escapeURIPath(cfg.Storage.DBPath)))
+	if err != nil {
+		return Check{}
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return Check{}
+	}
+	latest := storage.LatestVersion()
+	if version > latest {
+		return fail("doctor.db.schema.no",
+			"db", strconv.Itoa(version), "binary", strconv.Itoa(latest))
+	}
+	return pass("doctor.db.schema.ok", "db", strconv.Itoa(version), "binary", strconv.Itoa(latest))
+}
 
 // checkDBGrowth counts task/audit rows in the local database and flags the
 // one unbounded-growth combination that has a knob: a large settled history

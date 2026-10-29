@@ -1621,9 +1621,13 @@ func (m tuiModel) enterProject(name string) (tea.Model, tea.Cmd) {
 		return fail(err)
 	}
 	r.setProject(name)
-	if pr, err := r.projStore.Get(name); err == nil && pr.WorkDir != "" && r.cfg != nil {
-		workDir := pr.WorkDir
-		r.mutateConfig(func(c *config.Config) { c.Storage.WorkPath = workDir })
+	if pr, err := r.projStore.Get(name); err == nil && r.cfg != nil {
+		// UsableWorkDir: entering a row whose tree the breadth rule refuses
+		// must not relocate the node's work path onto it — every task would
+		// then run with a sandbox root the executor rejects.
+		if workDir := pr.UsableWorkDir(); workDir != "" {
+			r.mutateConfig(func(c *config.Config) { c.Storage.WorkPath = workDir })
+		}
 	}
 	r.bindProject()
 	r.setConvo(loadConvo())

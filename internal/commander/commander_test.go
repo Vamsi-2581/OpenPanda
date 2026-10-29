@@ -540,10 +540,76 @@ func TestRealEnvironmentViability(t *testing.T) {
 	}
 }
 
+// TestUserCardSchedulingOrder checks the routing order a REAL operator card
+// produces. It is opt-in: the card lives outside the repository, and a test
+// that reads a fixed personal path either fails or silently skips depending on
+// what the machine happens to have — which is how this one failed the gate the
+// moment another package's test wrote the file mid-run. Point PANDA_USER_CARD
+// at the card to run it:
+//
+//	PANDA_USER_CARD=~/Library/Application\ Support/openpanda/capabilities.yaml \
+//	  go test ./internal/commander -run TestUserCardSchedulingOrder
 func TestUserCardSchedulingOrder(t *testing.T) {
-	card, err := ledger.LoadCard("/Users/xenith/Library/Application Support/openpanda/capabilities.yaml")
+	path := os.Getenv("PANDA_USER_CARD")
+	if path == "" {
+		t.Skip("set PANDA_USER_CARD=<capabilities.yaml> to check a live card's routing order")
+	}
+	card, err := ledger.LoadCard(path)
 	if err != nil {
-		t.Skipf("cannot load user capabilities.yaml: %v", err)
+		t.Fatalf("load %s: %v", path, err)
+	}
+	// The card is the operator's own, so this asserts what a card must at
+	// least answer — every class this node advertises resolves to some agent —
+	// rather than pinning names that a reinstall legitimately changes.
+	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
+	for _, req := range []string{"refactoring", "code_review", "build", "long_running", "scripts", "coding"} {
+		if cands := r.RankAgents([]string{req}); len(cands) == 0 {
+			t.Errorf("no candidates for %q on this card", req)
+		}
+	}
+}
+
+// TestCardSchedulingOrder pins the capability-then-cost ranking on a card
+// built here rather than on the developer's own capabilities.yaml. Reading
+// the user card made the test machine-coupled: on CI the hardcoded path does
+// not exist and the test skipped, and after a clean reinstall the regenerated
+// card no longer listed every agent the assertions named, so it failed with
+// "no candidates" instead of saying what changed in ranking.
+func TestCardSchedulingOrder(t *testing.T) {
+	card := ledger.Card{
+		Device: "ranking-test-node",
+		Agents: map[string]ledger.Agent{
+			"claude_code": {
+				Adapter:      "claude_code.py",
+				Capabilities: []string{"coding", "shell", "file_edit", "refactoring"},
+				CostTier:     "medium_high",
+				Tier:         1,
+			},
+			"codex": {
+				Adapter:      "codex.py",
+				Capabilities: []string{"coding", "shell", "file_edit", "code_review"},
+				CostTier:     "medium",
+				Tier:         1,
+			},
+			"grok_build": {
+				Adapter:      "grok_build.py",
+				Capabilities: []string{"coding", "shell", "file_edit", "build"},
+				CostTier:     "medium",
+				Tier:         1,
+			},
+			"hermes": {
+				Adapter:      "hermes.py",
+				Capabilities: []string{"coding", "shell", "file_edit", "long_running"},
+				CostTier:     "low_medium",
+				Tier:         1,
+			},
+			"opencode": {
+				Adapter:      "opencode.py",
+				Capabilities: []string{"coding", "shell", "file_edit", "scripts"},
+				CostTier:     "low",
+				Tier:         1,
+			},
+		},
 	}
 	r := NewRouter(card, NewExecutor(), config.ModelConfig{}, config.InjectionConfig{}, config.RoutingConfig{})
 
@@ -564,7 +630,7 @@ func TestUserCardSchedulingOrder(t *testing.T) {
 		if len(cands) == 0 {
 			t.Fatalf("no candidates for %v", tt.req)
 		}
-		if cands[0].Name != tt.wantFirst && !(tt.wantFirst == "opencode" && cands[0].Name == "deepseek_harness") {
+		if cands[0].Name != tt.wantFirst {
 			t.Errorf("for req %v: got %s (score %.2f), want %s", tt.req, cands[0].Name, cands[0].Score, tt.wantFirst)
 		}
 	}

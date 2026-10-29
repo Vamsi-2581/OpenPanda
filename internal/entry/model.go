@@ -1132,7 +1132,9 @@ func (c *Client) completeOnceOpenAI(ctx context.Context, system string, msgs []o
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
 	if or.Error != nil {
-		return Response{}, fmt.Errorf("entry: api error: %s", or.Error.Message)
+		// A 200 with an error body: classify by the type the provider named so
+		// the retry/failover paths see the same verdict a status code would give.
+		return Response{}, inBandError(or.Error.Type, or.Error.Message)
 	}
 	if or.Usage != nil {
 		c.addUsage(or.Usage.PromptTokens, or.Usage.CompletionTokens)
@@ -1368,7 +1370,7 @@ func (c *Client) completeOnce(ctx context.Context, req messagesRequest) (Respons
 		return Response{}, fmt.Errorf("entry: parse response: %w", err)
 	}
 	if mr.Error != nil {
-		return Response{}, fmt.Errorf("entry: api error: %s", mr.Error.Message)
+		return Response{}, inBandError(mr.Error.Type, mr.Error.Message)
 	}
 	if mr.Usage != nil {
 		c.addUsage(mr.Usage.InputTokens, mr.Usage.OutputTokens)

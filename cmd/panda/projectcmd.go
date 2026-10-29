@@ -146,9 +146,24 @@ func runProjectList(args []string) {
 			mark = p.Accent(p.Glyph("▸", ">")) + " "
 			tint = p.Accent
 		}
+		// A refused work dir is shown tinted rather than as an ordinary path:
+		// the row is the reason tasks under this project ignore the tree, and
+		// the list is where an operator notices it.
+		dirCell := func() string {
+			if pr.WorkDir == "" {
+				return cell(orDash(""), dirW)
+			}
+			if pr.UsableWorkDir() == "" {
+				// The marker leads, so tail-truncation of a long path cannot eat
+				// it: the row's point is that this tree is not used, and a mark
+				// that scrolls off with the path would leave a plausible path.
+				return cell(p.Warn("! "+cliui.TruncateTail(pr.WorkDir, dirW-2, p.Unicode())), dirW)
+			}
+			return cell(cliui.TruncateTail(pr.WorkDir, dirW, p.Unicode()), dirW)
+		}()
 		fmt.Println(mark + row(
 			styledCell(pr.Name, nameW, tint),
-			cell(orDash(cliui.TruncateTail(pr.WorkDir, dirW, p.Unicode())), dirW),
+			dirCell,
 			cell(humanAge(loc, pr.UpdatedAt.Unix()), seenW),
 			pr.Description,
 		))
@@ -273,7 +288,17 @@ func runProjectShow(args []string) {
 	if pr.Name == active {
 		field(i18n.T(loc, "cli.col.state"), p.Success(i18n.T(loc, "cli.project.isActive")))
 	}
-	field(i18n.T(loc, "cli.col.workdir"), orDash(pr.WorkDir))
+	// A work dir the breadth rule refuses still belongs on screen — with the
+	// reason. Printing it bare sends the user to a tree their tasks never use;
+	// printing "—" claims the project has none, which is a different fact.
+	if wd := pr.UsableWorkDir(); wd != "" {
+		field(i18n.T(loc, "cli.col.workdir"), wd)
+	} else if pr.WorkDir != "" {
+		field(i18n.T(loc, "cli.col.workdir"),
+			p.Warn(i18n.Tf(loc, "cli.project.workdirTooBroad", "dir", pr.WorkDir)))
+	} else {
+		field(i18n.T(loc, "cli.col.workdir"), orDash(pr.WorkDir))
+	}
 	if pr.Description != "" {
 		field(i18n.T(loc, "cli.col.description"), pr.Description)
 	}
@@ -623,16 +648,24 @@ func activeProject(cfg *config.Config) (name, workDir string) {
 	if err != nil {
 		return name, cwd
 	}
+	// A row whose tree the breadth rule refuses contributes no work dir: the
+	// project stays bound (its approval policy and memory still apply) but the
+	// task falls back to the node default, exactly like a project with no tree
+	// of its own. Without this the active-project branch handed every task the
+	// refused path and createTask failed them all — the regression this rule
+	// caused on any machine that had adopted $HOME as a project before it
+	// existed.
+	usable := pr.UsableWorkDir()
 	// If the ambient project's directory is completely different from current working directory,
 	// do NOT hijack the user's cwd unless cwd is within pr.WorkDir.
-	if cwd != "" && pr.WorkDir != "" {
+	if cwd != "" && usable != "" {
 		cleanCwd := filepath.Clean(cwd)
-		cleanPrDir := filepath.Clean(pr.WorkDir)
+		cleanPrDir := filepath.Clean(usable)
 		if cleanCwd != cleanPrDir && !strings.HasPrefix(cleanCwd, cleanPrDir+string(filepath.Separator)) {
 			return "", cwd
 		}
 	}
-	return pr.Name, pr.WorkDir
+	return pr.Name, usable
 }
 
 // bindAskProject gives an engine its ambient project: the explicit --project when
@@ -662,5 +695,5 @@ func bindAskProject(engine *askengine.Engine, cfg *config.Config, named string) 
 	if err != nil {
 		fatal("get project", err)
 	}
-	engine.SetProject(pr.Name, pr.WorkDir)
+	engine.SetProject(pr.Name, pr.UsableWorkDir())
 }

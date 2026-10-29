@@ -22,6 +22,7 @@ import (
 
 	"github.com/Xustalis/OpenPanda/internal/askengine"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -80,6 +81,9 @@ func runTask(args []string) {
 		case "show":
 			runTaskShow(args[1:])
 			return
+		case "verdict":
+			runTaskVerdict(args[1:])
+			return
 		case "help", "-h", "--help":
 			taskUsage()
 			return
@@ -94,11 +98,12 @@ func taskUsage() {
 	fmt.Fprintln(os.Stderr, "  add --title T [--prompt P] [--priority "+cliPriorities+"]")
 	fmt.Fprintln(os.Stderr, "      [--project p] [--parent-id ID] [--preferred NODE] [--authorize] [--card PATH]")
 	fmt.Fprintln(os.Stderr, "      [--paths d1,d2 | --isolate] [--agents a,b [--mode m] | --nodes n1,n2]")
-	fmt.Fprintln(os.Stderr, "      [--wait [--wait-timeout D]] [--json]   enqueue a task")
+	fmt.Fprintln(os.Stderr, "      [--accept CMD|auto ...] [--wait [--wait-timeout D]] [--json]   enqueue a task")
 	fmt.Fprintln(os.Stderr, "  priority <id> <level>                   change a task's priority")
 	fmt.Fprintln(os.Stderr, "  move <id> <seq>                         reorder the drag-sort queue")
 	fmt.Fprintln(os.Stderr, "  <id> --trace                            hop-by-hop delegation trace (hops, timings, transport)")
 	fmt.Fprintln(os.Stderr, "  delete <id>                             remove a task and its subtree (queued/finished)")
+	fmt.Fprintln(os.Stderr, "  verdict <id>                            show the acceptance checks and the contract verdict")
 	fmt.Fprintln(os.Stderr, "  revert <id>                             roll the run's git checkout back to its pre-task baseline")
 	fmt.Fprintln(os.Stderr, "  followup <id>                           hand the task's recorded result to the model and continue")
 	fmt.Fprintln(os.Stderr, "  send [--inject] <id> <text>             message a running/queued task: queue (next-round context) or inject (leads the next round)")
@@ -204,6 +209,9 @@ func runTaskShow(args []string) {
 		stateLabel += " (" + i18n.T(i18n.Detect(), "cli.task.waiting_link") + ")"
 	}
 	taskField("state", stateLabel)
+	if t.Verification != "" {
+		taskField("verification", t.Verification)
+	}
 	taskField("priority", priorityName(t.Priority))
 	taskField("owner", t.OwnerNode)
 	// Owner is the lease holder — the node the queue/store believes drives the
@@ -633,28 +641,33 @@ type taskJSON struct {
 	// copy that merges back. Empty means the default whole-project claim.
 	ScopePaths []string `json:"scope_paths,omitempty"`
 	Isolate    bool     `json:"isolate,omitempty"`
-	Created    string   `json:"created_at"`
-	Updated    string   `json:"updated_at"`
+	// Verification is the delivery contract's verdict (verified|failed|
+	// partial|skipped), empty when the task carried no contract. It is a
+	// property of the outcome, not a state: done+unverified stays visible.
+	Verification string `json:"verification,omitempty"`
+	Created      string `json:"created_at"`
+	Updated      string `json:"updated_at"`
 }
 
 func taskToJSON(t core.Task) taskJSON {
 	j := taskJSON{
-		ID:          t.TaskID,
-		ParentID:    t.ParentID,
-		Project:     t.Project,
-		Title:       t.Title,
-		State:       t.State,
-		Priority:    priorityName(t.Priority),
-		Owner:       t.OwnerNode,
-		Pinned:      core.PinnedNode(t),
-		Session:     t.SessionID,
-		Intent:      t.Intent,
-		WorkDir:     t.WorkDir,
-		ExecWorkDir: t.ExecWorkDir,
-		ScopePaths:  t.ScopePaths,
-		Isolate:     t.Isolate,
-		Created:     ts(t.CreatedAt),
-		Updated:     ts(t.UpdatedAt),
+		ID:           t.TaskID,
+		Verification: t.Verification,
+		ParentID:     t.ParentID,
+		Project:      t.Project,
+		Title:        t.Title,
+		State:        t.State,
+		Priority:     priorityName(t.Priority),
+		Owner:        t.OwnerNode,
+		Pinned:       core.PinnedNode(t),
+		Session:      t.SessionID,
+		Intent:       t.Intent,
+		WorkDir:      t.WorkDir,
+		ExecWorkDir:  t.ExecWorkDir,
+		ScopePaths:   t.ScopePaths,
+		Isolate:      t.Isolate,
+		Created:      ts(t.CreatedAt),
+		Updated:      ts(t.UpdatedAt),
 	}
 	return j
 }
@@ -734,6 +747,135 @@ func taskStoreFatal(err error, id string) {
 	fatal("get task", err)
 }
 
+// repeatableFlag collects a flag given more than once. Go's flag package
+// replaces the value on each Set; acceptance checks are a list, so they need
+// their own Value.
+type repeatableFlag []string
+
+func (r *repeatableFlag) String() string { return strings.Join(*r, ", ") }
+
+func (r *repeatableFlag) Set(v string) error {
+	*r = append(*r, v)
+	return nil
+}
+
+// buildAcceptanceChecks turns --accept values into a validated contract. Each
+// plain value is one command; "auto" expands to the workspace's own build and
+// test entries. Duplicates collapse, because running the same suite twice is
+// only slower, never stronger.
+func buildAcceptanceChecks(values []string, root string) ([]contract.Check, error) {
+	var checks []contract.Check
+	seen := make(map[string]bool, len(values))
+	add := func(id, run string) {
+		run = strings.TrimSpace(run)
+		if run == "" || seen[run] {
+			return
+		}
+		seen[run] = true
+		if strings.TrimSpace(id) == "" {
+			id = fmt.Sprintf("cli-%d", len(checks)+1)
+		}
+		checks = append(checks, contract.Check{ID: id, Run: run})
+	}
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if strings.EqualFold(raw, "auto") {
+			for _, c := range contract.Enumerate(root) {
+				add(c.ID, c.Run)
+			}
+			continue
+		}
+		add("", raw)
+	}
+	if len(checks) == 0 {
+		return nil, fmt.Errorf("no acceptance checks found in %s", root)
+	}
+	return contract.Validate(checks)
+}
+
+// withAcceptance merges the contract into a task's spec JSON, preserving any
+// fields already there (an actuator dispatch, for example).
+func withAcceptance(specJSON string, checks []contract.Check) (string, error) {
+	if len(checks) == 0 {
+		return specJSON, nil
+	}
+	spec := map[string]any{}
+	if strings.TrimSpace(specJSON) != "" {
+		if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+			return "", err
+		}
+	}
+	spec["acceptance"] = checks
+	blob, err := json.Marshal(spec)
+	if err != nil {
+		return "", err
+	}
+	return string(blob), nil
+}
+
+// runTaskVerdict prints the acceptance evidence for one task: every recorded
+// check by phase, plus the verification word stamped on the row. It exits 1
+// when the contract failed, so a script can gate on it.
+func runTaskVerdict(args []string) {
+	fs := flag.NewFlagSet("task verdict", flag.ExitOnError)
+	configPath := fs.String("config", cliConfigPath, "path to config.yaml")
+	fs.Parse(reorderFlags(fs, args))
+	ref := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if ref == "" {
+		taskUsage()
+		os.Exit(2)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fatal("load config", err)
+	}
+	db, store, err := panelStore(cfg)
+	if err != nil {
+		fatal("open store", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	id := resolveTaskRef(store, ref)
+	t, err := store.Get(ctx, id)
+	if err != nil {
+		taskStoreFatal(err, id)
+	}
+	rows, err := store.Checks(ctx, id)
+	if err != nil {
+		fatal("load checks", err)
+	}
+	loc := i18n.Detect()
+	if jsonOutput {
+		emitJSON(map[string]any{
+			"task_id": id, "state": t.State, "verification": t.Verification, "checks": rows,
+		})
+		return
+	}
+	status := t.Verification
+	if status == "" {
+		status = "unverified"
+	}
+	fmt.Printf("%s  %s  %s\n", id, t.State, i18n.Tf(loc, "contract.verdict.head", "status", status))
+	if len(rows) == 0 {
+		fmt.Println("  " + i18n.T(loc, "contract.verdict.none"))
+		return
+	}
+	for _, r := range rows {
+		line := fmt.Sprintf("  %-8s %-14s %-6s exit %-3d %6dms  %s",
+			r.Phase, r.CheckID, r.Status, r.ExitCode, r.DurationMS, truncate(oneLine(r.Command), 70))
+		if r.Reason != "" {
+			line += "  · " + truncate(oneLine(r.Reason), 80)
+		}
+		fmt.Println(line)
+	}
+	if status == contract.VerdictFailed {
+		os.Exit(1)
+	}
+}
+
 // runTaskAdd enqueues a user task through the ask engine's scheduler core —
 // the kernel-form of the board's "new task" (the capability card is
 // auto-discovered and only consulted at dispatch; a missing card does not
@@ -758,7 +900,9 @@ func runTaskAdd(args []string) {
 	actionSpec := fs.String("action-spec", "", "actuator dispatch JSON: {\"target_actuator\":\"hardware:x\",\"action\":\"verb\",\"parameters\":{...}}")
 	scopePaths := fs.String("paths", "", "comma-separated project-relative dirs the task owns (needs --project): disjoint tasks run in parallel in the shared tree")
 	isolate := fs.Bool("isolate", false, "run in a private copy of the project tree (git worktree when available) and merge changes back on success — needs --project")
-	workDir := fs.String("workdir", "", "pin execution to this directory (created if missing); the task then runs on THIS node only")
+	workDir := fs.String("workdir", "", "pin execution to this directory (created if missing, and required for a contract whose checks live elsewhere); the task then runs on THIS node only")
+	var accept repeatableFlag
+	fs.Var(&accept, "accept", "acceptance check run by the orchestrator after the agent finishes: 'auto' enumerates the project's own build/test entries, or a command line (no shell syntax; repeatable)")
 	wait := fs.Bool("wait", false, "block until the task settles (done/failed/cancelled/review) and print the result")
 	waitTimeout := fs.Duration("wait-timeout", 30*time.Minute, "with --wait: stop watching after this long (the task itself keeps running)")
 	fs.Parse(reorderFlags(fs, args))
@@ -852,6 +996,12 @@ func runTaskAdd(args []string) {
 		if strings.TrimSpace(*actionSpec) != "" {
 			fail(2, i18n.T(loc, "cli.task.add.actionSpecAgents"))
 		}
+		// A contract belongs to one task; a plan fans out per agent and each
+		// stage would need its own. Refuse rather than silently verify only
+		// the stages' shared prefix.
+		if len(accept) > 0 {
+			fail(2, i18n.T(loc, "cli.task.add.acceptAgents"))
+		}
 		// Plan stages get their own per-stage keys and private dirs — a
 		// scope claim or isolation request on the parent would be silently
 		// dropped, which is worse than saying so.
@@ -934,6 +1084,40 @@ func runTaskAdd(args []string) {
 			pinnedWorkDir = abs
 		}
 	}
+	// The delivery contract. Commands are enumerated from this workspace at
+	// submit time and persisted on the row, so the executor runs the same
+	// concrete checks; "auto" is resolved here rather than at execution, where
+	// the selected commands would be invisible to the user. The workspace is
+	// pinned onto the task: a check enumerated here is only meaningful where
+	// this tree lives, and a task that runs elsewhere would be judged against
+	// a directory it cannot see.
+	acceptRoot := ""
+	if len(accept) > 0 {
+		root := pinnedWorkDir
+		if root == "" {
+			root = strings.TrimSpace(*workDir)
+		}
+		if root == "" {
+			root, _ = os.Getwd()
+		}
+		if root == "" {
+			fail(2, i18n.T(loc, "cli.task.add.acceptNoDir"))
+		}
+		if abs, aerr := filepath.Abs(root); aerr == nil {
+			root = abs
+		}
+		checks, cerr := buildAcceptanceChecks(accept, root)
+		if cerr != nil {
+			fail(2, i18n.Tf(loc, "cli.task.add.badAccept", "err", cerr.Error()))
+		}
+		merged, merr := withAcceptance(specJSON, checks)
+		if merr != nil {
+			fatal("build spec", merr)
+		}
+		specJSON = merged
+		acceptRoot = root
+	}
+
 	in := core.TaskInput{
 		Title:       *title,
 		ParentID:    pID,
@@ -948,6 +1132,17 @@ func runTaskAdd(args []string) {
 		TargetNode:  pref,
 		Authorized:  *authorize,
 	}
+	// A contract is bound to the tree it was enumerated from. Pinning the work
+	// dir keeps the run and the checks on the same bytes; it also keeps the
+	// task on this node, which is the honest meaning of "verified here".
+	if wd := strings.TrimSpace(*workDir); wd != "" {
+		if abs, aerr := filepath.Abs(wd); aerr == nil {
+			wd = abs
+		}
+		in.WorkDir = wd
+	} else if acceptRoot != "" {
+		in.WorkDir = acceptRoot
+	}
 	q := core.DefaultQueueSpec()
 	q.Priority = prio
 	// A pinned work dir rides BOTH surfaces: Enqueue stamps work_dir from the
@@ -957,12 +1152,14 @@ func runTaskAdd(args []string) {
 	if pinnedWorkDir != "" {
 		q.WorkDir = pinnedWorkDir
 	}
-	// No WorkDir by default: engine.WorkPath() is the node-wide default the
-	// executor already falls back to, and pinning it re-classifies the task as
-	// local-only work — forwardScheduled skips any task with a WorkDir, so
-	// `--requires pi.uptime` on a node without that ability never reached the
-	// peer that has it (the same trap plan submission avoids). --workdir opts
-	// into exactly that trade: the caller names a directory only this node has.
+	// Ordinary tasks carry no WorkDir: engine.WorkPath() is the node-wide
+	// default the executor already falls back to, and pinning it re-classifies
+	// the task as local-only work — forwardScheduled skips any task with a
+	// WorkDir, so `--requires pi.uptime` on a node without that ability never
+	// reached the peer that has it (the same trap plan submission avoids).
+	// --workdir and --accept are the deliberate exceptions: a contract's
+	// checks run in the tree they were enumerated from, and that tree lives
+	// here, so the task is pinned here on purpose.
 
 	nodeList := parseAgentList(*nodes)
 	if len(nodeList) > 0 {
@@ -970,6 +1167,9 @@ func runTaskAdd(args []string) {
 		// a multi-harness plan would produce ambiguous ownership per stage.
 		if pref != "" || len(agentList) > 1 {
 			fail(2, i18n.T(loc, "cli.task.add.nodesConflict"))
+		}
+		if len(accept) > 0 {
+			fail(2, i18n.T(loc, "cli.task.add.acceptNodes"))
 		}
 		runTaskAddNodes(loc, engine, cfg, nodeList, in, q, priorityName(prio))
 		return
@@ -1079,6 +1279,9 @@ func waitForTaskAdd(loc i18n.Locale, cfg *config.Config, taskID string, timeout 
 			emitJSON(taskToJSONWithStore(store, final))
 		} else {
 			fmt.Println(i18n.Tf(loc, "cli.task.wait.state", "id", final.TaskID, "state", final.State))
+			if final.Verification != "" {
+				fmt.Println(i18n.Tf(loc, "tui.task.verification", "status", final.Verification))
+			}
 			if final.State == core.StateReview {
 				fmt.Println(i18n.Tf(loc, "cli.task.wait.review", "id", final.TaskID))
 			} else if final.ResultJSON != "" {

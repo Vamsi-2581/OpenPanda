@@ -6,7 +6,10 @@
 // effects — the Go core validates and executes whatever the model emits.
 package entry
 
-import "github.com/Xustalis/OpenPanda/internal/ledger"
+import (
+	"github.com/Xustalis/OpenPanda/internal/contract"
+	"github.com/Xustalis/OpenPanda/internal/ledger"
+)
 
 // Kind is the entry model's top-level output category.
 type Kind string
@@ -127,6 +130,12 @@ type TaskSpecDetail struct {
 	// spec for the same reason as ToolsPolicy — spec_json is what reaches the
 	// executor, where SubstituteActionSpec fills {action}/{param:<name>}.
 	ActionSpec *ledger.ActionSpec `json:"action_spec,omitempty"`
+	// Acceptance is the machine-checkable contract: commands and artifact
+	// assertions the orchestrator runs itself after the agent claims done.
+	// It lives here because spec_json persists on the row and crosses the
+	// wire, so a delegated task is verified by the same criteria on the
+	// executor. Empty means no contract: the task cannot be "verified".
+	Acceptance []contract.Check `json:"acceptance,omitempty"`
 }
 
 // ResourceProfile is a coarse resource hint, not a safety rating (design doc

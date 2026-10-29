@@ -706,8 +706,11 @@ func runSessionAsk(args []string) {
 	workDir := sess.Worktree
 	if workDir == "" && sess.Project != "" {
 		pStore, _, _, closeDB := projectStores(*configPath)
-		if p, err := pStore.Get(sess.Project); err == nil && p.WorkDir != "" {
-			workDir = p.WorkDir
+		if p, err := pStore.Get(sess.Project); err == nil {
+			// UsableWorkDir, not WorkDir: a project row naming $HOME predates
+			// the breadth rule, and pinning it here fails every ask in the
+			// thread at task creation.
+			workDir = p.UsableWorkDir()
 		}
 		closeDB()
 	}

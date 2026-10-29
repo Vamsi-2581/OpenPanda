@@ -18,6 +18,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/agents"
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/commander"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
@@ -270,6 +271,20 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	execCtx, execCleanup = c.decorateExecCtx(execCtx, ctx, taskID, task, plan)
 	defer execCleanup()
 
+	// Delivery contract (P0): run the declared acceptance checks before the
+	// agent touches the tree. The baseline is evidence, not a gate — it is
+	// what lets the final verdict say "this was already failing" instead of
+	// blaming the run for a red suite it inherited.
+	var acceptanceChecks []contract.Check
+	var acceptanceBaseline []contract.Result
+	if plan.Kind == "agent" || plan.Kind == "native" {
+		acceptanceChecks = taskAcceptance(task.SpecJSON)
+		if len(acceptanceChecks) > 0 {
+			c.EvTrace(execCtx, taskID, EvContractSet, map[string]any{"checks": acceptanceChecks})
+			acceptanceBaseline = c.runAcceptance(execCtx, taskID, acceptancePhaseBaseline, prep.workDir, acceptanceChecks)
+		}
+	}
+
 	work := &runWork{
 		c: c, taskID: taskID, intent: intent, required: required,
 		task: task, plan: plan, router: router, breakerKey: breakerKey, injection: injection,
@@ -277,6 +292,7 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 		workDir: prep.workDir, oscKey: prep.oscKey, scope: prep.scope,
 		before: prep.before, beforeOK: prep.beforeOK,
 		shadowConflicts: prep.shadowConflicts,
+		checks:          acceptanceChecks, baseline: acceptanceBaseline,
 	}
 	outcome, err := work.executeRounds(ctx)
 	if err != nil {
@@ -287,7 +303,8 @@ func (c *Core) run(ctx context.Context, taskID, intent string, required []string
 	}
 	return c.finalizeRun(ctx, taskID, task, work.plan, required, attemptID, prep.workDir,
 		outcome.res, outcome.lastChanged, outcome.filesTruncated, outcome.verdict,
-		outcome.sessionID, outcome.sessionAdapter)
+		outcome.sessionID, outcome.sessionAdapter,
+		acceptanceChecks, acceptanceBaseline)
 }
 
 // taskAllowAgents returns the agent roster a task carries in its spec — the
@@ -1161,6 +1178,11 @@ type runWork struct {
 	before          defense.Snapshot
 	beforeOK        bool
 	shadowConflicts []string
+	// checks is the task's delivery contract and baseline its pre-run
+	// evidence. Empty checks mean the task has no contract, so it can be done
+	// but never "verified".
+	checks   []contract.Check
+	baseline []contract.Result
 }
 
 // executeRounds is the supervision loop: an agent task under a supervisor
@@ -2330,7 +2352,8 @@ func annotateAgentSubstitution(plan commander.Plan, res commander.Result) comman
 func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan commander.Plan,
 	required []string, attemptID, workDir string, res commander.Result,
 	lastChanged []string, filesTruncated bool, verdict entry.SuperviseVerdict,
-	sessionID, sessionAdapter string) (bus.TaskResultPayload, error) {
+	sessionID, sessionAdapter string,
+	checks []contract.Check, baseline []contract.Result) (bus.TaskResultPayload, error) {
 	// A stage hands its work-dir to its successors as a content-addressed
 	// artifact. It is packed before the terminal branches below, not inside one of
 	// them, because a stage that parks in review still produced a tree and the
@@ -2394,6 +2417,10 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 		}
 	}
 
+	// verificationStatus records the contract verdict for every terminal
+	// payload below. Empty means the task carried no contract at all.
+	verificationStatus := ""
+
 	// The supervisor did not accept the result: either work still remains after
 	// the round budget ("continue"), or the model answered without a usable
 	// verdict ("review" — unparsable output, or an unreachable supervisor that
@@ -2425,6 +2452,63 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 			Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
 			AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
 		}, nil
+	}
+
+	// Delivery contract verdict. This is the orchestrator's own judgment of
+	// the work, independent of anything the agent said about itself: the
+	// checks run here, in this workspace, after the run. A failed contract
+	// fails the task before an isolated worktree is merged back, so an
+	// unmet contract can never land in the shared tree. A run that already
+	// failed needs no verdict — the task is failed either way, and a full
+	// suite after it would only spend minutes confirming that.
+	if len(checks) > 0 && res.OK && ctx.Err() == nil {
+		final := c.runAcceptance(ctx, taskID, acceptancePhaseFinal, workDir, checks)
+		v := contract.Evaluate(checks, baseline, final)
+		verificationStatus = v.Status
+		c.EvTrace(context.WithoutCancel(ctx), taskID, EvVerdict, map[string]any{
+			"status":       v.Status,
+			"passed":       v.Passed,
+			"failed":       v.Failed,
+			"regressions":  v.Regressions,
+			"pre_existing": v.PreExisting,
+			"skipped":      v.Skipped,
+			"flaky":        v.Flaky,
+			"reasons":      v.Reasons,
+		})
+		if err := c.store.SetVerification(context.WithoutCancel(ctx), taskID, v.Status); err != nil {
+			c.logger.Warn("persist verification", "task", taskID, "err", err)
+		}
+		// The summary is part of the result's stdout so an origin node without
+		// this task's detail table still sees the evidence next to the work.
+		if summary := acceptanceSummary(v, task.GetUserLocale()); summary != "" {
+			if res.Stdout != "" {
+				res.Stdout += "\n\n"
+			}
+			res.Stdout += summary
+		}
+		if v.Status == contract.VerdictFailed {
+			reason := acceptanceFailureReason(v)
+			wCtx, cancel := c.storeWriteCtx(ctx)
+			defer cancel()
+			if err := c.store.FailAttempt(wCtx, taskID, c.nodeID, attemptID, reason); err != nil {
+				if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
+					return bus.TaskResultPayload{}, ErrCancelled
+				}
+				return bus.TaskResultPayload{}, fmt.Errorf("fail on acceptance: %w", err)
+			}
+			c.logTask(task.Title, false)
+			trackTask(c, task.Project, required, task.Title, false)
+			return bus.TaskResultPayload{
+				TaskID: taskID, AttemptID: attemptID, State: StateFailed,
+				OK: false, ExitCode: 1, Stdout: res.Stdout, Stderr: reason,
+				Tokens: res.Tokens, Cost: res.Cost,
+				OutputArtifact: outputArtifact, ScreenOutput: screenOut,
+				FilesChanged: filesChanged, FilesTruncated: filesTruncated,
+				Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+				AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,
+				Verification: v.Status, NoRetry: true,
+			}, nil
+		}
 	}
 
 	// Terminal routing. An accepted irreversible (Tier-2) agent task whose run
@@ -2494,6 +2578,14 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	defer cancel()
 	if err := c.store.CompleteAttempt(wCtx, taskID, c.nodeID, attemptID, map[string]any{
 		"ok": true, "exit_code": res.ExitCode, "stdout": res.Stdout, "files_changed": filesChanged,
+		// Who actually ran the work rides the row, not only the wire payload:
+		// a fallback can swap the agent, and `panda task show` (or the panel)
+		// must be able to name the one that executed instead of reporting the
+		// agent the plan intended.
+		"agent": res.Agent, "model": res.Model, "injected": res.Injected,
+		// The contract verdict travels with the row so "done" and "verified"
+		// can never be confused after the fact.
+		"verified": verificationStatus == contract.VerdictVerified, "verification": verificationStatus,
 	}); err != nil {
 		if errors.Is(err, ErrConflict) || errors.Is(err, ErrIllegal) {
 			return bus.TaskResultPayload{}, ErrCancelled
@@ -2508,6 +2600,9 @@ func (c *Core) finalizeRun(ctx context.Context, taskID string, task Task, plan c
 	return bus.TaskResultPayload{
 		TaskID: taskID, AttemptID: attemptID, State: StateDone, OK: true, ExitCode: res.ExitCode, Stdout: res.Stdout,
 		Tokens: res.Tokens, Cost: res.Cost, OutputArtifact: outputArtifact, ScreenOutput: screenOut, FilesChanged: filesChanged, FilesTruncated: filesTruncated, Agent: res.Agent, Model: res.Model, Injected: res.Injected,
+		// The contract verdict rides the wire so the origin node can show
+		// "done, verified" instead of a bare done it cannot substantiate.
+		Verified: verificationStatus == contract.VerdictVerified, Verification: verificationStatus,
 		// Reported even though the local row cleared it: the delegator keeps
 		// the handle so a re-dispatch back here can offer ResumeSessionID.
 		AgentSessionID: sessionID, AgentSessionAdapter: sessionAdapter,

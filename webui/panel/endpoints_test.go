@@ -51,12 +51,7 @@ func newMigratedDB(t *testing.T) *sql.DB {
 func newEnginePanel(t *testing.T) (http.Handler, *config.Config, string) {
 	t.Helper()
 	tmp := t.TempDir()
-	cfg := config.Default()
-	cfg.Storage.DBPath = filepath.Join(tmp, "engine.db")
-	cfg.Storage.MemoryPath = filepath.Join(tmp, "memory")
-	cfg.Storage.ProjectsPath = filepath.Join(tmp, "projects")
-	cfg.Storage.SkillsPath = filepath.Join(tmp, "skills")
-	cfg.Storage.WorkPath = tmp
+	cfg := isolatedConfig(t)
 	// A endpoint nothing listens on: construction must succeed without dialing.
 	cfg.Model.BaseURL = "http://127.0.0.1:9"
 	cfg.Model.Model = "test-model"

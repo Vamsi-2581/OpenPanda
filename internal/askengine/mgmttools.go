@@ -1145,11 +1145,18 @@ func truncSuffix(total, shown int) string {
 	return fmt.Sprintf("，仅显示前 %d 条", shown)
 }
 
-func orDash(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "—"
+// projectWorkDirNote renders the work dir a project operation actually runs in.
+// A row whose WorkDir the breadth rule refuses still HAS a work dir — reporting
+// "—" would read as "this project has no tree", which is a different fact and
+// sends the user looking in the wrong place.
+func projectWorkDirNote(p projectstore.Project) string {
+	if wd := p.UsableWorkDir(); wd != "" {
+		return wd
 	}
-	return s
+	if p.WorkDir != "" {
+		return p.WorkDir + "（范围过宽，任务改用默认目录）"
+	}
+	return "—"
 }
 
 func toStringSlice(val any) []string {
@@ -1801,8 +1808,13 @@ func (e *Engine) projectList(ctx context.Context) (string, error) {
 			desc = " — " + p.Description
 		}
 		workDir := "默认工作目录"
-		if p.WorkDir != "" {
-			workDir = p.WorkDir
+		if wd := p.UsableWorkDir(); wd != "" {
+			workDir = wd
+		} else if p.WorkDir != "" {
+			// Say why: a row naming $HOME is still listed, but every task under
+			// it runs in the default directory, and the model reading this list
+			// has to know that before it tells the user where the work happens.
+			workDir = p.WorkDir + "（范围过宽，任务改用默认目录）"
 		}
 		fmt.Fprintf(&b, "\n%s%s（%s）%s", marker, p.Name, workDir, desc)
 	}
@@ -1828,10 +1840,10 @@ func (e *Engine) projectCreate(ctx context.Context, name, workDir, description s
 		if err := pstore.SetActive(p.Name); err != nil {
 			return "", fmt.Errorf("进入项目：%w", err)
 		}
-		e.SetProject(p.Name, p.WorkDir)
-		return fmt.Sprintf("项目 %s 创建成功，并已切换进入该项目（工作目录：%s）", p.Name, orDash(p.WorkDir)), nil
+		e.SetProject(p.Name, p.UsableWorkDir())
+		return fmt.Sprintf("项目 %s 创建成功，并已切换进入该项目（工作目录：%s）", p.Name, projectWorkDirNote(p)), nil
 	}
-	return fmt.Sprintf("项目 %s 创建成功（工作目录：%s）", p.Name, orDash(p.WorkDir)), nil
+	return fmt.Sprintf("项目 %s 创建成功（工作目录：%s）", p.Name, projectWorkDirNote(p)), nil
 }
 
 func (e *Engine) projectEnter(ctx context.Context, name string) (string, error) {
@@ -1847,8 +1859,8 @@ func (e *Engine) projectEnter(ctx context.Context, name string) (string, error) 
 	if err := pstore.SetActive(p.Name); err != nil {
 		return "", fmt.Errorf("进入项目：%w", err)
 	}
-	e.SetProject(p.Name, p.WorkDir)
-	return fmt.Sprintf("已切换进入项目 %s（工作目录：%s）", p.Name, orDash(p.WorkDir)), nil
+	e.SetProject(p.Name, p.UsableWorkDir())
+	return fmt.Sprintf("已切换进入项目 %s（工作目录：%s）", p.Name, projectWorkDirNote(p)), nil
 }
 
 func (e *Engine) projectExit(ctx context.Context) (string, error) {

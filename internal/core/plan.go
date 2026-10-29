@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Xustalis/OpenPanda/internal/bus"
 	"github.com/Xustalis/OpenPanda/internal/plan"
@@ -1462,6 +1464,29 @@ func parseStructuredResult(raw json.RawMessage) *structuredAgentResult {
 
 const questionMarker = "PANDA_QUESTION"
 
+// cutQuestionMarker splits the separator between the marker and its payload.
+// The protocol is written with an ASCII colon, but an agent composing in
+// Chinese types the full-width one — "PANDA_QUESTION：" — without thinking
+// about it, and the marker line then survived as prose and the task never
+// parked for clarification. Both colons and every space are accepted; a bare
+// marker is still a marker with an empty payload, which the caller keeps in
+// place. Anything else is a word continuation ("PANDA_QUESTIONABLE:"), not
+// the protocol.
+func cutQuestionMarker(rest string) (payload string, ok bool) {
+	if rest == "" {
+		return "", true
+	}
+	for _, sep := range []string{":", "："} {
+		if strings.HasPrefix(rest, sep) {
+			return rest[len(sep):], true
+		}
+	}
+	if r, _ := utf8.DecodeRuneInString(rest); unicode.IsSpace(r) {
+		return rest, true
+	}
+	return "", false
+}
+
 // parseQuestionRequest extracts the last PANDA_QUESTION line from agent
 // output — the clarification the agent cannot resolve without the user —
 // and returns the output with marker lines removed. Like the delegate
@@ -1472,12 +1497,12 @@ func parseQuestionRequest(stdout string) (question, cleaned string, ok bool) {
 	var kept []string
 	for _, line := range strings.Split(stdout, "\n") {
 		trim := strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(trim, questionMarker); ok &&
-			(rest == "" || rest[0] == ':' || rest[0] == ' ' || rest[0] == '\t') {
-			rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
-			if q := strings.TrimSpace(rest); q != "" {
-				question = q
-				continue
+		if rest, isMarker := strings.CutPrefix(trim, questionMarker); isMarker {
+			if payload, sep := cutQuestionMarker(rest); sep {
+				if q := strings.TrimSpace(payload); q != "" {
+					question = q
+					continue
+				}
 			}
 		}
 		kept = append(kept, line)

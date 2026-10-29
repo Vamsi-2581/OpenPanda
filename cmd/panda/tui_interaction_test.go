@@ -430,11 +430,44 @@ func formTypes(m tuiModel, s string) tuiModel {
 	return m
 }
 
+// isolatedUIConfig builds a config whose card, storage and config paths all
+// live under a temp dir, and points the package-level --config/--card flag
+// variables there too. The model wizard resolves its default card path from
+// those flags (not from repl.configPath) and derives the node's storage paths
+// from the config, so a zero value sends the whole save — card, SQLite file,
+// memory, projects, skills, artifacts — into the operator's real data dir.
+// That is how `make test` and `make gate` used to leave openpanda.db and
+// capabilities.yaml behind in ~/Library/Application Support/openpanda.
+func isolatedUIConfig(t *testing.T) *config.Config {
+	t.Helper()
+	tmp := t.TempDir()
+	prevConfig, prevCard := cliConfigPath, cliCardPath
+	cliConfigPath, cliCardPath = filepath.Join(tmp, "config.yaml"), ""
+	t.Cleanup(func() { cliConfigPath, cliCardPath = prevConfig, prevCard })
+	// The engine also takes a node-identity lock through os.UserConfigDir,
+	// which ignores the config it was handed, so the platform config vars
+	// move to the temp dir as well.
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("APPDATA", tmp)
+
+	cfg := &config.Config{}
+	cfg.Node.CardPath = filepath.Join(tmp, "capabilities.yaml")
+	cfg.Storage.WorkPath = filepath.Join(tmp, "work")
+	cfg.Storage.DBPath = filepath.Join(tmp, "work", "openpanda.db")
+	cfg.Storage.ContextPath = filepath.Join(tmp, "work", "context")
+	cfg.Storage.MemoryPath = filepath.Join(tmp, "work", "memory")
+	cfg.Storage.ProjectsPath = filepath.Join(tmp, "work", "projects")
+	cfg.Storage.SkillsPath = filepath.Join(tmp, "work", "skills")
+	cfg.Storage.ArtifactPath = filepath.Join(tmp, "work", "artifacts")
+	return cfg
+}
+
 // TestTUIModelWizardStepFlow tests the single-screen model form for Ollama —
 // a NoAuth provider whose form has no key field.
 func TestTUIModelWizardStepFlow(t *testing.T) {
-	cfg := &config.Config{}
-	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg := isolatedUIConfig(t)
+	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -484,8 +517,8 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 // thinking, context — then a failed probe stays unsaved until the user picks
 // the plain "save" action.
 func TestTUIModelWizardCustomRelay(t *testing.T) {
-	cfg := &config.Config{}
-	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg := isolatedUIConfig(t)
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -567,8 +600,8 @@ func TestTUIModelWizardCustomRelay(t *testing.T) {
 
 // TestTUIModelWizardAPIKeyMasking verifies that API Key input is masked with dots in the view and handled correctly.
 func TestTUIModelWizardAPIKeyMasking(t *testing.T) {
-	cfg := &config.Config{}
-	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg := isolatedUIConfig(t)
+	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -666,8 +699,8 @@ func TestTUIModelPanelDetailAndTest(t *testing.T) {
 // TestTUIModelFormFetchPicker covers ^L pulling the endpoint's catalogue into
 // a picker and Enter writing the pick into the model field.
 func TestTUIModelFormFetchPicker(t *testing.T) {
-	cfg := &config.Config{}
-	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg := isolatedUIConfig(t)
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -709,8 +742,8 @@ func TestTUIModelFormFetchPicker(t *testing.T) {
 // TestTUIModelFormValidation covers required-field and context validation on
 // the save path.
 func TestTUIModelFormValidation(t *testing.T) {
-	cfg := &config.Config{}
-	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg := isolatedUIConfig(t)
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -750,11 +783,10 @@ func TestTUIModelFormValidation(t *testing.T) {
 // TestTUIModelFormEscape covers the form's back navigation: Esc on an add
 // returns to the provider picker; Esc on an edit returns to the register.
 func TestTUIModelFormEscape(t *testing.T) {
-	cfg := &config.Config{
-		Model:  config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-x"},
-		Models: []config.ModelConfig{{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-x"}},
-	}
-	r := &repl{loc: i18n.English, cfg: cfg, configPath: filepath.Join(t.TempDir(), "config.yaml")}
+	cfg := isolatedUIConfig(t)
+	cfg.Model = config.ModelConfig{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-x"}
+	cfg.Models = []config.ModelConfig{{Name: "ds", Provider: "deepseek", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/anthropic", APIKey: "sk-x"}}
+	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100

@@ -20,14 +20,7 @@ import (
 // points at a port nothing listens on).
 func newHolderConfig(t *testing.T) *config.Config {
 	t.Helper()
-	tmp := t.TempDir()
-	cfg := config.Default()
-	cfg.Storage.DBPath = filepath.Join(tmp, "engine.db")
-	cfg.Storage.MemoryPath = filepath.Join(tmp, "memory")
-	cfg.Storage.ProjectsPath = filepath.Join(tmp, "projects")
-	cfg.Storage.SkillsPath = filepath.Join(tmp, "skills")
-	cfg.Storage.WorkPath = tmp
-	return cfg
+	return isolatedConfig(t)
 }
 
 // TestEngineHolderHotLoad covers the lifecycle of the reloadable engine

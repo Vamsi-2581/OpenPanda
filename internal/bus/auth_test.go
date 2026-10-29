@@ -3,6 +3,7 @@
 package bus
 
 import (
+	"encoding/hex"
 	"testing"
 	"time"
 )
@@ -71,30 +72,133 @@ func TestVerifyHelloPWithNonce(t *testing.T) {
 
 	// Nonce-bound hello verifies.
 	pValid := HelloPayload{NodeID: "node-a", Ts: ts, Nonce: nonce, Sig: sigN}
-	if !VerifyHelloP(secret, pValid, now) {
+	if !VerifyHelloP(secret, "node-b", pValid, now) {
 		t.Fatalf("valid nonce-bound hello must verify")
 	}
 
 	// Tampered nonce fails.
 	pBadNonce := HelloPayload{NodeID: "node-a", Ts: ts, Nonce: "other-nonce", Sig: sigN}
-	if VerifyHelloP(secret, pBadNonce, now) {
+	if VerifyHelloP(secret, "node-b", pBadNonce, now) {
 		t.Fatalf("tampered nonce must be rejected")
 	}
 
 	// Legacy hello without nonce falls back to HelloSig.
 	pLegacy := HelloPayload{NodeID: "node-a", Ts: ts, Sig: sigLegacy}
-	if !VerifyHelloP(secret, pLegacy, now) {
+	if !VerifyHelloP(secret, "node-b", pLegacy, now) {
 		t.Fatalf("legacy hello without nonce must verify against HelloSig")
 	}
 
 	// Legacy hello with tampered sig fails.
 	pLegacyBad := HelloPayload{NodeID: "node-a", Ts: ts, Sig: "badsig"}
-	if VerifyHelloP(secret, pLegacyBad, now) {
+	if VerifyHelloP(secret, "node-b", pLegacyBad, now) {
 		t.Fatalf("bad signature must be rejected")
 	}
 
 	// Stale nonce-bound hello fails.
-	if VerifyHelloP(secret, pValid, now.Add(MaxHelloAge+time.Second)) {
+	if VerifyHelloP(secret, "node-b", pValid, now.Add(MaxHelloAge+time.Second)) {
 		t.Fatalf("stale nonce-bound hello must be rejected")
+	}
+}
+
+// TestVerifyHelloPBoundToReceiver covers the cross-node replay fix: a hello
+// signed for one receiver verifies there and nowhere else, a bound hello
+// without its bound signature is refused, and the legacy form keeps working
+// for peers that send no binding at all.
+func TestVerifyHelloPBoundToReceiver(t *testing.T) {
+	const secret = "s3cret"
+	now := time.Unix(1_700_000_000, 0)
+	ts := now.Unix()
+	const nonce = "nonce-123"
+	const dialer, receiver, other = "node-a", "node-b", "node-c"
+
+	bound := HelloPayload{
+		NodeID: dialer,
+		To:     receiver,
+		Ts:     ts,
+		Nonce:  nonce,
+		Sig:    HelloSigN(secret, dialer, ts, nonce),
+		SigB:   HelloSigB(secret, dialer, receiver, ts, nonce),
+	}
+	if !VerifyHelloP(secret, receiver, bound, now) {
+		t.Fatalf("hello bound to %q must verify at %q", receiver, receiver)
+	}
+	if VerifyHelloP(secret, other, bound, now) {
+		t.Fatalf("hello bound to %q must not verify at %q — this is the replay", receiver, other)
+	}
+
+	// The receiver id is part of the signed bytes: a hello re-addressed by
+	// editing only the field keeps a signature that no longer matches.
+	readdressed := bound
+	readdressed.To = other
+	if VerifyHelloP(secret, other, readdressed, now) {
+		t.Fatalf("re-addressed bound hello must be rejected")
+	}
+
+	// A hello that names a receiver but carries only the legacy signature is
+	// the downgraded shape: refuse rather than fall back.
+	stripped := bound
+	stripped.SigB = ""
+	if VerifyHelloP(secret, receiver, stripped, now) {
+		t.Fatalf("bound hello with the bound signature stripped must be rejected")
+	}
+	if VerifyHelloP(secret, "", bound, now) {
+		t.Fatalf("bound hello must be rejected by a receiver with no id")
+	}
+
+	// Empty secret and stale timestamps still fail on the bound path.
+	if VerifyHelloP("", receiver, bound, now) {
+		t.Fatalf("empty secret must fail")
+	}
+	if VerifyHelloP(secret, receiver, bound, now.Add(MaxHelloAge+time.Second)) {
+		t.Fatalf("stale bound hello must fail")
+	}
+}
+
+// TestVerifyHelloPBoundIdentity covers the Ed25519 half of the binding: a
+// bound hello carrying identity must prove that identity over the same bytes,
+// so an attacker holding the shared secret cannot mint a bound hello for a
+// node whose private key it does not have.
+func TestVerifyHelloPBoundIdentity(t *testing.T) {
+	const secret = "s3cret"
+	now := time.Unix(1_700_000_000, 0)
+	ts := now.Unix()
+	const nonce = "nonce-123"
+	const dialer, receiver, other = "node-a", "node-b", "node-c"
+
+	pub, priv, err := GenerateNodeKey()
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	keyHex := hex.EncodeToString(pub)
+	bound := HelloPayload{
+		NodeID: dialer,
+		To:     receiver,
+		Ts:     ts,
+		Nonce:  nonce,
+		Sig:    HelloSigN(secret, dialer, ts, nonce),
+		SigB:   HelloSigB(secret, dialer, receiver, ts, nonce),
+		PubKey: keyHex,
+		EdSig:  SignHelloEd(priv, dialer, ts, nonce),
+		EdSigB: SignHelloEdB(priv, dialer, receiver, ts, nonce),
+	}
+	if !VerifyHelloP(secret, receiver, bound, now) {
+		t.Fatalf("bound hello with identity must verify")
+	}
+	if VerifyHelloP(secret, other, bound, now) {
+		t.Fatalf("bound hello must not verify at another receiver")
+	}
+
+	// Identity present but bound signature missing: fail closed.
+	noEdB := bound
+	noEdB.EdSigB = ""
+	if VerifyHelloP(secret, receiver, noEdB, now) {
+		t.Fatalf("bound hello without its bound identity signature must be rejected")
+	}
+
+	// Identity bound to a different receiver does not verify here.
+	wrongEdB := bound
+	wrongEdB.EdSigB = SignHelloEdB(priv, dialer, other, ts, nonce)
+	if VerifyHelloP(secret, receiver, wrongEdB, now) {
+		t.Fatalf("identity signature for %q must not verify at %q", other, receiver)
 	}
 }

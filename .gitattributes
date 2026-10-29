@@ -1,0 +1,34 @@
+# Line endings are pinned per type so a Windows checkout cannot turn every
+# source file into a formatting diff. gofmt compares bytes: with CRLF in the
+# working tree every Go file reads as unformatted, `make fmt-check` fails on a
+# clean tree, and real changes hide inside whole-file rewrites.
+*.go   text eol=lf
+*.py   text eol=lf
+*.sh   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.svg  text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+
+# The Windows entry points keep CRLF: Windows PowerShell 5.1 and cmd.exe read
+# LF-only scripts unreliably, and these run before any tooling is installed.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Assets git must never touch.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
