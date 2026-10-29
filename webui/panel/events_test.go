@@ -740,3 +740,59 @@ func TestTaskLogsAfterReturnsOnlyNewEvents(t *testing.T) {
 		t.Fatalf("incremental log carried %d rows, want 1", len(got))
 	}
 }
+
+// The chat polls its thread's task list once per change frame; ?brief=1 is
+// that read. Spec and result are the row's heaviest columns and nothing in the
+// chat renders them, so they must not ride along.
+func TestListTasksBriefDropsHeavyColumns(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "row", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id='s1', spec_json='{"cmd":"go test"}', result_json='{"stdout":"ok"}' WHERE task_id=?`,
+		task.TaskID); err != nil {
+		t.Fatalf("stamp spec: %v", err)
+	}
+
+	read := func(path string) taskJSON {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var rows []taskJSON
+		if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("GET %s returned %d rows, want 1", path, len(rows))
+		}
+		return rows[0]
+	}
+
+	full := read("/api/tasks?session=s1")
+	if full.Spec == "" || full.Result == "" {
+		t.Fatalf("full list dropped spec/result: spec=%q result=%q", full.Spec, full.Result)
+	}
+	brief := read("/api/tasks?session=s1&brief=1")
+	if brief.Spec != "" || brief.Result != "" {
+		t.Fatalf("brief list carried spec=%q result=%q", brief.Spec, brief.Result)
+	}
+	if brief.State != full.State || brief.Agent != full.Agent {
+		t.Fatalf("brief row lost the fields the chat renders: %+v", brief)
+	}
+}

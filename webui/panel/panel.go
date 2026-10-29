@@ -917,6 +917,17 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range filtered {
 		out = append(out, toTaskJSON(t))
 	}
+	if r.URL.Query().Get("brief") == "1" {
+		// The chat's own read of a thread's tasks: it renders state, the
+		// running adapter, the plan stage and the newest event line, and the
+		// poll runs once per change frame. Spec and result are the row's
+		// heaviest columns and no consumer of this read looks at them.
+		for i := range out {
+			out[i].Spec = ""
+			out[i].Result = ""
+			out[i].Intent = ""
+		}
+	}
 	h.attachLastEvents(r.Context(), out)
 	writeJSON(w, out)
 }

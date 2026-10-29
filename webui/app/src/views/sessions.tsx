@@ -1437,6 +1437,27 @@ export function SessionsView({
     /** Set once the user's bubble is on screen, so a later failure has
      *  somewhere to render instead of needing a toast. */
     let announced = false
+    // Deltas arrive per chunk — dozens a second — and each one re-rendered
+    // the whole transcript, re-parsing the growing reply every time. They
+    // are coalesced into one update per frame; nothing is lost, because the
+    // turn's exit flushes whatever is still buffered.
+    let pendingText = ''
+    let pendingThought = ''
+    let flushFrame = 0
+    const flushStream = () => {
+      flushFrame = 0
+      const text = pendingText
+      const thought = pendingThought
+      pendingText = ''
+      pendingThought = ''
+      if (text) patch((m) => ({ ...m, text: m.text + text }))
+      if (thought) patch((m) => ({ ...m, thought: (m.thought ?? '') + thought }))
+    }
+    const scheduleFlush = () => {
+      if (flushFrame) return
+      flushFrame = requestAnimationFrame(flushStream)
+    }
+
     try {
       // Where this thread runs. A directory picked in the composer's footer is
       // resolved before anything else: the panel reads a session's work dir
@@ -1579,8 +1600,14 @@ export function SessionsView({
         prompt,
         authorize,
         {
-          onReasoning: (text) => patch((m) => ({ ...m, thought: (m.thought ?? '') + text })),
-          onDelta: (text) => patch((m) => ({ ...m, text: m.text + text })),
+          onReasoning: (text) => {
+            pendingThought += text
+            scheduleFlush()
+          },
+          onDelta: (text) => {
+            pendingText += text
+            scheduleFlush()
+          },
           onStatus: (text, ev) => patch((m) => ({ ...m, status: statusNote(text, ev) })),
           // The note typed mid-turn reached a round. This is the upgrade from
           // "queued" to "delivered" — without it the user cannot tell a steer
@@ -1597,39 +1624,46 @@ export function SessionsView({
           // task card mid-stream — so the thread can render the employee's
           // live progress row for the whole execution instead of a spinner.
           onTask: (taskID) => patch((m) => ({ ...m, liveTask: taskID })),
-          onResult: (r) => patch((m) => {
-            // Reconcile the accumulated deltas against the parsed reply:
-            // whatever the stream withheld still lands — "something
-            // streamed" is not "everything did".
-            let text = m.text
-            const answer = r.answer
-            if (answer) {
-              if (answer.startsWith(text)) {
-                const tail = answer.slice(text.length)
-                if (tail.trim()) text += tail
-              } else if (!text.includes(answer)) {
-                text = text ? text + '\n' + answer : answer
+          onResult: (r) => {
+            // Land what is buffered first: the reconcile below appends only
+            // the tail the stream withheld, and a flush afterwards would
+            // duplicate it.
+            flushStream()
+            patch((m) => {
+              // Reconcile the accumulated deltas against the parsed reply:
+              // whatever the stream withheld still lands — "something
+              // streamed" is not "everything did".
+              let text = m.text
+              const answer = r.answer
+              if (answer) {
+                if (answer.startsWith(text)) {
+                  const tail = answer.slice(text.length)
+                  if (tail.trim()) text += tail
+                } else if (!text.includes(answer)) {
+                  text = text ? text + '\n' + answer : answer
+                }
               }
-            }
-            // A dispatched task's frame carries no prose, only its id: the
-            // turn is a task turn, and everything that renders it — the orbit,
-            // the task card, the jump into the session — keys off kind+ref.
-            // Without adopting them here the bubble stays empty until some
-            // unrelated refetch replaces the transcript.
-            const task =
-              r.kind === 'task' && r.task_id
-                ? ({ kind: 'task', ref: r.task_id } as const)
-                : {}
-            // A plan turn carries no prose either: its id is what the plan
-            // card and the cast link key off. Adopting it here keeps the
-            // bubble from staying blank until a reload replaces the turn.
-            const plan =
-              r.kind === 'plan' && r.plan_id
-                ? ({ kind: 'plan', ref: r.plan_id } as const)
-                : {}
-            return { ...m, ...task, ...plan, result: r, status: undefined, text, liveTask: undefined }
-          }),
-          onError: (message, code, info) =>
+              // A dispatched task's frame carries no prose, only its id: the
+              // turn is a task turn, and everything that renders it — the orbit,
+              // the task card, the jump into the session — keys off kind+ref.
+              // Without adopting them here the bubble stays empty until some
+              // unrelated refetch replaces the transcript.
+              const task =
+                r.kind === 'task' && r.task_id
+                  ? ({ kind: 'task', ref: r.task_id } as const)
+                  : {}
+              // A plan turn carries no prose either: its id is what the plan
+              // card and the cast link key off. Adopting it here keeps the
+              // bubble from staying blank until a reload replaces the turn.
+              const plan =
+                r.kind === 'plan' && r.plan_id
+                  ? ({ kind: 'plan', ref: r.plan_id } as const)
+                  : {}
+              return { ...m, ...task, ...plan, result: r, status: undefined, text, liveTask: undefined }
+            })
+          },
+          onError: (message, code, info) => {
+            flushStream()
             patch((m) => ({
               ...m,
               status: undefined,
@@ -1641,7 +1675,8 @@ export function SessionsView({
               // panel persists on the turn, so a reload renders identically.
               err_kind: info?.kind,
               err_detail: info?.detail,
-            })),
+            }))
+          },
         },
         ctrl.signal,
         nodePref || undefined,
@@ -1654,9 +1689,12 @@ export function SessionsView({
         // even if the patch has not landed yet.
         permission,
       )
+      flushStream()
       patch((m) => ({ ...m, streaming: false, status: undefined }))
       finishTurn()
     } catch (err) {
+      // Whatever streamed before the failure is the user's only copy of it.
+      flushStream()
       if (!announced) {
         // Nothing left the composer yet — the failure was in the upload or the
         // @ref expansion, and there is no bubble to carry the reason. Say it
@@ -3572,7 +3610,7 @@ function useSessionTasks(sessionId: string | null, enabled: boolean): Task[] | n
   const { data } = useAsync<Task[] | null>(
     () =>
       enabled && sessionId
-        ? api.tasks({ session: sessionId }).catch(() => null)
+        ? api.tasks({ session: sessionId, brief: true }).catch(() => null)
         : Promise.resolve(null),
     [sessionId, enabled],
     change,

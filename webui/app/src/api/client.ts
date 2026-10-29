@@ -926,7 +926,14 @@ export const api = {
     return request('GET', '/api/healthz')
   },
 
-  tasks(params?: { state?: string; project?: string; session?: string }): Promise<Task[]> {
+  tasks(params?: {
+    state?: string
+    project?: string
+    session?: string
+    /** Drop the row's spec/result/intent — the chat's per-frame read renders
+     *  none of them, and they are the heaviest columns a task row carries. */
+    brief?: boolean
+  }): Promise<Task[]> {
     const q = new URLSearchParams()
     if (params?.state) q.set('state', params.state)
     if (params?.project) q.set('project', params.project)
@@ -934,6 +941,7 @@ export const api = {
     // side this is a different read (by session_id, uncapped) than the board's
     // state listing, so it must not be emulated by filtering a board response.
     if (params?.session) q.set('session', params.session)
+    if (params?.brief) q.set('brief', '1')
     const suffix = q.size > 0 ? `?${q}` : ''
     return request('GET', `/api/tasks${suffix}`)
   },
