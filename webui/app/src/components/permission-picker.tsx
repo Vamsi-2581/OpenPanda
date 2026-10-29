@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { t } from '../i18n'
 import { Icon } from './icons'
 
@@ -49,6 +49,52 @@ export function PermissionPicker(props: {
 }) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
+  /** Where the menu has to sit to stay on screen. The card is 320px wide and
+   *  the chip it hangs from is a fraction of that, so neither a fixed `right`
+   *  nor a fixed `left` keeps it inside a narrow window: anchored right it runs
+   *  off the left edge, anchored left it runs off the right once the action row
+   *  wraps. The composer docks to the bottom of the pane, so there is no room
+   *  below and the height ceiling is whatever space is left above the chip. */
+  const [anchor, setAnchor] = useState<{ left: number; width: number; maxHeight: number } | null>(
+    null,
+  )
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setAnchor(null)
+      return
+    }
+    const place = () => {
+      const el = root.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      // The menu is painted inside the pane's scroll box, not the window, so
+      // every edge it is clamped to is that box's, not the viewport's: on a
+      // phone the app bar (a docked sidebar) owns the first 51px of the screen,
+      // and on a desktop the sidebar owns the left 304px behind which the card
+      // would be clipped. Intersect every clipping ancestor that is in the way.
+      let top = 0
+      let left = 0
+      let right = window.innerWidth
+      for (let n = el.parentElement; n; n = n.parentElement) {
+        const s = getComputedStyle(n)
+        if (s.overflowX !== 'visible' || s.overflowY !== 'visible') {
+          const b = n.getBoundingClientRect()
+          top = Math.max(top, b.top)
+          left = Math.max(left, b.left)
+          right = Math.min(right, b.right)
+        }
+      }
+      const width = Math.min(320, right - left - 16)
+      const x = Math.max(left + 8, Math.min(r.right - width, right - width - 8))
+      // The card's bottom edge sits 8px above the chip, and the ceiling leaves
+      // 8px more between its top and the box's top edge.
+      setAnchor({ left: x - r.left, width, maxHeight: Math.max(80, r.top - top - 16) })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -87,7 +133,20 @@ export function PermissionPicker(props: {
         <Icon name="chevron-down" size={12} />
       </button>
       {open && (
-        <div class="perm-menu" role="listbox" aria-label={t('perm.title')}>
+        <div
+          class="perm-menu"
+          role="listbox"
+          aria-label={t('perm.title')}
+          style={
+            anchor
+              ? {
+                  left: `${anchor.left}px`,
+                  width: `${anchor.width}px`,
+                  maxHeight: `${anchor.maxHeight}px`,
+                }
+              : undefined
+          }
+        >
           <p class="perm-menu-head">{t('perm.title')}</p>
           {PERMISSION_MODES.map((m) => (
             <button
