@@ -44,6 +44,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+## [0.1.3] - 2026-10-30 — "Constellation"
+
+**Der Patch, der die Konsole lebendig und den Lauf am Leben hält** — Codename **Constellation**: eine Konsole, die über einen schlafenden Laptop hinweg, hinter einem Reverse-Proxy oder auf einem beschäftigten Knoten offen bleibt, friert nicht mehr ein, und einem Lauf zuzusehen kostet nicht mehr als die Arbeit, die er leistet. Ein langer Agent-Lauf, der während des Nachdenkens nichts ausgibt, wird nicht mehr als hängend beendet, und das Gnadenfenster vor der ersten Ausgabe greift nun tatsächlich. Konfiguration und gespeicherte Daten bleiben kompatibel; das Schema erhält eine rein additive Index-Migration (v65), die automatisch läuft.
+
+### Behoben
+
 - **Ein stiller Agent-CLI wird nicht mehr als hängend beendet** — der hermes-Adapter führt `--cli` in einem einzigen blockierenden Aufruf aus, der bis zum Ende der Aufgabe nichts ausgibt; ein gesunder Lauf über dem standardmäßigen 4-Minuten-Stillstand wurde daher als `adapter stalled` abgebrochen, und jeder Neuversuch scheiterte an derselben Stelle. Der Adapter sendet nun alle 20 Sekunden einen Heartbeat, während der CLI arbeitet, wie es der DeepSeek-Harness bereits tut; ein wirklich hängender Lauf wird weiterhin durch das harte Agent-Budget begrenzt.
 
 - **Ein Abbruch durch den Kommandanten wird nicht mehr dem Anbieter angelastet** — Stillstands-Watchdog, Tool-Call-Sicherung und harte Frist beenden einen Lauf mit Exit 124 und einem Urteil, das "timeout" enthält; der Injection-Fallback las das als Anbieterstörung und wiederholte den gesamten Lauf mit dem injizierten Modell: Die stille CLI blieb vier Minuten später an derselben Grenze erneut hängen, und Nebenwirkungen des ersten Versuchs liefen doppelt. Diese Urteile lösen den Rettungslauf nicht mehr aus. Der openclaw-Adapter sendet nun ebenfalls alle 20 Sekunden einen Heartbeat wie hermes, da sein Einmal-Lauf genauso still ist.

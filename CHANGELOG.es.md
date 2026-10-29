@@ -44,6 +44,12 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+## [0.1.3] - 2026-10-30 — "Constellation"
+
+**El parche que mantiene viva la consola y vivo el trabajo** — clave **Constellation**: una consola abierta mientras el portátil se suspende, detrás de un proxy inverso o mirando un nodo ocupado ya no se congela, y observar una ejecución ya no cuesta más que el trabajo que se observa. Una ejecución larga de un agente que no imprime nada mientras piensa ya no se mata como bloqueada, y la ventana de gracia previa a la primera salida por fin se aplica. La configuración y los datos guardados son compatibles; el esquema gana una migración aditiva de solo índice (v65), que se ejecuta automáticamente.
+
+### Corregido
+
 - **Un CLI de agente silencioso ya no se mata como bloqueado** — el adaptador de hermes ejecuta `--cli` en una sola llamada bloqueante que no imprime nada hasta terminar la tarea, así que una ejecución sana de más de 4 minutos quedaba marcada como `adapter stalled` y cada reintento volvía a morir en el mismo punto. Ahora el adaptador envía un latido cada 20 segundos mientras el CLI trabaja, igual que el harness de deepseek; una ejecución realmente atascada sigue limitada por el presupuesto duro del agente.
 
 - **Una terminación del propio orquestador ya no se atribuye al proveedor** — el vigilante de silencio, el fusible de llamadas a herramientas y el límite duro terminan la ejecución con exit 124 y un veredicto que contiene "timeout", que el respaldo de inyección leía como un problema del proveedor y respondía repitiendo toda la ejecución con el modelo inyectado: el CLI silencioso volvía a atascarse en el mismo límite cuatro minutos después, y los efectos secundarios del primer intento se ejecutaban dos veces. Esos veredictos ya no activan el rescate. El adaptador de openclaw también envía un latido cada 20 segundos, como hermes, porque su ejecución de un solo paso es igual de silenciosa.
