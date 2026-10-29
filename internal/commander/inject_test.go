@@ -602,6 +602,53 @@ func TestInjectionNeverBlocksRescue(t *testing.T) {
 	}
 }
 
+// TestInjectionRescueSkipsCommanderKill: the silence watchdog, the tool-call
+// fuse and the hard deadline all end a run with exit 124 and a verdict that
+// contains "timeout". Re-running that under the injected model can only
+// stall again on the same bound, and it would repeat any side effects the
+// first attempt already performed, so the rescue must stay out of commander
+// kills. An adapter that exits 124 on its own for a provider timeout is not a
+// commander kill and still gets the rescue.
+func TestInjectionRescueSkipsCommanderKill(t *testing.T) {
+	cleanCredentialEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "agent-own-key")
+	kills := []string{
+		"adapter stalled: no progress or output received for 4m0s (silence timeout)",
+		"adapter stalled: no output ever received for 3m0s (startup grace)",
+		"adapter timed out (hard limit)",
+		"agent tool-call budget exhausted: the run kept calling tools past its fuse and was killed before it could loop indefinitely",
+	}
+	for _, verdict := range kills {
+		r := injectionRouter(flashModel, config.InjectionModelAuto)
+		attempts := 0
+		r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+			attempts++
+			return AgentResult{OK: false, Result: verdict, ExitCode: 124}
+		})
+		res := r.runAdapterDefault(context.Background(), "claude_code.py", "p", "")
+		if attempts != 1 {
+			t.Fatalf("%q: adapter re-ran (%d attempts); a commander kill is not a provider failure", verdict, attempts)
+		}
+		if res.Result != verdict {
+			t.Fatalf("%q: verdict replaced with %q", verdict, res.Result)
+		}
+	}
+	// Control: exit 124 reported by the adapter itself is still a timeout the
+	// rescue may answer.
+	r := injectionRouter(flashModel, config.InjectionModelAuto)
+	attempts := 0
+	r.SetAdapterProcessRunner(func(ctx context.Context, adapter, prompt, cwd string, env []string) AgentResult {
+		attempts++
+		if attempts == 1 {
+			return AgentResult{OK: false, Result: "command timed out after 600s", ExitCode: 124}
+		}
+		return AgentResult{OK: true, Result: "rescued", ExitCode: 0}
+	})
+	if res := r.runAdapterDefault(context.Background(), "claude_code.py", "p", ""); !res.OK || attempts != 2 {
+		t.Fatalf("an adapter-side timeout must still be rescued: ok=%v attempts=%d", res.OK, attempts)
+	}
+}
+
 // TestInjectedModelEndpointUsesAgentPin: the rescue notice resolves the
 // endpoint the retry actually used — the per-agent pin, in that agent's
 // dialect — not the node model's URL.
