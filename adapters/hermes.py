@@ -19,11 +19,18 @@ operator choice, not a default. This adapter never prints secrets.
 
 The wire contract, watchdog timeout, process-tree cleanup and stderr
 diagnostics live in _harness.py; this file is only the hermes difference: the
-command line.
+command line and the heartbeat cadence of its silent --cli mode.
 """
 import os
 
 import _harness as harness
+
+# How often a silent run says it is still alive. --cli prints nothing until
+# the run finishes, so without this the Go silence watchdog sees a dead pipe
+# for the whole run and kills a healthy long task at the default 4-minute
+# silence limit. The heartbeat does not shorten a wedged run: the hard
+# agent budget still bounds it.
+HEARTBEAT_S = 20
 
 
 def main():
@@ -36,7 +43,7 @@ def main():
     # never be parsed as part of it.
     if os.environ.get("OPENPANDA_ACCEPT_HOOKS"):
         cmd = ["hermes", "--cli", "--yolo", "--accept-hooks", "-z", prompt]
-    harness.run_simple(cmd, cwd=cwd, timeout=timeout)
+    harness.run_simple(cmd, cwd=cwd, timeout=timeout, heartbeat_s=HEARTBEAT_S)
 
 
 if __name__ == "__main__":

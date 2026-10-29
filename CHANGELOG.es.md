@@ -44,6 +44,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Corregido
 
+- **Un CLI de agente silencioso ya no se mata como bloqueado** — el adaptador de hermes ejecuta `--cli` en una sola llamada bloqueante que no imprime nada hasta terminar la tarea, así que una ejecución sana de más de 4 minutos quedaba marcada como `adapter stalled` y cada reintento volvía a morir en el mismo punto. Ahora el adaptador envía un latido cada 20 segundos mientras el CLI trabaja, igual que el harness de deepseek; una ejecución realmente atascada sigue limitada por el presupuesto duro del agente.
+
 ## [0.1.2] - 2026-10-29 — "Constellation"
 
 **El parche de la línea de calidad** — nombre en clave **Constellation**: una conversación puede declarar su grado de autonomía y una tarea puede llevar la evidencia de su propio éxito. Cinco modos de permisos se sitúan sobre los niveles de comando y viajan con cada especificación de tarea; `panda task add --accept` convierte una definición de éxito en comprobaciones que el orquestador ejecuta, y el ejecutor rechaza las escritas por otro nodo o irreversibles. La consola recibe el mismo trato: los paneles del espacio de trabajo ya no se pierden fuera de alcance, el tablero de pendientes añade sin desvío y un agente no instalado no es seleccionable. La configuración y los datos guardados son compatibles; el esquema gana una migración (v64) para las tablas del contrato, que se aplica sola.
