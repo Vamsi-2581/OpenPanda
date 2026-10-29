@@ -3644,7 +3644,7 @@ function RunSummaryRow({ run, onOpenTask }: { run: RunSummary; onOpenTask(id: st
 function TaskApproval({ taskId, preselect }: { taskId: string; preselect?: ApprovalScope }) {
   const change = useChangeSignal()
   const { data: task } = useAsync<Task | null>(
-    () => api.task(taskId).catch(() => null),
+    () => api.taskBrief(taskId).catch(() => null),
     [taskId],
     change,
   )
@@ -3725,7 +3725,7 @@ function TaskApproval({ taskId, preselect }: { taskId: string; preselect?: Appro
 function TaskQuickSend({ taskId }: { taskId: string }) {
   const change = useChangeSignal()
   const { data: task } = useAsync<Task | null>(
-    () => api.task(taskId).catch(() => null),
+    () => api.taskBrief(taskId).catch(() => null),
     [taskId],
     change,
   )

@@ -422,3 +422,82 @@ func TestListTasksStampsLastEvent(t *testing.T) {
 		t.Fatalf("last_event payload not clipped: %d", len(s))
 	}
 }
+
+// brief=1 is the chat bubble's read: the row plus its newest event line and
+// the exec_agent_start the cast names the employee from — never the task's
+// event timeline, which every bubble would otherwise re-pull on every change
+// frame.
+func TestGetTaskBriefCarriesNoTimeline(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := New(Deps{Store: store, DB: db, StaticDir: t.TempDir(), Token: testToken})
+
+	ctx := context.Background()
+	task, err := store.Create(ctx, "", "proj", "brief task", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.RecordEvent(ctx, task.TaskID, core.EvExecAgentStart,
+		map[string]any{"agent": "opencode", "adapter": "opencode.py"}); err != nil {
+		t.Fatalf("record start: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvAgentEvent,
+			map[string]any{"ev": "tool_use", "name": "bash", "n": i}); err != nil {
+			t.Fatalf("record tool_use %d: %v", i, err)
+		}
+	}
+
+	type wireTask struct {
+		ID     string            `json:"id"`
+		Events []json.RawMessage `json:"events"`
+		Traces []struct {
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		} `json:"traces"`
+		LastEvent *struct {
+			Type string `json:"type"`
+		} `json:"last_event"`
+	}
+	get := func(path string) wireTask {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		var got wireTask
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return got
+	}
+
+	full := get("/api/tasks/" + task.TaskID)
+	// Create itself records a submit row, so the exact count is not the point:
+	// the full detail carries the timeline, the brief carries none of it.
+	if len(full.Events) < 41 {
+		t.Fatalf("full detail events = %d, want at least the 41 recorded", len(full.Events))
+	}
+
+	brief := get("/api/tasks/" + task.TaskID + "?brief=1")
+	if len(brief.Events) != 0 {
+		t.Fatalf("brief carried %d event rows, want none", len(brief.Events))
+	}
+	if brief.LastEvent == nil || brief.LastEvent.Type != core.EvAgentEvent {
+		t.Fatalf("brief last_event = %+v, want the newest agent_event", brief.LastEvent)
+	}
+	if len(brief.Traces) != 1 || brief.Traces[0].Type != core.EvExecAgentStart {
+		t.Fatalf("brief traces = %+v, want exactly the exec_agent_start", brief.Traces)
+	}
+	if brief.Traces[0].Data["agent"] != "opencode" {
+		t.Fatalf("brief trace agent = %v, want opencode", brief.Traces[0].Data["agent"])
+	}
+}

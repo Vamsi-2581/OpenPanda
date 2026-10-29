@@ -962,6 +962,45 @@ func (h *handler) attachLastEvents(ctx context.Context, tasks []taskJSON) {
 	}
 }
 
+// newestEvent reads one task's newest event row, optionally restricted to a
+// single type. It is the indexed counterpart of attachLastEvents' batched
+// query: the brief projection asks about one row, and the whole-board GROUP BY
+// would cost more than the payload it saves.
+func (h *handler) newestEvent(ctx context.Context, taskID, typ string) *traceEventJSON {
+	if h.db == nil {
+		return nil
+	}
+	query := `SELECT id, ts, type, COALESCE(data_json, '{}')
+	            FROM task_events
+	           WHERE task_id = ?`
+	args := []any{taskID}
+	if typ != "" {
+		query += ` AND type = ?`
+		args = append(args, typ)
+	}
+	query += ` ORDER BY id DESC LIMIT 1`
+
+	var (
+		dataRaw string
+		te      traceEventJSON
+	)
+	if err := h.db.QueryRowContext(ctx, query, args...).
+		Scan(&te.ID, &te.TS, &te.Type, &dataRaw); err != nil {
+		// No events yet, or a row we cannot read: the brief carries no stamp
+		// rather than failing. It is a visibility hint, not the task.
+		return nil
+	}
+	if dataRaw != "" && dataRaw != "{}" {
+		var decoded any
+		if err := json.Unmarshal([]byte(dataRaw), &decoded); err == nil {
+			te.Data = clipTraceData(decoded)
+		} else {
+			te.DataRaw = dataRaw
+		}
+	}
+	return &te
+}
+
 // visibleTraceTypes is the track set the decision-orbit component paints.
 // Mirrors the map in events.go (same package, kept here so getTask's filter
 // is obvious without chasing a separate file). user_msg belongs here: the
@@ -981,7 +1020,9 @@ var visibleTraceTypes = map[string]bool{
 	"user_msg_consumed":  true,
 }
 
-// getTask serves one task's full row plus its event timeline.
+// getTask serves one task's full row plus its event timeline; ?brief=1 serves
+// the light projection a chat bubble re-reads on every change frame (row,
+// newest event line, and the exec_agent_start that names the employee).
 func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	t, err := h.store.Get(r.Context(), id)
@@ -995,6 +1036,27 @@ func (h *handler) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 	out := toTaskJSON(t)
 	h.enrichPlanMeta(r.Context(), &out, t)
+	// ?brief=1 is the chat bubble's read. Every task bubble in a thread
+	// re-reads its row on every change frame, and the full projection drags
+	// the task's whole event timeline — up to maxAgentTranscriptEvents rows
+	// per request — which is traffic heavy enough to starve the event stream
+	// it depends on. A bubble renders the state, the plan stage, the running
+	// adapter and the newest event line, so that is all this returns.
+	if r.URL.Query().Get("brief") == "1" {
+		out.LastEvent = h.newestEvent(r.Context(), id, "")
+		// The cast line names the employee from the exec_agent_start trace.
+		// One row, not the timeline — but only when the adapter column cannot
+		// answer: that column stays empty for an agent that never mints a
+		// session handle, and it is free, while this lookup scans the task's
+		// events backwards.
+		if out.Agent == "" {
+			if ev := h.newestEvent(r.Context(), id, core.EvExecAgentStart); ev != nil {
+				out.Traces = []traceEventJSON{*ev}
+			}
+		}
+		writeJSON(w, out)
+		return
+	}
 	// Sub-agent tree: the detail view shows the children a parent is
 	// orchestrating (states live) instead of leaving them to the board.
 	if kids, err := h.store.Children(r.Context(), id); err == nil {

@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ApiError, askSessionStream, openSSE, subscribeEvents } from './client.ts'
+import { api, ApiError, askSessionStream, openSSE, subscribeEvents } from './client.ts'
 
 const SSE_HEADERS = { 'Content-Type': 'text/event-stream' }
 
@@ -161,6 +161,27 @@ test('the ask stream names a dispatched task the moment its row exists', async (
     // Order matters: the task frame has to arrive before the result, because
     // the result only lands once the task has already settled.
     assert.deepEqual(seen, ['op:op-1', 'task:t-42', 'result:t-42'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('the brief read asks for the light projection', async () => {
+  const originalFetch = globalThis.fetch
+  const urls: string[] = []
+  globalThis.fetch = (async (url: unknown) => {
+    urls.push(String(url))
+    return new Response(JSON.stringify({ id: 't-1', state: 'running' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as any
+  try {
+    const task = await api.taskBrief('t-1')
+    assert.equal(task.id, 't-1')
+    // A missing ?brief=1 would silently fall back to the full read, so the
+    // URL is the contract worth pinning.
+    assert.deepEqual(urls, ['/api/tasks/t-1?brief=1'])
   } finally {
     globalThis.fetch = originalFetch
   }

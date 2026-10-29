@@ -57,7 +57,7 @@ export function ChatAvatar({ speaker }: { speaker: Speaker }) {
  *  where it stands. Rendered inside the panda's own bubble, above the task
  *  card — the card is the paperwork, this is the sentence. */
 export function TaskCast({ task }: { task: Task }) {
-  const agent = castAgent(task.traces)
+  const agent = castAgent(task.traces) || task.agent || ''
   const stage = task.plan_meta?.stage_id
   const count = task.plan_meta?.stage_count
   return (
@@ -178,13 +178,14 @@ function activityLine(ev?: TraceEvent): string {
 }
 
 /** Loads the task behind a dispatch turn. The transcript only stores the id,
- *  so the cast list and the live progress row read the row itself — and they
- *  read it again on every change frame, which is what keeps the progress line
- *  moving. */
+ *  so the cast list and the bubble read the row itself — and they read it
+ *  again on every change frame, which is what keeps the state current. It is
+ *  the brief read: a bubble never renders the event timeline, and the full
+ *  projection would drag that timeline down once per second per bubble. */
 export function useTaskBrief(taskId?: string): Task | null {
   const change = useChangeSignal()
   const { data } = useAsync<Task | null>(
-    () => (taskId ? api.task(taskId).catch(() => null) : Promise.resolve(null)),
+    () => (taskId ? api.taskBrief(taskId).catch(() => null) : Promise.resolve(null)),
     [taskId],
     change,
   )

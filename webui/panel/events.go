@@ -23,6 +23,11 @@ import (
 // the store.
 const eventsPollInterval = time.Second
 
+// fingerprintScanTimeout bounds one shared fingerprint scan. The scan answers
+// for every stream in its window, so it is detached from the requesting
+// client's context (see cachedTaskFingerprint) and needs a bound of its own.
+const fingerprintScanTimeout = 5 * time.Second
+
 // maxEventStreams bounds concurrent SSE connections. Each one costs a goroutine
 // and two tickers for as long as the client stays connected, and the client —
 // a browser tab or a CLI — holds the same token, so without a ceiling a single
@@ -126,6 +131,12 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Tell reverse proxies to pass frames through as they are written. nginx
+	// buffers proxied responses by default, which turns this into a stream
+	// that arrives in clumps when its buffer fills — the console looks frozen
+	// and a manual reload (a plain fetch) is the only thing that updates it.
+	// The ask stream sets the same header; this one was the odd feed out.
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	wantTraces := r.URL.Query().Get("trace") == "1"
 
@@ -290,11 +301,19 @@ func (h *handler) taskFingerprint(r *http.Request) (string, error) {
 // connected client (see sharedFingerprints).
 func (h *handler) cachedTaskFingerprint(r *http.Request) (string, error) {
 	return sharedFingerprints.get("tasks", func() (string, error) {
+		// The scan runs once per window on behalf of every connected client, so
+		// it must not ride the first caller's request context: that tab closing
+		// mid-scan cancelled the query, and every waiter in the same window got
+		// the error and had its stream dropped. Detach from the request and
+		// keep a bound of our own — a genuinely stuck store still fails the
+		// window rather than pinning a stale fingerprint.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), fingerprintScanTimeout)
+		defer cancel()
 		// Stamps only — the full task rows carry spec/result payloads the
 		// digest never reads; this scan ran once per second per connection
 		// before the shared cache, and the heavy projection made each window
 		// cost O(total task bytes) instead of O(task count).
-		tasks, err := h.store.TaskStamps(r.Context())
+		tasks, err := h.store.TaskStamps(ctx)
 		if err != nil {
 			return "", err
 		}

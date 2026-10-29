@@ -1038,6 +1038,14 @@ export const api = {
   task(id: string): Promise<Task> {
     return request('GET', `/api/tasks/${id}`)
   },
+  /** The light projection a chat bubble re-reads on every change frame:
+   *  state, plan stage, running adapter and the newest event line, with no
+   *  event timeline. The full detail carries up to a couple of thousand
+   *  agent_event rows, and a thread with several task bubbles would pull
+   *  that once a second for each of them. */
+  taskBrief(id: string): Promise<Task> {
+    return request('GET', `/api/tasks/${id}?brief=1`)
+  },
 
   /** Self-evolution patch sets: the merge-review surface. A proposal is a
    *  review task whose spec.kind === 'self_merge'; these endpoints show the

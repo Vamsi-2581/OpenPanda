@@ -54,6 +54,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 - **A commander kill is no longer blamed on the provider** — the silence watchdog, the tool-call fuse and the hard deadline all end a run with exit 124 and a verdict containing "timeout", which the injection fallback read as provider trouble and answered with a full re-run under the injected model: the silent CLI stalled again on the same bound four minutes later, and any side effects the first attempt had performed ran twice. Those verdicts now stay out of the rescue. The openclaw adapter also heartbeats every 20 seconds, like hermes, because its one-shot run is equally silent.
 - **A live link that died in silence no longer needs a manual reload** — the console's event feed had no liveness check of its own, so a half-open socket (a sleeping laptop, a Wi-Fi switch, a frozen background tab) froze every view until the page was reloaded. A stream that misses three heartbeats is now cancelled and re-dialled, a browser coming back online or waking reconnects at once, and a turn whose ask stream died mid-flight is watched to a deadline instead of spinning forever. A dispatched task also shows the employee's live progress row from the moment the row exists, rather than a bare spinner until the task settles.
+- **A console opened through a reverse proxy updates live** — `/api/events` now tells proxies not to buffer (`X-Accel-Buffering: no`), the header the ask stream already carried. Behind nginx or a tunnel the frames used to arrive in clumps when the buffer filled, so the console looked frozen and only a reload refreshed it.
+
 
 ## [0.1.2] - 2026-10-29 — "Constellation"
 
