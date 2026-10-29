@@ -50,6 +50,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Fixed
 
+- **A silent agent CLI is no longer killed as stalled** — the hermes adapter runs `--cli` in one blocking call that prints nothing until the task finishes, so a healthy run past the default 4-minute silence limit was killed as `adapter stalled` and every retry re-ran into the same kill. The adapter now heartbeats every 20 seconds while the CLI works, the same way the deepseek harness does; a genuinely wedged run is still bounded by the hard agent budget.
+
 ## [0.1.2] - 2026-10-29 — "Constellation"
 
 **The patch that opens the release line to conversations and contracts** — codename **Constellation**: a thread can now say how much autonomy it has, and a task can carry evidence of its own success. Five permission modes sit above the command tiers and travel with every task spec; `panda task add --accept` turns a success definition into checks the orchestrator runs itself, and the executor refuses peer-authored or irreversible ones. The console's work surface got the same treatment: the workspace's floating panels can no longer be dragged out of reach, the to-do board adds without a detour, and an uninstalled agent is no longer a pickable team member. Configuration and stored data are compatible; the schema gains one migration (v64) for the contract tables, which runs automatically.

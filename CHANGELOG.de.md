@@ -44,6 +44,8 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Behoben
 
+- **Ein stiller Agent-CLI wird nicht mehr als hängend beendet** — der hermes-Adapter führt `--cli` in einem einzigen blockierenden Aufruf aus, der bis zum Ende der Aufgabe nichts ausgibt; ein gesunder Lauf über dem standardmäßigen 4-Minuten-Stillstand wurde daher als `adapter stalled` abgebrochen, und jeder Neuversuch scheiterte an derselben Stelle. Der Adapter sendet nun alle 20 Sekunden einen Heartbeat, während der CLI arbeitet, wie es der DeepSeek-Harness bereits tut; ein wirklich hängender Lauf wird weiterhin durch das harte Agent-Budget begrenzt.
+
 ## [0.1.2] - 2026-10-29 — "Constellation"
 
 **Der Patch der Release-Linie** — Codename **Constellation**: ein Gespräch kann seinen Grad an Autonomie erklären, und eine Aufgabe kann den Beleg ihres eigenen Erfolgs tragen. Fünf Berechtigungsmodi liegen über den Befehlsklassen und reisen mit jeder Aufgabenspezifikation; `panda task add --accept` macht aus einer Erfolgsdefinition Prüfungen, die der Orchestrator selbst ausführt, und die Ausführung lehnt fremd verfasste wie irreversible Einträge ab. Die Konsole bekommt dieselbe Behandlung: Arbeitsflächen-Panels lassen sich nicht mehr außer Sichtweite ziehen, die Aufgabenliste fügt ohne Umweg hinzu, und ein nicht installierter Agent ist nicht wählbar. Konfiguration und gespeicherte Daten bleiben kompatibel; das Schema erhält eine Migration (v64) für die Vertragstabellen, die automatisch läuft.
