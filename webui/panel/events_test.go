@@ -501,3 +501,86 @@ func TestGetTaskBriefCarriesNoTimeline(t *testing.T) {
 		t.Fatalf("brief trace agent = %v, want opencode", brief.Traces[0].Data["agent"])
 	}
 }
+
+// One board poll must stamp every row it lists. The ids ride an IN list split
+// into batches, so the seam between batches is the thing worth pinning.
+func TestAttachLastEventsCoversEveryBatch(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	// The concrete handler: these two helpers are internal, and New() hands
+	// back the wrapped http.Handler.
+	h := &handler{db: db}
+	ctx := context.Background()
+
+	const n = 401 // one past the 400-id batch
+	out := make([]taskJSON, 0, n)
+	for i := 0; i < n; i++ {
+		task, err := store.Create(ctx, "", "proj", "row", "node", []string{"node"})
+		if err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "working"}); err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+		out = append(out, toTaskJSON(task))
+	}
+	h.attachLastEvents(ctx, out)
+	for i := range out {
+		if out[i].LastEvent == nil {
+			t.Fatalf("row %d (%s) came back without a stamp", i, out[i].ID)
+		}
+	}
+}
+
+// A burst bigger than one batch must be drained inside the same tick. The old
+// fixed per-tick LIMIT was a ceiling, not a bound: an agent writing faster than
+// it pushed the watermark further behind every second for the whole run.
+func TestPushNewTracesDrainsABurst(t *testing.T) {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := storage.Migrate(db); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	store := core.NewTaskStore(db, slog.New(slog.DiscardHandler))
+	h := &handler{db: db}
+	ctx := context.Background()
+
+	task, err := store.Create(ctx, "", "proj", "burst", "node", []string{"node"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	const n = traceBatchSize + 250
+	for i := 0; i < n; i++ {
+		if err := store.RecordEvent(ctx, task.TaskID, core.EvProgress,
+			map[string]any{"note": "step"}); err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+	}
+
+	push := func(watermark int64) (int64, int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		next := h.pushNewTraces(ctx, rec, rec, watermark)
+		return next, strings.Count(rec.Body.String(), "event: trace\n")
+	}
+
+	wm, first := push(0)
+	if first < traceBatchSize {
+		t.Fatalf("one tick drained %d frames, want at least one full batch (%d)", first, traceBatchSize)
+	}
+	_, rest := push(wm)
+	if got := first + rest; got != n {
+		t.Fatalf("delivered %d frames across two ticks, want %d", got, n)
+	}
+}

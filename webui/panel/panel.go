@@ -919,22 +919,50 @@ func (h *handler) listTasks(w http.ResponseWriter, r *http.Request) {
 
 // attachLastEvents stamps every listed task with its newest task_events row
 // (clipped) so the board's live line can say what a mid-flight task is doing
-// on first paint — before the SSE trace stream's first frame lands. One
-// batched query covers the whole board; any failure degrades to no stamp
-// rather than failing the list.
+// on first paint — before the SSE trace stream's first frame lands. Any
+// failure degrades to no stamp rather than failing the list.
+//
+// The ids are spelled out rather than left to a whole-table GROUP BY: this
+// runs once per change frame for every open board, so the old form made each
+// poll cost O(all events on the node) instead of O(the events of the rows on
+// screen).
 func (h *handler) attachLastEvents(ctx context.Context, tasks []taskJSON) {
 	if h.db == nil || len(tasks) == 0 {
 		return
 	}
+	last := make(map[string]traceEventJSON, len(tasks))
+	// 400 placeholders per query: comfortably inside SQLite's bound-variable
+	// limit even on builds old enough to still carry the 999 ceiling.
+	const batch = 400
+	for start := 0; start < len(tasks); start += batch {
+		h.lastEventsBatch(ctx, tasks[start:min(start+batch, len(tasks))], last)
+	}
+	for i := range tasks {
+		if te, ok := last[tasks[i].ID]; ok {
+			te := te
+			tasks[i].LastEvent = &te
+		}
+	}
+}
+
+// lastEventsBatch fills `last` with one batch's newest event per task.
+func (h *handler) lastEventsBatch(ctx context.Context, tasks []taskJSON, last map[string]traceEventJSON) {
+	marks := make([]string, len(tasks))
+	args := make([]any, len(tasks))
+	for i, t := range tasks {
+		marks[i] = "?"
+		args[i] = t.ID
+	}
 	rows, err := h.db.QueryContext(ctx,
 		`SELECT task_id, id, ts, type, COALESCE(data_json, '{}')
 		   FROM task_events
-		  WHERE id IN (SELECT MAX(id) FROM task_events GROUP BY task_id)`)
+		  WHERE id IN (SELECT MAX(id) FROM task_events
+		                WHERE task_id IN (`+strings.Join(marks, ",")+`)
+		                GROUP BY task_id)`, args...)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
-	last := make(map[string]traceEventJSON, len(tasks))
 	for rows.Next() {
 		var (
 			taskID  string
@@ -953,12 +981,6 @@ func (h *handler) attachLastEvents(ctx context.Context, tasks []taskJSON) {
 			}
 		}
 		last[taskID] = te
-	}
-	for i := range tasks {
-		if te, ok := last[tasks[i].ID]; ok {
-			te := te
-			tasks[i].LastEvent = &te
-		}
 	}
 }
 
