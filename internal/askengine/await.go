@@ -220,6 +220,8 @@ func settleResult(res *Result, task core.Task, payload bus.TaskResultPayload) *R
 	out.WorkDir = payload.WorkDir
 	out.Question = payload.Question
 	out.FilesChanged = payload.FilesChanged
+	out.Verified = payload.Verified
+	out.Verification = payload.Verification
 	if task.State == core.StateReview {
 		reason := payload.Stderr
 		if reason == "" {

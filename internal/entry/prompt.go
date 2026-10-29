@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 	"github.com/Xustalis/OpenPanda/internal/ledger"
 )
@@ -59,10 +60,11 @@ Routing criteria:
 - If a pipeline must be split across different physical machines (e.g. develop on node A, train on GPU node B, summarize on node C) → use Kind 4: plan instead of a single task.
 
 When emitting a task, output ONLY a single JSON object with no surrounding commentary or markdown code fences:
-{"kind":"task","task":{"title":"Brief title","project":"Project name or null","context_type":"file|command|hardware|stream","requires":{"abilities":["..."]},"spec":{"scope":"comma-separated relative paths to modify, or empty string","target":"Faithful restatement of what the user asked — preserve their details, do not paraphrase away specifics","constraints":["Constraints or prohibitions"],"success_definition":"How to verify completion","action_spec":{"target_actuator":"hardware:x","action":"verb","parameters":{"name":0}}},"complexity":0.0,"risk":"low|medium|high|critical","tools_policy":"minimal|extended","max_turns":0,"resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}}
+{"kind":"task","task":{"title":"Brief title","project":"Project name or null","context_type":"file|command|hardware|stream","requires":{"abilities":["..."]},"spec":{"scope":"comma-separated relative paths to modify, or empty string","target":"Faithful restatement of what the user asked — preserve their details, do not paraphrase away specifics","constraints":["Constraints or prohibitions"],"success_definition":"How to verify completion","acceptance":[],"action_spec":{"target_actuator":"hardware:x","action":"verb","parameters":{"name":0}}},"complexity":0.0,"risk":"low|medium|high|critical","tools_policy":"minimal|extended","max_turns":0,"resource_profile":{"cpu":1,"ram_gb":1,"gpu_vram_gb":0,"duration_hint":"short|long"}}}
 
 Task field specifications:
 - spec.scope: Comma-separated relative paths (e.g. "src/api,webui/app.tsx"). Do not write prose descriptions; leave empty ("") if uncertain or the entire work directory is allowed.
+- spec.acceptance: OPTIONAL, and only when an "Acceptance Candidates" section is present. Copy 1-3 checks from that list as {"id":"<id>","run":"<run>"}. Never invent a command; omit the field when none of the candidates prove this task's success.
 - resource_profile: Hard routing filters (硬性路由条件). Nodes with declared hardware below requirements are disqualified:
   - gpu_vram_gb: Non-zero ONLY for actual GPU workloads (model training, fine-tuning, local LLM inference, CUDA). For coding, scripts, tests, config, set to 0.
   - cpu / ram_gb: Fill according to actual needs (e.g., cpu 8, ram_gb 16 for heavy compilation; 1 / 1 for lightweight tasks).
@@ -267,6 +269,12 @@ type PromptOptions struct {
 	// opencode, and pinned each task to an agent the thread had excluded.
 	// Empty means "no pick" (the scheduler routes by capability).
 	AgentRoster []string
+	// AcceptanceCandidates are the verification entry points the workspace
+	// already declares (Makefile targets, package scripts, toolchain
+	// defaults, CI steps). The model selects from this list for
+	// spec.acceptance; it never invents a command. Empty means "no project
+	// in view" and the task will be reported unverified.
+	AcceptanceCandidates []contract.Candidate
 }
 
 // ClassifyOption tweaks the system prompt the Classify* entry points build.
@@ -311,6 +319,46 @@ func WithAgentRoster(names []string) ClassifyOption {
 		}
 		p.AgentRoster = out
 	}
+}
+
+// WithAcceptanceCandidates tells the entry model which verification checks
+// the workspace already declares. The model selects; it never authors a
+// command. Duplicates and empty entries are dropped, and the list is capped so
+// the prompt stays a shortlist rather than a menu.
+func WithAcceptanceCandidates(cands []contract.Candidate) ClassifyOption {
+	return func(p *PromptOptions) {
+		seen := make(map[string]bool, len(cands))
+		out := make([]contract.Candidate, 0, len(cands))
+		for _, c := range cands {
+			id := strings.TrimSpace(c.ID)
+			run := strings.TrimSpace(c.Run)
+			if id == "" || run == "" || seen[id] || len(out) >= 12 {
+				continue
+			}
+			seen[id] = true
+			c.ID, c.Run = id, run
+			out = append(out, c)
+		}
+		p.AcceptanceCandidates = out
+	}
+}
+
+// acceptanceCandidatesLine renders the project's own verification entry
+// points. The instruction is blunt about the two failure modes this section
+// exists to prevent: inventing a command that does not exist in the project,
+// and selecting a step whose purpose is to ship rather than to prove.
+func acceptanceCandidatesLine(cands []contract.Candidate) string {
+	var b strings.Builder
+	b.WriteString("The workspace already declares these verification checks. When you emit a task, choose 1-3 of them that actually prove THIS task's success and put them in spec.acceptance as {\"id\":\"<id>\",\"run\":\"<run>\"}. Do not invent commands, do not alter the command text, and do not select deploy/publish/clean steps.\n")
+	b.WriteString("If none of them can prove this task's success, omit spec.acceptance; the task will be reported unverified rather than judged against a check that proves nothing.\n")
+	for _, c := range cands {
+		b.WriteString("- " + c.ID + ": " + c.Run)
+		if c.Source != "" {
+			b.WriteString(" (" + c.Source + ")")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // agentRosterLine renders the thread's team pick. It is deliberately blunt
@@ -385,6 +433,10 @@ func BuildPrompt(opts PromptOptions) string {
 	}
 	if layers.TaskExample {
 		b.WriteString(taskExampleSection)
+	}
+	if len(opts.AcceptanceCandidates) > 0 {
+		b.WriteString("\n\n═══ Acceptance Candidates ═══\n")
+		b.WriteString(acceptanceCandidatesLine(opts.AcceptanceCandidates))
 	}
 	b.WriteString("\n\n═══ Connected Devices ═══\n")
 	b.WriteString(devices)

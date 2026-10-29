@@ -136,6 +136,19 @@ const (
 	// time. Without this event the timeline only shows the corrective
 	// retarget to self, and "meant for the Mac, ran here" is invisible.
 	EvRouteFallback = "route_fallback"
+
+	// EvContractSet records the acceptance contract a task will be judged
+	// against. It is written once before execution so the timeline can answer
+	// "what did this run promise?" even after the spec is amended.
+	EvContractSet = "contract_set"
+	// EvCheckResult records one acceptance check's outcome, per phase. The
+	// baseline phase runs before the agent touches the tree; the final phase
+	// runs after it claims done. The pair is what separates "was already
+	// broken" from "this run broke it".
+	EvCheckResult = "check_result"
+	// EvVerdict records the contract's combined judgment (verified / failed /
+	// partial) and the checks that drove it.
+	EvVerdict = "verdict"
 )
 
 // Task priority levels for the panel queue (smaller runs first). The DB
@@ -160,6 +173,11 @@ type Task struct {
 	Intent       string
 	SpecJSON     string
 	ResultJSON   string
+	// Verification is the contract verdict: "verified", "failed", "partial",
+	// "skipped", or "" when the task carried no acceptance checks. It is a
+	// property of the outcome, not a state: a task can be done and unverified
+	// (the user forced it) and the two must stay distinguishable.
+	Verification string
 	ContextType  string
 	ContextHash  string
 	Complexity   float64

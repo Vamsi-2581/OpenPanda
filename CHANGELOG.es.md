@@ -40,8 +40,16 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Añadido
+
+- **Una conversación tiene modo de permisos** — automático, manual, aceptar ediciones, plan y omitir permisos, elegido en el compositor y guardado con el hilo. El modo viaja en cada especificación de tarea, así que el ejecutor aplica la política elegida: manual detiene cada cambio para una respuesta en primer plano, plan da al agente la cara de solo lectura y detiene los comandos nativos, omitir ejecuta todo y queda auditado.
+- **Una tarea puede llevar un contrato de aceptación ejecutable** — `panda task add --accept "go test ./..."` (o `--accept auto`) ejecuta las comprobaciones al terminar el agente y las registra en la tarea.
+
 ### Corregido
 
+- **Un panel del espacio de trabajo ya no puede arrastrarse fuera de alcance** — la posición se limita a la banda visible (el desplazamiento se leía del elemento equivocado), las coordenadas guardadas fuera del lienzo se corrigen al cargar y el control «Ordenar diseño» rearma la fila.
+- **El tablero de pendientes añade sin desvío** — el campo está siempre visible y `n` lleva a él desde cualquier sitio, los filtros muestran su recuento y un tablero vacío es una línea, no tres columnas vacías.
+- **Un agente que este nodo no tiene no es un miembro elegible** — la fila explica por qué está deshabilitada y solo se puede pulsar para quitar una elección obsoleta.
 - **Un hello capturado ya no se reproduce en otro nodo** —— el hello nombra al receptor para el que fue firmado (`to`, `sig_b`, `ed_sig_b`), y un nodo rechaza un hello dirigido a otro. El despliegue es compatible hacia atrás: un par que no puede vincular sigue siendo admitido, y un nodo que ya vinculó no puede volver a la forma sin vínculo.
 - **El marcador de aclaración acepta dos puntos de ancho completo** —— un agente que escribe `PANDA_QUESTION：` (los dos puntos que produce un IME chino) ahora deja la tarea en espera de respuesta en lugar de dejar la línea en el texto.
 - **Una fila de tarea dañada ya no hace fallar la lista con 500** —— las columnas anulables (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) se leen como valores cero, y `/api/tasks` sirve el resto del tablero.

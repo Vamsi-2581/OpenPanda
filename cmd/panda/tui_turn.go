@@ -55,7 +55,9 @@ func (m tuiModel) onDelta(msg deltaMsg) (tea.Model, tea.Cmd) {
 func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	p := msg.progress
 	label := progressNote(m.loc, p)
-	m.note = label
+	if p.Kind != askengine.ProgressAgentText {
+		m.note = label
+	}
 	now := time.Now()
 
 	var cmds []tea.Cmd
@@ -72,6 +74,12 @@ func (m tuiModel) onProgress(msg progressMsg) (tea.Model, tea.Cmd) {
 	case askengine.ProgressTool:
 		if m.liveTask != nil {
 			m.liveTask.recordTool(label, now)
+		}
+	case askengine.ProgressAgentText:
+		// The delegated agent's own output: it belongs under the task card,
+		// not on the engine's status line.
+		if m.liveTask != nil {
+			m.liveTask.say(p.Detail)
 		}
 	case askengine.ProgressRetry, askengine.ProgressOffline:
 		// A model retry (or an outage being waited out) belongs on the status
@@ -115,7 +123,11 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 		// the user had already read.
 		done := m.turnEnded()
 		prompt := m.pendingPrompt
+		// Whatever had already streamed is work the user watched arrive. A
+		// transport drop or a provider error must not make it vanish: commit it
+		// as an answer block labelled partial, then report the failure beneath.
 		streamed := m.liveAnswerText()
+		partial := strings.TrimSpace(streamed)
 		m.resetLive()
 		if errors.Is(msg.err, context.Canceled) {
 			if strings.TrimSpace(streamed) != "" {
@@ -124,6 +136,16 @@ func (m tuiModel) onDone(msg doneMsg) (tea.Model, tea.Cmd) {
 			}
 			note := block{kind: blockNote, body: i18n.T(m.loc, "repl.interrupted")}
 			return m.withPending(done, m.printBlock(note))
+		}
+		if partial != "" && m.chatHistory != nil {
+			// Appended directly rather than through printBlock: printBlock
+			// returns a command, and two batched commands may run in either
+			// order — the error could land above the text it truncated.
+			m.chatHistory.blocks = append(m.chatHistory.blocks, block{
+				kind: blockAnswer,
+				body: partial,
+				meta: i18n.T(m.loc, "tui.answer.partial"),
+			})
 		}
 		blk := block{kind: blockError, body: msg.err.Error()}
 		// A classified model failure carries its kind + provider detail into
@@ -264,30 +286,30 @@ func resultBlock(out *askengine.Result, liveAnswer string, loc i18n.Locale) bloc
 			if out.TaskID != "" && out.TaskState != "" {
 				meta = i18n.Tf(loc, "repl.ask.taskReport", "id", out.TaskID, "state", out.TaskState)
 			}
-			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
+			return block{kind: blockTask, ok: out.OK, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback, verification: out.Verification}
 		}
 		if summary := strings.TrimSpace(out.Report); summary != "" {
 			// The LLM summary is the whole display, matching the classic REPL:
 			// it prints the summary and stops. Appending the raw stdout here
 			// buried the readable report under a wall of execution log.
-			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
+			return block{kind: blockTask, ok: out.OK, body: summary, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback, verification: out.Verification}
 		}
 		if out.OK {
 			// When no LLM summary was generated (queue-parked, budget-cut, summarizer
 			// degraded), fall back to the cleaned agent output so the user sees the
 			// actual work result rather than a blank note.
 			if log := cleanedTaskLog(loc, out.Stdout); log != "" {
-				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
+				return block{kind: blockTask, ok: true, body: log, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback, verification: out.Verification}
 			}
 			body := i18n.T(loc, "tui.task.noSummary")
 			if out.TaskID != "" {
 				body += " " + i18n.Tf(loc, "tui.task.rawLogHint", "id", out.TaskID)
 			}
-			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
+			return block{kind: blockTask, ok: true, body: body, meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback, verification: out.Verification}
 		}
 		// Failure keeps its exit evidence, with a runaway stderr tail-capped
 		// so a noisy command cannot flood the transcript.
-		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback}
+		return block{kind: blockTask, ok: false, body: fmt.Sprintf("exit %d: %s", out.ExitCode, cleanedTaskLog(loc, out.Stderr)), meta: appendCostMeta(meta), agent: out.Agent, model: out.Model, injected: out.Injected, executor: out.Executor, routeFallback: out.RouteFallback, verification: out.Verification}
 	case "plan":
 		// A plan that failed to start has no board to follow and no stages, so
 		// its summary line would read "plan  · 0 stages" — a failure rendered

@@ -82,6 +82,10 @@ func progressNote(loc i18n.Locale, p askengine.Progress) string {
 		} else {
 			note = i18n.Tf(loc, "cli.progress.tool", "name", p.Name)
 		}
+	case askengine.ProgressAgentText:
+		// The delegated agent's own words, already in its own language. A
+		// status note is one row: collapse the block and clip it.
+		note = truncate(oneLine(p.Detail), 160)
 	case askengine.ProgressRoute:
 		// A locally-executed task carries the scheduler's "local" action as its
 		// target; phrase it as the user's own node instead of leaking jargon.

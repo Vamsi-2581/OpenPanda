@@ -29,6 +29,7 @@ import (
 	"github.com/Xustalis/OpenPanda/internal/carddetect"
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
+	"github.com/Xustalis/OpenPanda/internal/contract"
 	"github.com/Xustalis/OpenPanda/internal/core"
 	"github.com/Xustalis/OpenPanda/internal/entry"
 	"github.com/Xustalis/OpenPanda/internal/guard"
@@ -809,6 +810,13 @@ type Result struct {
 	// result's footprint, so a surface can show what moved instead of trusting
 	// the agent's prose.
 	FilesChanged []string
+	// Verified and Verification carry the delivery contract's verdict:
+	// "verified" when every selected check ran and passed, "failed" when one
+	// did not, "partial" when some were skipped, "" when the task carried no
+	// contract. A done task with an empty or non-verified verdict is exactly
+	// what a surface must not present as an unqualified success.
+	Verified     bool
+	Verification string
 	// EntryModel is the model that served this ask's entry calls (triage,
 	// classify, answer stream) — the configured primary, or the fallback the
 	// circuit breaker routed to mid-ask. UI surfaces render it next to the
@@ -1253,6 +1261,7 @@ func (e *Engine) initSchedulerLocked(cardPath string) error {
 		}
 	}
 	sched.SetTimeouts(e.cfg.Timeouts)
+	sched.SetAcceptanceConfig(e.cfg.Execution.Acceptance)
 	sched.SetMessageBudget(e.cfg.Messages.Budget)
 	sched.SetRetentionDays(e.cfg.Storage.EffectiveTaskRetentionDays())
 
@@ -1522,6 +1531,11 @@ const (
 	// are different problems, and a surface that shows the second for the
 	// first sends the user to the wrong page.
 	ProgressOffline ProgressKind = "offline"
+	// ProgressAgentText carries one block of the delegated agent's own prose
+	// (or an errored tool result) verbatim in Detail. It is live display
+	// material, not a lifecycle milestone: a task that runs for twenty
+	// minutes must show the work happening, not a frozen spinner.
+	ProgressAgentText ProgressKind = "agent_text"
 )
 
 // Progress is one structured progress event: the action, and the name of what
@@ -1631,6 +1645,10 @@ func StatusText(p Progress) string {
 		}
 		return fmt.Sprintf("network unreachable — waiting for it to come back, then replaying automatically%s",
 			modelNote(p))
+	case ProgressAgentText:
+		// The agent's own words: already prose, already in its own language.
+		// Bounded because the fallback sentence is a status line, not a report.
+		return truncateRunes(p.Detail, 200)
 	}
 	return p.Name
 }
@@ -1714,6 +1732,12 @@ type AskScope struct {
 	// rather than being a hint the model may ignore. Empty means no
 	// restriction — the scheduler routes by capability, as before.
 	Agents []string
+
+	// Acceptance is the user's own contract for any task this ask produces
+	// (CLI --accept). It is appended to the classified task's spec and, unlike
+	// a model-selected check, bypasses the project shortlist: the user is the
+	// authority on how their own work is judged.
+	Acceptance []contract.Check
 }
 
 // AskTurns is the backward-compatible session-aware entry point. Callers that
@@ -1850,6 +1874,16 @@ func (e *Engine) AskTurnsScoped(ctx context.Context, history []entry.Turn, promp
 	// opencode.
 	if len(scope.Agents) > 0 {
 		classifyOpts = append(classifyOpts, entry.WithAgentRoster(scope.Agents))
+	}
+
+	// The workspace's own verification entries, offered as a shortlist. The
+	// model selects from it; it never authors a command. Without this the
+	// classifier has no grounded way to name an acceptance check, and every
+	// task it creates is done-but-unverified.
+	if workDir != "" {
+		if cands := contract.Enumerate(workDir); len(cands) > 0 {
+			classifyOpts = append(classifyOpts, entry.WithAcceptanceCandidates(cands))
+		}
 	}
 
 	// Memory wall (design §17.2): Hermes personal memory enters only
@@ -2658,6 +2692,13 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 	if in.RepoPath == "" && workDir != "" {
 		in.RepoPath = workDir
 	}
+	// A model may only select acceptance checks the workspace actually
+	// declares. It sees the shortlist in its prompt, but a prompt is not an
+	// enforcement point: an invented command would run under the
+	// orchestrator's own authority, so anything outside the enumeration is
+	// dropped before the row exists.
+	in.SpecJSON = restrictAcceptanceToProject(in.SpecJSON, workDir)
+	in.SpecJSON = appendUserAcceptance(in.SpecJSON, scope.Acceptance)
 	// Approval mode is the real tier-2 gate (design §16), resolved against the
 	// task's own project: a project approval_mode overrides the global mode;
 	// a remembered session/project decision answers before any prompt; an
@@ -2793,20 +2834,22 @@ func (e *Engine) submitTask(ctx context.Context, spec *entry.TaskSpec, prompt st
 		sched.EvTrace(ctx, task.TaskID, core.EvReasoning, map[string]any{"thought": reasoning})
 	}
 	res := &Result{
-		Kind:      "task",
-		Thought:   reasoning,
-		TaskID:    task.TaskID,
-		TaskTitle: task.Title,
-		TaskState: task.State,
-		OK:        result.OK,
-		Stdout:    result.Stdout,
-		Stderr:    result.Stderr,
-		ExitCode:  result.ExitCode,
-		Agent:     result.Agent,
-		Model:     result.Model,
-		Injected:  result.Injected,
-		Executor:  result.Executor,
-		WorkDir:   result.WorkDir,
+		Kind:         "task",
+		Thought:      reasoning,
+		TaskID:       task.TaskID,
+		TaskTitle:    task.Title,
+		TaskState:    task.State,
+		OK:           result.OK,
+		Stdout:       result.Stdout,
+		Stderr:       result.Stderr,
+		ExitCode:     result.ExitCode,
+		Agent:        result.Agent,
+		Model:        result.Model,
+		Injected:     result.Injected,
+		Executor:     result.Executor,
+		WorkDir:      result.WorkDir,
+		Verified:     result.Verified,
+		Verification: result.Verification,
 	}
 	res.Question = result.Question
 	res.FilesChanged = result.FilesChanged
@@ -2890,6 +2933,38 @@ func progressForEvent(typ string, data any) (Progress, bool) {
 		if note != "" {
 			return Progress{Kind: ProgressTool, Name: note}, true
 		}
+	case core.EvAgentEvent:
+		// The delegated agent's own activity, streamed live. Without this the
+		// only thing a caller sees between "running <agent>" and the final
+		// verdict is the watchdog's one-line "no output for Ns" — the run is
+		// working for twenty minutes and the screen looks frozen. Tool calls
+		// reuse ProgressTool so every existing renderer already knows how to
+		// phrase them; assistant prose gets its own kind because it is text,
+		// not a milestone.
+		switch eventField(data, "ev") {
+		case "tool_use":
+			label := agentToolLabel(eventField(data, "name"), eventInput(data))
+			if label == "" {
+				return Progress{}, false
+			}
+			return Progress{Kind: ProgressTool, Name: label}, true
+		case "text":
+			text := strings.TrimSpace(eventField(data, "text"))
+			if text == "" {
+				return Progress{}, false
+			}
+			return Progress{Kind: ProgressAgentText, Detail: text}, true
+		case "tool_result":
+			if !boolField(data, "is_error") {
+				return Progress{}, false
+			}
+			text := strings.TrimSpace(eventField(data, "content"))
+			if text == "" {
+				return Progress{}, false
+			}
+			return Progress{Kind: ProgressAgentText, Detail: text, Name: "error"}, true
+		}
+		return Progress{}, false
 	case core.EvModelInjection:
 		name := eventField(data, "agent")
 		model := eventField(data, "model")
@@ -2904,6 +2979,54 @@ func progressForEvent(typ string, data any) (Progress, bool) {
 			Round: intField(data, "round"), Budget: intField(data, "budget")}, true
 	}
 	return Progress{}, false
+}
+
+// eventInput returns the tool_use input object recorded on a structured
+// agent_event, for either shape the store hands back (a map before marshaling,
+// JSON bytes after).
+func eventInput(data any) map[string]any {
+	switch v := data.(type) {
+	case map[string]any:
+		if m, ok := v["input"].(map[string]any); ok {
+			return m
+		}
+	case []byte:
+		var m map[string]any
+		if json.Unmarshal(v, &m) == nil {
+			if in, ok := m["input"].(map[string]any); ok {
+				return in
+			}
+		}
+	}
+	return nil
+}
+
+// agentToolLabel renders one delegated tool call as a single line: the tool's
+// name plus whichever input field says what it acts on, in the order that
+// reads best in a terminal. Empty when there is nothing to show.
+func agentToolLabel(name string, input map[string]any) string {
+	name = strings.TrimSpace(name)
+	detail := ""
+	for _, key := range []string{"description", "command", "file_path", "path", "pattern", "query", "url", "prompt"} {
+		if v, ok := input[key].(string); ok && strings.TrimSpace(v) != "" {
+			detail = strings.TrimSpace(v)
+			break
+		}
+	}
+	if detail == "" && len(input) > 0 {
+		if blob, err := json.Marshal(input); err == nil {
+			detail = string(blob)
+		}
+	}
+	detail = truncateRunes(strings.Join(strings.Fields(detail), " "), 120)
+	switch {
+	case name != "" && detail != "":
+		return name + ": " + detail
+	case name != "":
+		return name
+	default:
+		return detail
+	}
 }
 
 // eventField extracts a string field from a recorded event's data, which is

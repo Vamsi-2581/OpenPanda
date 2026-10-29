@@ -46,8 +46,16 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ## [Unreleased]
 
+### Added
+
+- **A conversation has a permission mode** — auto, manual, accept-edits, plan and bypass, picked from the composer and saved with the thread. The mode rides every task spec, so the executor applies the policy the user chose: manual holds each state-changing plan for a foreground answer, plan hands the agent the read-only tool face and holds native commands, bypass consents to everything and is still audited. The per-turn authorize switch now only appears where it can still change the outcome.
+- **A task can carry an executable acceptance contract** — `panda task add --accept "go test ./..."` (or `--accept auto` to enumerate the project's build and test entries) runs the checks after the agent finishes and records the result on the task; declarations appear as `task_checks` and `panda task verdict` reads them back.
+
 ### Fixed
 
+- **A workspace panel can no longer be dragged out of reach** — the drop position is pinned to the band the pointer can see (the surface's scroll offset was read from the wrong element), a stored slot that lands off-canvas is repaired on load, and the header's 整理布局 control re-forms the tidy row.
+- **The to-do board adds without a detour** — the composer is always visible and `n` focuses it from anywhere, the quick filters carry their counts, and an empty board is one line instead of three empty lanes.
+- **An agent this node does not have is not a pickable team member** — the roster row says why it is disabled and stays clickable only to remove a stale pick.
 - **A captured hello no longer replays at another node** — a hello now names the receiver it was signed for (`to`, `sig_b`, `ed_sig_b`), and a node refuses a hello addressed elsewhere. Shipping is backward compatible: a peer that cannot bind is still admitted, and a node that has bound once may not fall back to the unbound form.
 - **The clarification marker accepts a full-width colon** — an agent writing `PANDA_QUESTION：` (the colon a Chinese IME produces) now parks the task for an answer instead of leaving the line in the prose.
 - **One damaged task row no longer 500s the task list** — the nullable columns (`chain_json`, `parent_id`, `project`, `title`, `created_at`, `updated_at`) hydrate as zero values, so `/api/tasks` serves the rest of the board instead of failing whole.

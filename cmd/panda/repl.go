@@ -1056,7 +1056,7 @@ func (r *repl) askMode(text, mode string) {
 			// (it explains a long wait); once the answer is streaming, the same
 			// note would interrupt it, so it stays ephemeral in the status line.
 			note := progressNote(r.loc, p)
-			if p.Kind == askengine.ProgressTool || lr.printed {
+			if p.Kind == askengine.ProgressTool || p.Kind == askengine.ProgressAgentText || lr.printed {
 				st.Note(note)
 				return
 			}

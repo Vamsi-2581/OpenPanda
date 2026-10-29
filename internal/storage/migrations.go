@@ -96,6 +96,9 @@ var migrations = []Migration{
 	{Version: 61, Name: "add_todos", Apply: migrateV61},
 	{Version: 62, Name: "add_employee_dir_signer", Apply: migrateV62},
 	{Version: 63, Name: "add_hello_bindings", Apply: migrateV63},
+	// The delivery contract's verification tables arrived while upstream was
+	// claiming 63 for hello bindings, so they move behind it.
+	{Version: 64, Name: "add_task_checks_and_verification", Apply: migrateV64},
 }
 
 // migrateV62 adds employee_cache.dir_signer: the Ed25519 key that SIGNED a
@@ -1526,4 +1529,40 @@ func migrateV61(tx MigrationExec) error {
 	}
 	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(due_at)`)
 	return err
+}
+
+// migrateV63 adds the acceptance layer: tasks.verification carries the
+// contract verdict (verified / failed / partial / skipped, empty for tasks
+// that never had one), and task_checks records every check the orchestrator
+// ran, by phase. The rows are evidence, not a cache: the baseline phase is
+// what lets the report say "this suite was already red" instead of blaming
+// the run, and the final phase is what a task is actually judged on.
+func migrateV64(tx MigrationExec) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_checks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL,
+		phase TEXT NOT NULL,
+		check_id TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT 'command',
+		command TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		exit_code INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		output_head TEXT NOT NULL DEFAULT '',
+		output_tail TEXT NOT NULL DEFAULT '',
+		reason TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_task_checks_task ON task_checks(task_id, id)`); err != nil {
+		return err
+	}
+	// Legacy fixtures migrate from a partial schema; without a tasks table
+	// there is nothing to stamp. The same guard every column migration uses.
+	exists, err := tableExistsTx(tx, "tasks")
+	if err != nil || !exists {
+		return err
+	}
+	return addColumnIfMissingTx(tx, "tasks", "verification", "TEXT NOT NULL DEFAULT ''")
 }
