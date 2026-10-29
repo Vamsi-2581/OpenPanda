@@ -5,12 +5,14 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Xustalis/OpenPanda/internal/commander"
 	"github.com/Xustalis/OpenPanda/internal/config"
 	"github.com/Xustalis/OpenPanda/internal/contract"
+	"github.com/Xustalis/OpenPanda/internal/defense"
 	"github.com/Xustalis/OpenPanda/internal/i18n"
 )
 
@@ -82,6 +84,16 @@ func (c *Core) runAcceptance(ctx context.Context, taskID, phase, workDir string,
 			}
 		},
 		RetryFlaky: phase == acceptancePhaseFinal && cfg.FlakyRetry(),
+		// The executor below is the sandboxed native one, but the tier gate
+		// lives in the router, not in the executor: without this guard a check
+		// would be a second way to run an irreversible command with no
+		// authorization, and the contract is evidence, not a privilege.
+		Guard: func(argv []string) error {
+			if defense.TierFromCommand(argv[0], argv[1:]...) == defense.TierIrreversible {
+				return fmt.Errorf("irreversible command %q is not run as an acceptance check", argv[0])
+			}
+			return nil
+		},
 	}
 	results := runner.Run(ctx, phase, checks)
 	for _, r := range results {
@@ -99,6 +111,30 @@ func (c *Core) runAcceptance(ctx context.Context, taskID, phase, workDir string,
 		})
 	}
 	return results
+}
+
+// stripPeerAcceptance removes an acceptance contract from a spec that arrived
+// from another node. The origin's checks stay on the origin's row and are that
+// user's evidence; the executor must not run commands authored elsewhere, so
+// the field is dropped at the wire boundary. Returns the spec unchanged and
+// false when it carried nothing to strip.
+func stripPeerAcceptance(specJSON string) (string, bool) {
+	if specJSON == "" || !strings.Contains(specJSON, `"acceptance"`) {
+		return specJSON, false
+	}
+	var spec map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return specJSON, false
+	}
+	if _, ok := spec["acceptance"]; !ok {
+		return specJSON, false
+	}
+	delete(spec, "acceptance")
+	out, err := json.Marshal(spec)
+	if err != nil {
+		return specJSON, false
+	}
+	return string(out), true
 }
 
 // acceptanceFailureReason is the one-line failure a task carries when its

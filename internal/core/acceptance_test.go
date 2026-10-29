@@ -196,3 +196,54 @@ func TestTaskSpecEnvelopeCarriesAcceptance(t *testing.T) {
 		}
 	}
 }
+
+// TestAcceptanceSkipsIrreversibleCommands: a contract is evidence, not a
+// second way to execute. A check whose command scores Tier-2 never runs, is
+// recorded as skipped with the reason, and cannot verify the task.
+func TestAcceptanceSkipsIrreversibleCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("acceptance fixture uses sh")
+	}
+	c, task, _ := acceptanceTask(t, `{"acceptance":[{"id":"danger","run":"rm -rf build"}]}`)
+	rows, err := c.store.Checks(context.Background(), task.TaskID)
+	if err != nil {
+		t.Fatalf("checks: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("no check rows recorded")
+	}
+	for _, r := range rows {
+		if r.Status != string(contract.StatusSkipped) {
+			t.Fatalf("check %s status = %q, want skipped", r.CheckID, r.Status)
+		}
+		if !strings.Contains(r.Reason, "irreversible") {
+			t.Fatalf("check reason = %q, want it to name the refusal", r.Reason)
+		}
+	}
+	if task.Verification == contract.VerdictVerified {
+		t.Fatal("a contract whose only check never ran must not verify the task")
+	}
+}
+
+// TestStripPeerAcceptance: a delegated task's checks were authored elsewhere
+// and would run here, outside the tier gate — they are dropped at the wire
+// boundary, and nothing else in the spec changes.
+func TestStripPeerAcceptance(t *testing.T) {
+	in := `{"title":"x","acceptance":[{"id":"a","run":"make test"}]}`
+	out, dropped := stripPeerAcceptance(in)
+	if !dropped {
+		t.Fatal("acceptance not detected")
+	}
+	if strings.Contains(out, "acceptance") {
+		t.Fatalf("acceptance survived: %s", out)
+	}
+	if !strings.Contains(out, `"title":"x"`) {
+		t.Fatalf("other fields lost: %s", out)
+	}
+	if _, d := stripPeerAcceptance(`{"title":"x"}`); d {
+		t.Fatal("a spec without acceptance reported a drop")
+	}
+	if got, d := stripPeerAcceptance(""); d || got != "" {
+		t.Fatal("empty spec must pass through untouched")
+	}
+}

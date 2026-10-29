@@ -77,6 +77,11 @@ type Runner struct {
 	Exec       ExecFunc
 	RetryFlaky bool
 	Now        func() time.Time
+	// Guard may refuse a command before it runs. The core uses it to keep
+	// irreversible commands out of acceptance checks: a contract is evidence,
+	// not a second, ungated way to execute. A refused check is recorded as
+	// skipped with the reason, never as a failure of the work.
+	Guard func(argv []string) error
 }
 
 // Run executes checks and returns one Result per check, in order.
@@ -136,6 +141,15 @@ func (r *Runner) runOne(ctx context.Context, phase string, c Check, timeout, bud
 		res.Status = StatusError
 		res.Reason = err.Error()
 		return res
+	}
+	if r.Guard != nil {
+		if gerr := r.Guard(argv); gerr != nil {
+			res.Status = StatusSkipped
+			res.Reason = gerr.Error()
+			res.Duration = now().Sub(begin)
+			res.DurationMS = res.Duration.Milliseconds()
+			return res
+		}
 	}
 	if r.Exec == nil {
 		res.Status = StatusError
@@ -211,6 +225,11 @@ func judge(c Check, out ExecResult) (Status, string) {
 		return StatusError, out.Err.Error()
 	}
 	if out.ExitCode != c.ExpectedExit() {
+		if out.ExitCode == 124 {
+			// 124 is the timeout convention, not the program's own verdict: a
+			// suite that never finished proved nothing about the work.
+			return StatusError, "timed out (exit 124)"
+		}
 		reason := fmt.Sprintf("exit %d, want %d", out.ExitCode, c.ExpectedExit())
 		return StatusFail, reason
 	}

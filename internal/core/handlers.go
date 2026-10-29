@@ -262,6 +262,17 @@ func (c *Core) handleDelegate(ctx context.Context, env bus.Envelope) {
 			}
 		}
 	}
+	// A contract that arrives with a delegated task was authored on another
+	// node and would be executed HERE, by this node's native executor, outside
+	// the tier gate the task's own commands pass through. The origin keeps its
+	// checks on its own row; this node does not take peer-authored commands as
+	// its verification. Strip before the spec is persisted, so no later
+	// requeue or restart can resurrect it.
+	if cleaned, dropped := stripPeerAcceptance(p.SpecJSON); dropped {
+		p.SpecJSON = cleaned
+		c.audit(ctx, t.TaskID, "acceptance:stripped", env.From, "applied",
+			"peer-supplied acceptance checks are not run on the executor")
+	}
 	// Persist the entry-model detail carried on the wire so the local queue
 	// shows intent/context/complexity/risk even before execution starts.
 	if err := c.store.SetDetail(ctx, t.TaskID, delegateDetail(p)); err != nil {

@@ -26,7 +26,9 @@ const (
 	maxCandidateBytes = 512 << 10
 	// maxCandidates keeps a contract-sized list: more entries turn selection
 	// into a menu nobody reads, and every selected check costs a real run.
-	maxCandidates = 12
+	// It equals the contract's own ceiling so `--accept auto` — which selects
+	// everything enumerated — can never overflow Validate on a busy project.
+	maxCandidates = MaxChecks
 )
 
 // interestingTarget matches build/test target names. It is deliberately
@@ -42,13 +44,90 @@ var makeTargetRE = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9_.-]*)[ \t]*:`)
 // interestingScript matches package.json script names worth running.
 var interestingScript = regexp.MustCompile(`(?i)(test|spec|lint|typecheck|check|build|e2e|ci)`)
 
-// ciTools are the first words a CI `run:` line may start with. Anything else
-// is skipped: an arbitrary CI step is not a verification convention, and some
-// steps (deploy, publish) have side effects.
+// ciTools are the programs a CI `run:` line may start with. The program alone
+// is not enough to make a step safe to replay: `npm publish` and `make
+// release` share their first word with `npm test` and `make test`, and both
+// have side effects nobody asked to repeat during verification. ciAllowed
+// therefore also checks the subcommand.
 var ciTools = map[string]bool{
 	"make": true, "npm": true, "pnpm": true, "yarn": true, "bun": true,
 	"go": true, "cargo": true, "pytest": true, "python": true, "python3": true,
 	"dotnet": true, "mvn": true, "gradle": true, "./gradlew": true, "./mvnw": true,
+}
+
+// ciPositionals returns the non-flag words of an argument list. Values that
+// belong to a flag are not distinguished (a bare `--max 3` leaves "3"); the
+// allowlist below only ever inspects the first one or two words, and a stray
+// value there is a reason to skip the step, not to run it.
+func ciPositionals(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// ciAllowed reports whether a CI step is a verification entry point rather
+// than a release, publish or deploy step that happens to use the same tool.
+func ciAllowed(argv []string) bool {
+	if len(argv) == 0 || !ciTools[argv[0]] {
+		return false
+	}
+	switch argv[0] {
+	case "make":
+		pos := ciPositionals(argv[1:])
+		return len(pos) > 0 && interestingTarget.MatchString(pos[0])
+	case "npm", "pnpm", "yarn", "bun":
+		pos := ciPositionals(argv[1:])
+		if len(pos) == 0 {
+			return false
+		}
+		if pos[0] == "test" {
+			return true
+		}
+		// `run <script>` is the only other shape; `publish`, `install` and
+		// friends are not verification.
+		return pos[0] == "run" && len(pos) > 1 && interestingScript.MatchString(pos[1])
+	case "go":
+		pos := ciPositionals(argv[1:])
+		if len(pos) == 0 {
+			return false
+		}
+		switch pos[0] {
+		case "test", "vet", "build":
+			return true
+		}
+		return false
+	case "cargo":
+		pos := ciPositionals(argv[1:])
+		if len(pos) == 0 {
+			return false
+		}
+		switch pos[0] {
+		case "test", "build", "check", "clippy", "fmt":
+			return true
+		}
+		return false
+	case "python", "python3":
+		// Only `-m pytest`: running a project script by name would execute
+		// arbitrary code the step never declared as a test.
+		return len(argv) >= 3 && argv[1] == "-m" && argv[2] == "pytest"
+	case "pytest":
+		return true
+	case "dotnet":
+		pos := ciPositionals(argv[1:])
+		return len(pos) > 0 && (pos[0] == "test" || pos[0] == "build")
+	case "mvn", "./mvnw":
+		pos := ciPositionals(argv[1:])
+		return len(pos) > 0 && (pos[0] == "test" || pos[0] == "verify")
+	case "gradle", "./gradlew":
+		pos := ciPositionals(argv[1:])
+		return len(pos) > 0 && (pos[0] == "test" || pos[0] == "build" || pos[0] == "check")
+	}
+	return false
 }
 
 // Enumerate inspects root for verification entry points the project already
@@ -229,7 +308,7 @@ func ciRuns(root string) []string {
 				continue
 			}
 			argv, err := SplitCommand(cmd)
-			if err != nil || !ciTools[argv[0]] {
+			if err != nil || !ciAllowed(argv) {
 				continue
 			}
 			seen[cmd] = true

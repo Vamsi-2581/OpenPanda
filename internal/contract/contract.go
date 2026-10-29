@@ -133,6 +133,12 @@ func validatePath(p string) error {
 		return fmt.Errorf("artifact path %q must be workspace-relative", p)
 	}
 	clean := filepath.Clean(p)
+	if clean == "." {
+		// "." is the workspace itself, which always exists: an artifact check
+		// on it passes without asserting anything, so it is a self-certifying
+		// contract rather than evidence.
+		return errors.New(`artifact path "." asserts nothing; name a file or directory`)
+	}
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("artifact path %q escapes the workspace", p)
 	}

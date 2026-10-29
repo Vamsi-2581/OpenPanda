@@ -262,3 +262,105 @@ func statusOf(results []Result, id string) Status {
 	}
 	return ""
 }
+
+func TestValidateRejectsSelfCertifyingArtifacts(t *testing.T) {
+	// "." is the workspace itself: a check on it passes whatever the work did,
+	// so it is a contract that only certifies itself.
+	for _, p := range []string{".", "./", "a/.."} {
+		if _, err := Validate([]Check{{ID: "a", Exists: []string{p}}}); err == nil {
+			t.Fatalf("artifact path %q accepted, want refusal", p)
+		}
+	}
+	// A real path inside the tree still validates.
+	if _, err := Validate([]Check{{ID: "a", Exists: []string{"dist/index.html"}}}); err != nil {
+		t.Fatalf("ordinary artifact path refused: %v", err)
+	}
+}
+
+func TestCIAllowedKeepsPublishingOutOfTheCandidateList(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"make test", true},
+		{"make -j4 build", true},
+		{"make release", false},
+		{"make clean", false},
+		{"npm test", true},
+		{"npm run test:unit", true},
+		{"npm publish", false},
+		{"npm install", false},
+		{"pnpm run lint", true},
+		{"go test ./...", true},
+		{"go vet ./...", true},
+		{"go run ./cmd/server", false},
+		{"cargo test", true},
+		{"cargo publish", false},
+		{"python -m pytest", true},
+		{"python tools/deploy.py", false},
+		{"./gradlew test", true},
+		{"./gradlew publish", false},
+	}
+	for _, tc := range cases {
+		argv, err := SplitCommand(tc.line)
+		if err != nil {
+			t.Fatalf("SplitCommand(%q): %v", tc.line, err)
+		}
+		if got := ciAllowed(argv); got != tc.want {
+			t.Fatalf("ciAllowed(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
+func TestEnumerateNeverExceedsTheContractCeiling(t *testing.T) {
+	// `--accept auto` selects every candidate; if enumeration could outrun
+	// Validate's own limit, auto would fail on exactly the busy projects it is
+	// most useful for.
+	dir := t.TempDir()
+	targets := []string{"test", "check", "lint", "build", "verify", "e2e", "unit", "fmt", "vet", "ci", "test-all", "build-all"}
+	var mk strings.Builder
+	for _, name := range targets {
+		mk.WriteString(name + ":\n\techo " + name + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(mk.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cands := Enumerate(dir)
+	if len(cands) > MaxChecks {
+		t.Fatalf("Enumerate returned %d candidates, ceiling is %d", len(cands), MaxChecks)
+	}
+	checks := make([]Check, 0, len(cands))
+	for _, c := range cands {
+		checks = append(checks, Check{ID: c.ID, Run: c.Run})
+	}
+	if _, err := Validate(checks); err != nil {
+		t.Fatalf("auto-selected set fails Validate: %v", err)
+	}
+}
+
+func TestRunnerGuardSkipsWithoutRunning(t *testing.T) {
+	ran := false
+	r := &Runner{
+		Dir: t.TempDir(),
+		Exec: func(context.Context, string, []string) ExecResult {
+			ran = true
+			return ExecResult{ExitCode: 0}
+		},
+		Guard: func(argv []string) error {
+			if argv[0] == "rm" {
+				return errors.New("irreversible command refused")
+			}
+			return nil
+		},
+	}
+	res := r.Run(context.Background(), "final", []Check{{ID: "a", Run: "rm -rf build"}})
+	if len(res) != 1 || res[0].Status != StatusSkipped {
+		t.Fatalf("results = %+v, want one skipped check", res)
+	}
+	if ran {
+		t.Fatal("guard refused the command but the executor still ran it")
+	}
+}
