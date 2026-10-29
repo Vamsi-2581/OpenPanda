@@ -23,11 +23,13 @@ import (
 // async by design, so a test that slept a fixed time would flake.
 func waitTaskState(t *testing.T, store *core.TaskStore, id, want string) core.Task {
 	t.Helper()
-	// The Windows runner executes this package beside 2,900 other tests; an
+	// The Windows runner executes this package beside 3,000 other tests; an
 	// approval that waits on an exec lock behind a finishing runner can take
 	// far longer than the old 8s without anything being wrong. The deadline
-	// guards a hang, not speed.
-	deadline := time.Now().Add(30 * time.Second)
+	// guards a hang, not speed — it was raised from 30s after a merged test
+	// suite pushed the queue behind that mark and the task sat in dispatched
+	// with nothing wrong.
+	deadline := time.Now().Add(90 * time.Second)
 	for {
 		task, err := store.Get(context.Background(), id)
 		if err == nil && task.State == want {

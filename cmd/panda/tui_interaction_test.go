@@ -463,11 +463,25 @@ func isolatedUIConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
+// closeWizardEngine releases the engine the model wizard opens when it
+// saves. The handle keeps openpanda.db open, and on Windows t.TempDir's
+// cleanup then fails with "the process cannot access the file": the test
+// passed on every other platform while leaking the handle there.
+func closeWizardEngine(t *testing.T, r *repl) {
+	t.Helper()
+	t.Cleanup(func() {
+		if eng := r.engine.Load(); eng != nil {
+			eng.Close()
+		}
+	})
+}
+
 // TestTUIModelWizardStepFlow tests the single-screen model form for Ollama —
 // a NoAuth provider whose form has no key field.
 func TestTUIModelWizardStepFlow(t *testing.T) {
 	cfg := isolatedUIConfig(t)
 	r := &repl{loc: i18n.ChineseSimp, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
@@ -519,6 +533,7 @@ func TestTUIModelWizardStepFlow(t *testing.T) {
 func TestTUIModelWizardCustomRelay(t *testing.T) {
 	cfg := isolatedUIConfig(t)
 	r := &repl{loc: i18n.English, cfg: cfg, configPath: cliConfigPath}
+	closeWizardEngine(t, r)
 	m := newTUIModel(r)
 	m.mode = modeIdle
 	m.width = 100
