@@ -56,11 +56,13 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 
 ### Added
 
+- **The model registry is grouped by connection** — one endpoint and one key is one account. The console lists a connection's models under it instead of repeating the secret on every row, so adding the sixth model of a key no longer means pasting the key again, and the rows that belong together say so.
 - **A conversation has a permission mode** — auto, manual, accept-edits, plan and bypass, picked from the composer and saved with the thread. The mode rides every task spec, so the executor applies the policy the user chose: manual holds each state-changing plan for a foreground answer, plan hands the agent the read-only tool face and holds native commands, bypass consents to everything and is still audited. The per-turn authorize switch now only appears where it can still change the outcome.
 - **A task can carry an executable acceptance contract** — `panda task add --accept "go test ./..."` (or `--accept auto` to enumerate the project's build and test entries) runs the checks after the agent finishes and records the result on the task; declarations appear as `task_checks` and `panda task verdict` reads them back.
 
 ### Fixed
 
+- **A node started at login can run the agents it declares** — the LaunchAgent shipped no `PATH`, so launchd's `/usr/bin:/bin:/usr/sbin:/sbin` was all the daemon had: an agent CLI installed under `~/.local/bin` or `/opt/homebrew/bin` resolved as "command not found", and a card declaring `node` had that ability pruned at startup, while the same node started from a terminal worked. The service now sets `PATH` to the directories `carddetect` already searches — on the macOS plist and the Linux systemd unit alike — and a contract test fails if those two copies drift from it.
 - **A workspace panel can no longer be dragged out of reach** — the drop position is pinned to the band the pointer can see (the surface's scroll offset was read from the wrong element), a stored slot that lands off-canvas is repaired on load, and the header's 整理布局 control re-forms the tidy row.
 - **The to-do board adds without a detour** — the composer is always visible and `n` focuses it from anywhere, the quick filters carry their counts, and an empty board is one line instead of three empty lanes.
 - **An agent this node does not have is not a pickable team member** — the roster row says why it is disabled and stays clickable only to remove a stale pick.
@@ -85,7 +87,6 @@ OpenPanda (**Open** **P**ersonal **A**daptive **N**ode-based **D**istributed **A
 - **A task can pin a work directory of its own** — a task that names a work directory runs there and holds that directory's lock instead of the project's, so two business domains in separate trees proceed side by side rather than queueing behind each other. The pin also keeps the task on this node: a peer has no such tree to run in. Inside the project's own tree the pin degrades to a scope leaf, so a whole-project task and this one cannot write one checkout at once.
 
 ### Fixed
-- **A node started at login can run the agents it declares** — the LaunchAgent shipped no `PATH`, so launchd's `/usr/bin:/bin:/usr/sbin:/sbin` was all the daemon had: an agent CLI installed under `~/.local/bin` or `/opt/homebrew/bin` resolved as "command not found", and a card declaring `node` had that ability pruned at startup, while the same node started from a terminal worked. The service now sets `PATH` to the directories `carddetect` already searches — on the macOS plist and the Linux systemd unit alike — and a contract test fails if those two copies drift from it.
 - **`golang.org/x/net` is 0.62.0** — GO-2026-6860 (quadratic time when coalescing text nodes in `html`) is reachable from the web tools' `htmlToText`, so the module moves to the release that carries the fix and `govulncheck` is clean again.
 
 - **A parked task's wait no longer races its own cursor** — the settle watch compares each event's task id against the row it is following, and it read that id from the same variable the wait loop reassigns on every pass. The listener runs on whichever goroutine records the event, inside that writer's transaction, so the race detector flagged the two unordered accesses. The id is copied out before the watch starts; the behaviour is unchanged.
