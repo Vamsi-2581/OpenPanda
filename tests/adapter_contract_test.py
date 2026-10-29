@@ -2226,8 +2226,11 @@ print("cli output")
                              ["tool_use", "tool_result"])
             self.assertEqual(frames[0]["name"], "okcli")
             # The prompt lives inside argv — the event carries the arg
-            # count, not the arguments.
+            # count, not the arguments. phase=spawn marks it as adapter
+            # bookkeeping: the Go watchdog keeps the startup-grace window
+            # open until a real event or raw stderr line arrives.
             self.assertEqual(frames[0]["input"], {"argc": 1})
+            self.assertEqual(frames[0]["phase"], "spawn")
             self.assertEqual(frames[1]["tool_use_id"], "okcli")
             self.assertFalse(frames[1]["is_error"])
             self.assertEqual(frames[1]["content"], "cli output")
