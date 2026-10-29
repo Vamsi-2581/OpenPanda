@@ -4374,11 +4374,20 @@
 }
 .perm-menu {
   position: absolute;
-  right: 0;
+  /* The horizontal anchor, width and height ceiling are written inline by
+     permission-picker.tsx: the card is wider than the chip, so `right: 0` ran
+     off the left of a narrow window and `left: 0` runs off the right once the
+     action row wraps. The script clamps the card to the pane box that clips it
+     and to the space above the chip; these are the fallbacks for the first
+     frame. */
+  left: 0;
   bottom: calc(100% + 8px);
   z-index: 60;
   width: 320px;
-  max-width: min(320px, 90vw);
+  max-width: calc(100vw - 16px);
+  max-height: min(60vh, 440px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
